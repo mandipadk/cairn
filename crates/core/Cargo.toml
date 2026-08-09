@@ -1,0 +1,15 @@
+[package]
+name = "cairn-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+jiff = "0.2.35"
+rand = "0.10.2"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+
+[lints]
+workspace = true

@@ -37,29 +37,46 @@ requiring a trailer on each), every revision stays fetchable at
 `refs/changes/<number>/<revision>`, and a policy-approved merge
 fast-forwards the real branch. Direct pushes to branches are refused —
 branches advance only by merge. Repos may use SHA-1 or SHA-256 object
-databases. Not yet implemented: capability grants, merge queue,
-stacked-change auto-rebase, and the web UI. Identity is currently dev-mode — callers assert a
-principal via the `x-cairn-principal` header; credential verification
-and capability grants are the next trust layer.
+databases.
+
+Identity and authority are real: API tokens (secrets shown once at
+mint, only hashes stored — recorded via the event log itself), and
+capability grants. Humans hold every capability; agents act only under
+grants — typed verbs (`task`, `push`, `review`, `merge`, `admin`),
+optionally repo-scoped and time-boxed, revocable with immediate
+effect. A refusal names the missing capability and the exact grant
+that would fix it. Git pushes authenticate with a token as the
+Basic-auth password. An asserted-identity dev header exists behind an
+explicit `--dev` flag, off by default.
+
+Not yet implemented: merge queue, stacked-change auto-rebase, and the
+web UI.
 
 ## Running
 
 ```sh
+# first run: register the first human and mint their token (shown once)
+cargo run -- admin bootstrap --db forge.db ada --display "Ada"
 cargo run -- serve --db forge.db --listen 127.0.0.1:6160
 
-# register the first principal (bootstrap self-registration)
+# everything authenticates with 'Authorization: Bearer <token>'
 curl -X POST localhost:6160/api/principals \
-  -H 'x-cairn-principal: ada' -H 'content-type: application/json' \
-  -d '{"id": "ada", "kind": "human", "display": "Ada"}'
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"id": "scout", "kind": "agent", "display": "Scout", "model": "claude-fable-5"}'
+
+# delegate: agents act only under capability grants
+curl -X POST localhost:6160/api/grants \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"grantee": "scout", "actions": ["task", "push"]}'
 
 # follow everything that happens, resumable by cursor
-curl -N 'localhost:6160/api/events/stream?after=0' -H 'x-cairn-principal: ada'
+curl -N 'localhost:6160/api/events/stream?after=0' -H "Authorization: Bearer $TOKEN"
 ```
 
 Agents connect natively over MCP — the adapter proxies the same API:
 
 ```sh
-cairn mcp --server http://127.0.0.1:6160 --principal scout
+cairn mcp --server http://127.0.0.1:6160 --token $AGENT_TOKEN
 ```
 
 The transport is also the API — plain git speaks to the graph:

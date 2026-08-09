@@ -5,10 +5,11 @@
 //! log, in the API's event feed, and in SSE streams, so additive change
 //! is the only kind allowed once an event kind ships.
 
-use crate::id::{ChangeId, ClaimId, PrincipalId, SessionId, TaskId, VerdictId};
+use crate::id::{ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, TokenId, VerdictId};
 use crate::policy::PolicyTrace;
 use crate::types::{
-    ClaimKind, Disposition, ObjectFormat, PrincipalKind, ReviewDomain, SessionState, TaskState,
+    Capability, ClaimKind, Disposition, ObjectFormat, PrincipalKind, ReviewDomain, SessionState,
+    TaskState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +41,30 @@ pub enum Event {
         /// independent judgment across model families.
         model: Option<String>,
         harness: Option<String>,
+    },
+
+    TokenMinted {
+        token: TokenId,
+        principal: PrincipalId,
+        label: Option<String>,
+        /// SHA-256 of the secret. The secret itself never enters the
+        /// log; it exists once, in the mint response.
+        hash: String,
+    },
+    TokenRevoked {
+        token: TokenId,
+    },
+
+    GrantIssued {
+        grant: GrantId,
+        grantee: PrincipalId,
+        repo: Option<String>,
+        actions: Vec<Capability>,
+        until: Option<String>,
+    },
+    GrantRevoked {
+        grant: GrantId,
+        reason: String,
     },
 
     RepoCreated {
@@ -142,6 +167,10 @@ impl Event {
     pub fn kind(&self) -> &'static str {
         match self {
             Event::PrincipalRegistered { .. } => "principal_registered",
+            Event::TokenMinted { .. } => "token_minted",
+            Event::TokenRevoked { .. } => "token_revoked",
+            Event::GrantIssued { .. } => "grant_issued",
+            Event::GrantRevoked { .. } => "grant_revoked",
             Event::RepoCreated { .. } => "repo_created",
             Event::TaskCreated { .. } => "task_created",
             Event::TaskClaimed { .. } => "task_claimed",

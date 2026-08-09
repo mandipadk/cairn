@@ -19,6 +19,12 @@ pub enum CoreError {
     #[error("merge policy not satisfied: {0}")]
     PolicyUnsatisfied(String),
 
+    /// The actor is authenticated but lacks the capability. The message
+    /// names the missing capability and how to obtain it, so an agent
+    /// can act on the refusal.
+    #[error("forbidden: {0}")]
+    Forbidden(String),
+
     #[error(transparent)]
     Db(#[from] rusqlite::Error),
 

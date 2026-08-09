@@ -12,8 +12,9 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use cairn_core::{
-    ChangeId, ChangeSpec, ClaimSpec, CoreError, Disposition, Envelope, EventSeq, ObjectFormat,
-    PrincipalId, PrincipalKind, ReviewDomain, SessionId, SessionState, TaskId, TaskState,
+    Capability, ChangeId, ChangeSpec, ClaimSpec, CoreError, Disposition, Envelope, EventSeq,
+    GrantId, ObjectFormat, PrincipalId, PrincipalKind, ReviewDomain, SessionId, SessionState,
+    TaskId, TaskState, TokenId,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -502,4 +503,105 @@ pub async fn list_events(
     let limit = query.limit.unwrap_or(100).min(1000);
     let events = app.with_store(|s| s.events_after(EventSeq(query.after), limit))?;
     Ok(Json(json!(events)))
+}
+
+// ---- tokens ----
+
+#[derive(Deserialize)]
+pub struct MintToken {
+    pub label: Option<String>,
+}
+
+/// Mint a token. The response is the only place the secret ever exists;
+/// the log and every later read carry nothing but its hash.
+pub async fn mint_token(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Json(body): Json<MintToken>,
+) -> ApiResult<Json<Value>> {
+    let principal = PrincipalId(id);
+    let (token, secret, env) =
+        app.with_store(|s| s.mint_token(&actor.0, &principal, body.label.as_deref()))?;
+    app.publish(&env);
+    Ok(Json(
+        json!({ "id": token, "token": secret, "seq": env.seq.0 }),
+    ))
+}
+
+pub async fn list_tokens(
+    State(app): State<AppState>,
+    _actor: Actor,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let tokens = app.with_store(|s| s.tokens_of(&PrincipalId(id)))?;
+    Ok(Json(json!(tokens)))
+}
+
+pub async fn revoke_token(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let env = app.with_store(|s| s.revoke_token(&actor.0, &TokenId(id)))?;
+    app.publish(&env);
+    Ok(committed(None, &env))
+}
+
+// ---- grants ----
+
+#[derive(Deserialize)]
+pub struct IssueGrant {
+    pub grantee: PrincipalId,
+    pub repo: Option<String>,
+    pub actions: Vec<Capability>,
+    pub until: Option<String>,
+}
+
+pub async fn issue_grant(
+    State(app): State<AppState>,
+    actor: Actor,
+    Json(body): Json<IssueGrant>,
+) -> ApiResult<Json<Value>> {
+    let (grant, env) = app.with_store(|s| {
+        s.issue_grant(
+            &actor.0,
+            &body.grantee,
+            body.repo.as_deref(),
+            body.actions,
+            body.until.as_deref(),
+        )
+    })?;
+    app.publish(&env);
+    Ok(committed(Some(grant.0), &env))
+}
+
+#[derive(Deserialize)]
+pub struct GrantFilter {
+    pub grantee: String,
+}
+
+pub async fn list_grants(
+    State(app): State<AppState>,
+    _actor: Actor,
+    Query(filter): Query<GrantFilter>,
+) -> ApiResult<Json<Value>> {
+    let grants = app.with_store(|s| s.grants_of(&PrincipalId(filter.grantee)))?;
+    Ok(Json(json!(grants)))
+}
+
+#[derive(Deserialize)]
+pub struct RevokeGrant {
+    pub reason: String,
+}
+
+pub async fn revoke_grant(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Json(body): Json<RevokeGrant>,
+) -> ApiResult<Json<Value>> {
+    let env = app.with_store(|s| s.revoke_grant(&actor.0, &GrantId(id), &body.reason))?;
+    app.publish(&env);
+    Ok(committed(None, &env))
 }

@@ -34,6 +34,7 @@ impl From<CoreError> for ApiError {
             CoreError::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
             CoreError::Invalid(_) => (StatusCode::BAD_REQUEST, "invalid"),
             CoreError::PolicyUnsatisfied(_) => (StatusCode::CONFLICT, "policy_unsatisfied"),
+            CoreError::Forbidden(_) => (StatusCode::FORBIDDEN, "forbidden"),
             CoreError::Db(_) | CoreError::Corrupt { .. } => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal")
             }

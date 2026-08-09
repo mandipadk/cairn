@@ -38,11 +38,11 @@ mod types;
 
 pub use error::{CoreError, CoreResult};
 pub use event::{Envelope, Event, EventSeq};
-pub use id::{ChangeId, ClaimId, PrincipalId, SessionId, TaskId, VerdictId};
+pub use id::{ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, TokenId, VerdictId};
 pub use policy::{PolicyTrace, Requirement};
 pub use store::Store;
 pub use types::{
-    Change, ChangeSpec, ChangeState, Claim, ClaimKind, ClaimSpec, Disposition, ObjectFormat,
-    Principal, PrincipalKind, Repo, ReviewDomain, Revision, Session, SessionState, Task, TaskState,
-    Verdict,
+    Capability, Change, ChangeSpec, ChangeState, Claim, ClaimKind, ClaimSpec, Disposition, Grant,
+    ObjectFormat, Principal, PrincipalKind, Repo, ReviewDomain, Revision, Session, SessionState,
+    Task, TaskState, TokenInfo, Verdict,
 };

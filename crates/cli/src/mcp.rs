@@ -17,8 +17,8 @@ use anyhow::Context;
 use serde_json::{Value, json};
 use std::io::{self, BufRead, Write};
 
-pub fn run(server: &str, principal: &str) -> anyhow::Result<()> {
-    let client = ApiClient::new(server, principal);
+pub fn run(server: &str, token: Option<&str>, principal: Option<&str>) -> anyhow::Result<()> {
+    let client = ApiClient::new(server, token, principal);
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
     for line in stdin.lock().lines() {
@@ -331,20 +331,27 @@ fn tool_definitions() -> Vec<Value> {
 struct ApiClient {
     agent: ureq::Agent,
     base: String,
-    principal: String,
+    /// Header name and value: a Bearer token normally, the asserted
+    /// dev header against dev-mode servers.
+    auth: (&'static str, String),
 }
 
 impl ApiClient {
-    fn new(server: &str, principal: &str) -> Self {
+    fn new(server: &str, token: Option<&str>, principal: Option<&str>) -> Self {
         let config = ureq::Agent::config_builder()
             // 4xx/5xx are protocol answers here (typed kinds, policy
             // traces), not transport failures — pass bodies through.
             .http_status_as_error(false)
             .build();
+        let auth = match (token, principal) {
+            (Some(token), _) => ("Authorization", format!("Bearer {token}")),
+            (None, Some(principal)) => ("x-cairn-principal", principal.to_owned()),
+            (None, None) => unreachable!("main validates token or principal"),
+        };
         ApiClient {
             agent: config.into(),
             base: server.trim_end_matches('/').to_owned(),
-            principal: principal.to_owned(),
+            auth,
         }
     }
 
@@ -352,7 +359,7 @@ impl ApiClient {
         let mut response = self
             .agent
             .get(format!("{}{path}", self.base))
-            .header("x-cairn-principal", &self.principal)
+            .header(self.auth.0, &self.auth.1)
             .call()?;
         Ok((response.status().as_u16(), response.body_mut().read_json()?))
     }
@@ -361,7 +368,7 @@ impl ApiClient {
         let mut response = self
             .agent
             .post(format!("{}{path}", self.base))
-            .header("x-cairn-principal", &self.principal)
+            .header(self.auth.0, &self.auth.1)
             .send_json(body)?;
         Ok((response.status().as_u16(), response.body_mut().read_json()?))
     }

@@ -104,6 +104,15 @@ async fn full_agent_workflow_over_mcp() {
     store
         .create_repo(&ada, "demo", "main", cairn_core::ObjectFormat::Sha1)
         .unwrap();
+    store
+        .issue_grant(
+            &ada,
+            &scout,
+            None,
+            vec![cairn_core::Capability::Task, cairn_core::Capability::Push],
+            None,
+        )
+        .unwrap();
     let (task, _) = store
         .create_task(
             &ada,
@@ -114,7 +123,7 @@ async fn full_agent_workflow_over_mcp() {
         )
         .unwrap();
 
-    let app = router(AppState::new(store));
+    let app = router(AppState::new(store).with_dev_identity());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(axum::serve(listener, app).into_future());

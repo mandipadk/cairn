@@ -8,19 +8,58 @@
 
 use crate::error::{CoreError, CoreResult};
 use crate::event::{Envelope, Event};
-use crate::id::{ChangeId, ClaimId, PrincipalId, SessionId, TaskId, VerdictId, validate_slug};
+use crate::id::{
+    ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, TokenId, VerdictId,
+    random_token_secret, validate_slug,
+};
 use crate::policy::{self, PolicyTrace};
 use crate::queries::raw;
 use crate::store::{Store, append};
 use crate::types::{
-    ChangeSpec, ChangeState, ClaimSpec, Disposition, ObjectFormat, Principal, PrincipalKind,
-    ReviewDomain, SessionState, TaskState,
+    Capability, ChangeSpec, ChangeState, ClaimSpec, Disposition, ObjectFormat, Principal,
+    PrincipalKind, ReviewDomain, SessionState, TaskState,
 };
 use rusqlite::Transaction;
+use sha2::{Digest, Sha256};
+
+/// The stored fingerprint of a token secret.
+pub(crate) fn token_hash(secret: &str) -> String {
+    Sha256::digest(secret.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
 
 fn ensure_actor(tx: &Transaction, actor: &PrincipalId) -> CoreResult<Principal> {
     raw::principal(tx, actor.as_str())?
         .ok_or_else(|| CoreError::NotFound(format!("principal {actor}")))
+}
+
+/// The law: humans are sovereign; agents act only under a live grant
+/// covering the capability and scope. Refusals name the missing
+/// capability and how to obtain it, so an agent can act on them.
+fn authorize(
+    tx: &Transaction,
+    actor: &PrincipalId,
+    action: Capability,
+    repo: Option<&str>,
+) -> CoreResult<Principal> {
+    let principal = ensure_actor(tx, actor)?;
+    if principal.kind == PrincipalKind::Human {
+        return Ok(principal);
+    }
+    let grants = raw::grants_of(tx, actor.as_str())?;
+    let now = jiff::Timestamp::now().to_string();
+    if raw::grants_cover(&grants, action, repo, &now) {
+        return Ok(principal);
+    }
+    let scope = repo.map_or_else(|| "all repos".to_owned(), |r| format!("repo {r}"));
+    Err(CoreError::Forbidden(format!(
+        "{actor} holds no '{}' capability for {scope}; a human can issue one: \
+         POST /api/grants {{\"grantee\": \"{actor}\", \"actions\": [\"{}\"]}}",
+        action.as_str(),
+        action.as_str()
+    )))
 }
 
 fn require(condition: bool, invalid: impl FnOnce() -> String) -> CoreResult<()> {
@@ -69,7 +108,7 @@ impl Store {
         }
         let bootstrap = raw::principal_count(&tx)? == 0 && actor == id;
         if !bootstrap {
-            ensure_actor(&tx, actor)?;
+            authorize(&tx, actor, Capability::Admin, None)?;
         }
         let env = append(
             &tx,
@@ -94,7 +133,7 @@ impl Store {
         object_format: ObjectFormat,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        ensure_actor(&tx, actor)?;
+        authorize(&tx, actor, Capability::Admin, None)?;
         require(validate_slug(name), || {
             format!("repo name {name:?} is not a valid slug")
         })?;
@@ -126,7 +165,7 @@ impl Store {
         parent: Option<&TaskId>,
     ) -> CoreResult<(TaskId, Envelope)> {
         let tx = self.conn.transaction()?;
-        ensure_actor(&tx, actor)?;
+        authorize(&tx, actor, Capability::Task, repo)?;
         require(!title.trim().is_empty(), || {
             "task title must not be empty".into()
         })?;
@@ -158,9 +197,9 @@ impl Store {
 
     pub fn claim_task(&mut self, actor: &PrincipalId, task: &TaskId) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        ensure_actor(&tx, actor)?;
         let current = raw::task(&tx, task.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("task {task}")))?;
+        authorize(&tx, actor, Capability::Task, current.repo.as_deref())?;
         if current.state != TaskState::Open {
             return Err(CoreError::Conflict(format!(
                 "task {task} is {}, not open",
@@ -179,9 +218,9 @@ impl Store {
         state: TaskState,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        ensure_actor(&tx, actor)?;
-        raw::task(&tx, task.as_str())?
+        let current = raw::task(&tx, task.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("task {task}")))?;
+        authorize(&tx, actor, Capability::Task, current.repo.as_deref())?;
         require(state != TaskState::Claimed, || {
             "use claim_task to claim; claiming records who claimed".into()
         })?;
@@ -206,9 +245,9 @@ impl Store {
         task: &TaskId,
     ) -> CoreResult<(SessionId, Envelope)> {
         let tx = self.conn.transaction()?;
-        ensure_actor(&tx, actor)?;
         let current = raw::task(&tx, task.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("task {task}")))?;
+        authorize(&tx, actor, Capability::Task, current.repo.as_deref())?;
         if current.state != TaskState::Claimed || current.claimed_by.as_ref() != Some(actor) {
             return Err(CoreError::Conflict(format!(
                 "task {task} must be claimed by {actor} before opening a session"
@@ -238,7 +277,6 @@ impl Store {
         outcome: &str,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        ensure_actor(&tx, actor)?;
         require(state != SessionState::Active, || {
             "a session cannot end as active".into()
         })?;
@@ -247,6 +285,9 @@ impl Store {
         })?;
         let current = raw::session(&tx, session.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("session {session}")))?;
+        let task = raw::task(&tx, current.task.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("task {}", current.task)))?;
+        authorize(&tx, actor, Capability::Task, task.repo.as_deref())?;
         if current.agent != *actor {
             return Err(CoreError::Conflict(format!(
                 "session {session} belongs to {}",
@@ -277,7 +318,7 @@ impl Store {
         spec: ChangeSpec,
     ) -> CoreResult<(ChangeId, i64, Envelope)> {
         let tx = self.conn.transaction()?;
-        ensure_actor(&tx, actor)?;
+        authorize(&tx, actor, Capability::Push, Some(&spec.repo))?;
         raw::repo(&tx, &spec.repo)?
             .ok_or_else(|| CoreError::NotFound(format!("repo {}", spec.repo)))?;
         require(valid_branch(&spec.target), || {
@@ -344,12 +385,12 @@ impl Store {
         message: &str,
     ) -> CoreResult<(i64, Envelope)> {
         let tx = self.conn.transaction()?;
-        ensure_actor(&tx, actor)?;
         require(valid_commit_oid(commit_oid), || {
             format!("{commit_oid:?} is not a valid commit oid")
         })?;
         let current = raw::change(&tx, change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
+        authorize(&tx, actor, Capability::Push, Some(&current.repo))?;
         if current.state != ChangeState::Open {
             return Err(CoreError::Conflict(format!(
                 "change {change} is {}, not open",
@@ -389,12 +430,12 @@ impl Store {
         spec: ClaimSpec,
     ) -> CoreResult<(ClaimId, Envelope)> {
         let tx = self.conn.transaction()?;
-        ensure_actor(&tx, actor)?;
         require(!spec.summary.trim().is_empty(), || {
             "claim summary must not be empty".into()
         })?;
         let current = raw::change(&tx, change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
+        authorize(&tx, actor, Capability::Push, Some(&current.repo))?;
         require((1..=current.latest_revision).contains(&revision), || {
             format!("change {change} has no revision {revision}")
         })?;
@@ -427,12 +468,12 @@ impl Store {
         rationale: &str,
     ) -> CoreResult<(VerdictId, Envelope)> {
         let tx = self.conn.transaction()?;
-        ensure_actor(&tx, actor)?;
         require(!rationale.trim().is_empty(), || {
             "verdict rationale must not be empty: judgment without reasons doesn't compose".into()
         })?;
         let current = raw::change(&tx, change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
+        authorize(&tx, actor, Capability::Review, Some(&current.repo))?;
         if current.state != ChangeState::Open {
             return Err(CoreError::Conflict(format!(
                 "change {change} is {}, not open",
@@ -473,9 +514,9 @@ impl Store {
     /// driven by this event.
     pub fn merge_change(&mut self, actor: &PrincipalId, change: &ChangeId) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        ensure_actor(&tx, actor)?;
         let current = raw::change(&tx, change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
+        authorize(&tx, actor, Capability::Merge, Some(&current.repo))?;
         if current.state != ChangeState::Open {
             return Err(CoreError::Conflict(format!(
                 "change {change} is {}, not open",
@@ -506,12 +547,12 @@ impl Store {
         reason: &str,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        ensure_actor(&tx, actor)?;
         require(!reason.trim().is_empty(), || {
             "abandon reason must not be empty".into()
         })?;
         let current = raw::change(&tx, change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
+        authorize(&tx, actor, Capability::Push, Some(&current.repo))?;
         if current.state != ChangeState::Open {
             return Err(CoreError::Conflict(format!(
                 "change {change} is {}, not open",
@@ -523,6 +564,156 @@ impl Store {
             actor,
             Event::ChangeAbandoned {
                 change: change.clone(),
+                reason: reason.to_owned(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+    /// Mint an API token. The secret is returned exactly once; only its
+    /// hash enters the log. A principal may mint for itself; humans may
+    /// mint for anyone.
+    pub fn mint_token(
+        &mut self,
+        actor: &PrincipalId,
+        principal: &PrincipalId,
+        label: Option<&str>,
+    ) -> CoreResult<(TokenId, String, Envelope)> {
+        let tx = self.conn.transaction()?;
+        let acting = ensure_actor(&tx, actor)?;
+        raw::principal(&tx, principal.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("principal {principal}")))?;
+        if actor != principal && acting.kind != PrincipalKind::Human {
+            return Err(CoreError::Forbidden(format!(
+                "{actor} may not mint tokens for {principal}: only the principal itself or a human"
+            )));
+        }
+        let token = TokenId::generate();
+        let secret = random_token_secret();
+        let env = append(
+            &tx,
+            actor,
+            Event::TokenMinted {
+                token: token.clone(),
+                principal: principal.clone(),
+                label: label.map(str::to_owned),
+                hash: token_hash(&secret),
+            },
+        )?;
+        tx.commit()?;
+        Ok((token, secret, env))
+    }
+
+    /// Revoke a token, effective immediately. The owner or any human.
+    pub fn revoke_token(&mut self, actor: &PrincipalId, token: &TokenId) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        let acting = ensure_actor(&tx, actor)?;
+        let current = raw::token(&tx, token.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("token {token}")))?;
+        if current.principal != *actor && acting.kind != PrincipalKind::Human {
+            return Err(CoreError::Forbidden(format!(
+                "{actor} may not revoke a token of {}: only the owner or a human",
+                current.principal
+            )));
+        }
+        if current.revoked {
+            return Err(CoreError::Conflict(format!(
+                "token {token} is already revoked"
+            )));
+        }
+        let env = append(
+            &tx,
+            actor,
+            Event::TokenRevoked {
+                token: token.clone(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
+    /// Issue a capability grant. Only humans delegate — agents cannot
+    /// widen their own authority or another agent's.
+    pub fn issue_grant(
+        &mut self,
+        actor: &PrincipalId,
+        grantee: &PrincipalId,
+        repo: Option<&str>,
+        actions: Vec<Capability>,
+        until: Option<&str>,
+    ) -> CoreResult<(GrantId, Envelope)> {
+        let tx = self.conn.transaction()?;
+        let acting = ensure_actor(&tx, actor)?;
+        if acting.kind != PrincipalKind::Human {
+            return Err(CoreError::Forbidden(format!(
+                "{actor} may not issue grants: delegation is a human act"
+            )));
+        }
+        raw::principal(&tx, grantee.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("principal {grantee}")))?;
+        if let Some(repo) = repo {
+            raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
+        }
+        require(!actions.is_empty(), || {
+            "a grant must carry at least one capability".into()
+        })?;
+        let mut actions = actions;
+        actions.sort_by_key(|c| c.as_str());
+        actions.dedup();
+        // Store expiry canonically so lexicographic comparison is sound.
+        let until = until
+            .map(|raw| {
+                raw.parse::<jiff::Timestamp>()
+                    .map(|ts| ts.to_string())
+                    .map_err(|e| CoreError::Invalid(format!("bad expiry {raw:?}: {e}")))
+            })
+            .transpose()?;
+        let grant = GrantId::generate();
+        let env = append(
+            &tx,
+            actor,
+            Event::GrantIssued {
+                grant: grant.clone(),
+                grantee: grantee.clone(),
+                repo: repo.map(str::to_owned),
+                actions,
+                until,
+            },
+        )?;
+        tx.commit()?;
+        Ok((grant, env))
+    }
+
+    /// Revoke a grant, effective immediately. The grantor or any human.
+    pub fn revoke_grant(
+        &mut self,
+        actor: &PrincipalId,
+        grant: &GrantId,
+        reason: &str,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        let acting = ensure_actor(&tx, actor)?;
+        require(!reason.trim().is_empty(), || {
+            "revocation reason must not be empty".into()
+        })?;
+        let current = raw::grant(&tx, grant.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("grant {grant}")))?;
+        if current.grantor != *actor && acting.kind != PrincipalKind::Human {
+            return Err(CoreError::Forbidden(format!(
+                "{actor} may not revoke a grant issued by {}",
+                current.grantor
+            )));
+        }
+        if current.revoked {
+            return Err(CoreError::Conflict(format!(
+                "grant {grant} is already revoked"
+            )));
+        }
+        let env = append(
+            &tx,
+            actor,
+            Event::GrantRevoked {
+                grant: grant.clone(),
                 reason: reason.to_owned(),
             },
         )?;

@@ -2,7 +2,7 @@ mod hook;
 mod mcp;
 
 use anyhow::Context;
-use cairn_core::Store;
+use cairn_core::{PrincipalId, PrincipalKind, Store};
 use cairn_git::GitStore;
 use cairn_server::{AppState, router};
 use clap::{Parser, Subcommand};
@@ -29,6 +29,16 @@ enum Command {
         /// Directory holding the hosted bare repositories.
         #[arg(long, default_value = "repos")]
         repos: PathBuf,
+        /// Accept asserted identity via the x-cairn-principal header.
+        /// Local development only.
+        #[arg(long)]
+        dev: bool,
+    },
+    /// Offline administration against the forge database. Having file
+    /// access to the database is the root authority.
+    Admin {
+        #[command(subcommand)]
+        command: AdminCommand,
     },
     /// The proc-receive hook endpoint; spawned by git receive-pack.
     #[command(name = "internal-proc-receive", hide = true)]
@@ -38,9 +48,33 @@ enum Command {
         /// Base URL of the forge server to proxy to.
         #[arg(long, default_value = "http://127.0.0.1:6160")]
         server: String,
-        /// Principal to act as on the forge.
+        /// API token to authenticate with.
         #[arg(long)]
+        token: Option<String>,
+        /// Principal to assert instead of a token (dev-mode servers only).
+        #[arg(long)]
+        principal: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdminCommand {
+    /// First-run setup: register the first human and print their token.
+    Bootstrap {
+        #[arg(long, default_value = "cairn.db")]
+        db: PathBuf,
+        /// Slug of the human principal, e.g. "ada".
         principal: String,
+        #[arg(long)]
+        display: Option<String>,
+    },
+    /// Mint an API token for an existing principal.
+    MintToken {
+        #[arg(long, default_value = "cairn.db")]
+        db: PathBuf,
+        principal: String,
+        #[arg(long)]
+        label: Option<String>,
     },
 }
 
@@ -56,7 +90,12 @@ async fn main() -> anyhow::Result<()> {
 
     let Cli { command } = Cli::parse();
     match command {
-        Command::Serve { db, listen, repos } => {
+        Command::Serve {
+            db,
+            listen,
+            repos,
+            dev,
+        } => {
             let store = Store::open(&db)
                 .with_context(|| format!("opening forge database at {}", db.display()))?;
             let listener = tokio::net::TcpListener::bind(listen)
@@ -69,7 +108,12 @@ async fn main() -> anyhow::Result<()> {
                 &repos,
                 std::env::current_exe().context("locating own binary")?,
             );
-            let app = router(AppState::new(store).with_git(git, base_url));
+            let mut state = AppState::new(store).with_git(git, base_url);
+            if dev {
+                tracing::warn!("dev identity enabled: the x-cairn-principal header is trusted");
+                state = state.with_dev_identity();
+            }
+            let app = router(state);
             tracing::info!(%listen, db = %db.display(), repos = %repos.display(), "cairn serving");
             axum::serve(listener, app)
                 .with_graceful_shutdown(async {
@@ -77,11 +121,48 @@ async fn main() -> anyhow::Result<()> {
                 })
                 .await?;
         }
+        Command::Admin { command } => match command {
+            AdminCommand::Bootstrap {
+                db,
+                principal,
+                display,
+            } => {
+                let mut store = Store::open(&db)
+                    .with_context(|| format!("opening forge database at {}", db.display()))?;
+                let id = PrincipalId::new(&principal)
+                    .with_context(|| format!("{principal:?} is not a valid principal slug"))?;
+                let display = display.unwrap_or_else(|| principal.clone());
+                store.register_principal(&id, &id, PrincipalKind::Human, &display, None, None)?;
+                let (_, secret, _) = store.mint_token(&id, &id, Some("bootstrap"))?;
+                println!("registered human {principal}");
+                println!("token (shown once, store it safely): {secret}");
+            }
+            AdminCommand::MintToken {
+                db,
+                principal,
+                label,
+            } => {
+                let mut store = Store::open(&db)
+                    .with_context(|| format!("opening forge database at {}", db.display()))?;
+                let id = PrincipalId::new(&principal)
+                    .with_context(|| format!("{principal:?} is not a valid principal slug"))?;
+                let (_, secret, _) = store.mint_token(&id, &id, label.as_deref())?;
+                println!("token (shown once, store it safely): {secret}");
+            }
+        },
         Command::InternalProcReceive => {
             hook::run()?;
         }
-        Command::Mcp { server, principal } => {
-            mcp::run(&server, &principal)?;
+        Command::Mcp {
+            server,
+            token,
+            principal,
+        } => {
+            anyhow::ensure!(
+                token.is_some() || principal.is_some(),
+                "pass --token (normal) or --principal (dev-mode servers)"
+            );
+            mcp::run(&server, token.as_deref(), principal.as_deref())?;
         }
     }
     Ok(())

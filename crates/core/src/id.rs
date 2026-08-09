@@ -75,6 +75,18 @@ random_id!(
 random_id!(
     /// One review judgment on a revision.
     VerdictId, "v");
+random_id!(
+    /// An API token's public identity (never the secret).
+    TokenId, "tok");
+random_id!(
+    /// One capability delegation.
+    GrantId, "g");
+
+/// A fresh token secret: high-entropy, prefixed for secret scanners.
+/// Shown once at mint; only its hash is ever stored.
+pub(crate) fn random_token_secret() -> String {
+    format!("cairn_{}{}", random_suffix(), random_suffix())
+}
 
 /// Principals are named by chosen slug, not random id: identity that
 /// humans grant authority to should be identity humans can read.

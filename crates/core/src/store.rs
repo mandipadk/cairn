@@ -30,6 +30,26 @@ CREATE TABLE IF NOT EXISTS principals (
   harness TEXT
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS tokens (
+  id        TEXT PRIMARY KEY,
+  principal TEXT NOT NULL,
+  label     TEXT,
+  hash      TEXT NOT NULL,
+  revoked   INTEGER NOT NULL DEFAULT 0
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_tokens_hash ON tokens (hash);
+
+CREATE TABLE IF NOT EXISTS grants (
+  id      TEXT PRIMARY KEY,
+  grantor TEXT NOT NULL,
+  grantee TEXT NOT NULL,
+  repo    TEXT,
+  actions TEXT NOT NULL,
+  until_ts TEXT,
+  revoked INTEGER NOT NULL DEFAULT 0
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_grants_grantee ON grants (grantee, revoked);
+
 CREATE TABLE IF NOT EXISTS repos (
   name           TEXT PRIMARY KEY,
   default_branch TEXT NOT NULL,
@@ -211,6 +231,49 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                     model,
                     harness
                 ],
+            )?;
+        }
+        Event::TokenMinted {
+            token,
+            principal,
+            label,
+            hash,
+        } => {
+            tx.execute(
+                "INSERT INTO tokens (id, principal, label, hash) VALUES (?, ?, ?, ?)",
+                params![token.as_str(), principal.as_str(), label, hash],
+            )?;
+        }
+        Event::TokenRevoked { token } => {
+            tx.execute(
+                "UPDATE tokens SET revoked = 1 WHERE id = ?",
+                params![token.as_str()],
+            )?;
+        }
+        Event::GrantIssued {
+            grant,
+            grantee,
+            repo,
+            actions,
+            until,
+        } => {
+            tx.execute(
+                "INSERT INTO grants (id, grantor, grantee, repo, actions, until_ts)
+                 VALUES (?, ?, ?, ?, ?, ?)",
+                params![
+                    grant.as_str(),
+                    actor,
+                    grantee.as_str(),
+                    repo,
+                    serde_json::to_string(actions).expect("capability vec serializes"),
+                    until
+                ],
+            )?;
+        }
+        Event::GrantRevoked { grant, .. } => {
+            tx.execute(
+                "UPDATE grants SET revoked = 1 WHERE id = ?",
+                params![grant.as_str()],
             )?;
         }
         Event::RepoCreated {

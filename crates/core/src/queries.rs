@@ -8,8 +8,9 @@ use crate::error::{CoreError, CoreResult};
 use crate::id::{ChangeId, PrincipalId, SessionId, TaskId};
 use crate::store::Store;
 use crate::types::{
-    Change, ChangeState, Claim, ClaimKind, Disposition, ObjectFormat, Principal, PrincipalKind,
-    Repo, ReviewDomain, Revision, Session, SessionState, Task, TaskState, Verdict,
+    Capability, Change, ChangeState, Claim, ClaimKind, Disposition, Grant, ObjectFormat, Principal,
+    PrincipalKind, Repo, ReviewDomain, Revision, Session, SessionState, Task, TaskState, TokenInfo,
+    Verdict,
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
@@ -329,6 +330,114 @@ pub(crate) mod raw {
             .collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// Resolve a token secret's hash to its live owner.
+    pub fn principal_for_token_hash(
+        conn: &Connection,
+        hash: &str,
+    ) -> CoreResult<Option<PrincipalId>> {
+        Ok(conn
+            .prepare_cached("SELECT principal FROM tokens WHERE hash = ? AND revoked = 0")?
+            .query_row(params![hash], |row| row.get::<_, String>(0))
+            .optional()?
+            .map(PrincipalId))
+    }
+
+    pub fn token(conn: &Connection, id: &str) -> CoreResult<Option<TokenInfo>> {
+        Ok(conn
+            .prepare_cached("SELECT id, principal, label, revoked FROM tokens WHERE id = ?")?
+            .query_row(params![id], |row| {
+                Ok(TokenInfo {
+                    id: crate::id::TokenId(row.get(0)?),
+                    principal: PrincipalId(row.get(1)?),
+                    label: row.get(2)?,
+                    revoked: row.get::<_, i64>(3)? != 0,
+                })
+            })
+            .optional()?)
+    }
+
+    pub fn tokens_of(conn: &Connection, principal: &str) -> CoreResult<Vec<TokenInfo>> {
+        Ok(conn
+            .prepare_cached(
+                "SELECT id, principal, label, revoked FROM tokens
+                 WHERE principal = ? ORDER BY rowid",
+            )?
+            .query_map(params![principal], |row| {
+                Ok(TokenInfo {
+                    id: crate::id::TokenId(row.get(0)?),
+                    principal: PrincipalId(row.get(1)?),
+                    label: row.get(2)?,
+                    revoked: row.get::<_, i64>(3)? != 0,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    fn grant_from_row(row: &Row) -> rusqlite::Result<(Grant, String)> {
+        Ok((
+            Grant {
+                id: crate::id::GrantId(row.get(0)?),
+                grantor: PrincipalId(row.get(1)?),
+                grantee: PrincipalId(row.get(2)?),
+                repo: row.get(3)?,
+                actions: Vec::new(),
+                until: row.get(5)?,
+                revoked: row.get::<_, i64>(6)? != 0,
+            },
+            row.get::<_, String>(4)?,
+        ))
+    }
+
+    fn finish_grant((mut grant, actions): (Grant, String)) -> CoreResult<Grant> {
+        grant.actions = serde_json::from_str(&actions)
+            .map_err(|e| corrupt(&format!("grant {}", grant.id), e))?;
+        Ok(grant)
+    }
+
+    const GRANT_COLS: &str = "id, grantor, grantee, repo, actions, until_ts, revoked";
+
+    pub fn grant(conn: &Connection, id: &str) -> CoreResult<Option<Grant>> {
+        conn.prepare_cached(&format!("SELECT {GRANT_COLS} FROM grants WHERE id = ?"))?
+            .query_row(params![id], grant_from_row)
+            .optional()?
+            .map(finish_grant)
+            .transpose()
+    }
+
+    /// Live (unrevoked) grants held by a principal. Expiry is judged at
+    /// the point of use, not here.
+    pub fn grants_of(conn: &Connection, grantee: &str) -> CoreResult<Vec<Grant>> {
+        conn.prepare_cached(&format!(
+            "SELECT {GRANT_COLS} FROM grants WHERE grantee = ? AND revoked = 0 ORDER BY rowid"
+        ))?
+        .query_map(params![grantee], grant_from_row)?
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(finish_grant)
+        .collect()
+    }
+
+    /// Does this grant list cover `action` on `repo` right now?
+    pub fn grants_cover(
+        grants: &[Grant],
+        action: Capability,
+        repo: Option<&str>,
+        now: &str,
+    ) -> bool {
+        grants.iter().any(|grant| {
+            let action_ok = grant.actions.contains(&action);
+            // A repo-scoped grant covers only that repo; repo-less
+            // operations need a global grant.
+            let scope_ok = match (&grant.repo, repo) {
+                (None, _) => true,
+                (Some(scope), Some(target)) => scope == target,
+                (Some(_), None) => false,
+            };
+            let time_ok = grant.until.as_deref().is_none_or(|until| until > now);
+            action_ok && scope_ok && time_ok
+        })
+    }
+
     pub fn principal_count(conn: &Connection) -> CoreResult<i64> {
         Ok(conn.query_row("SELECT COUNT(*) FROM principals", [], |r| r.get(0))?)
     }
@@ -377,6 +486,19 @@ impl Store {
 
     pub fn revision_refs(&self, repo: &str) -> CoreResult<Vec<(i64, i64, String)>> {
         raw::revision_refs(&self.conn, repo)
+    }
+
+    /// Resolve a presented token secret to its live owner.
+    pub fn principal_for_token(&self, secret: &str) -> CoreResult<Option<PrincipalId>> {
+        raw::principal_for_token_hash(&self.conn, &crate::commands::token_hash(secret))
+    }
+
+    pub fn tokens_of(&self, principal: &PrincipalId) -> CoreResult<Vec<TokenInfo>> {
+        raw::tokens_of(&self.conn, principal.as_str())
+    }
+
+    pub fn grants_of(&self, grantee: &PrincipalId) -> CoreResult<Vec<Grant>> {
+        raw::grants_of(&self.conn, grantee.as_str())
     }
 
     pub fn changes_in_repo(&self, repo: &str) -> CoreResult<Vec<Change>> {

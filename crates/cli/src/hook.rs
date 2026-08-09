@@ -23,18 +23,18 @@ const ZERO_OID_PREFIX: &str = "0000000000";
 
 pub fn run() -> anyhow::Result<()> {
     let server = std::env::var("CAIRN_SERVER").context("CAIRN_SERVER not set")?;
-    let principal = std::env::var("CAIRN_PRINCIPAL").context("CAIRN_PRINCIPAL not set")?;
+    let token = std::env::var("CAIRN_TOKEN").context("CAIRN_TOKEN not set")?;
     let repo = std::env::var("CAIRN_REPO").context("CAIRN_REPO not set")?;
     let stdin = std::io::stdin().lock();
     let stdout = std::io::stdout().lock();
-    conversation(stdin, stdout, &server, &principal, &repo)
+    conversation(stdin, stdout, &server, &token, &repo)
 }
 
 fn conversation(
     mut input: impl Read,
     mut output: impl Write,
     server: &str,
-    principal: &str,
+    token: &str,
     repo: &str,
 ) -> anyhow::Result<()> {
     // Handshake: receive-pack announces its version and features; we
@@ -50,7 +50,7 @@ fn conversation(
     // Commands: "<old-oid> <new-oid> <ref>" lines, then flush.
     let commands = pkt::read_text_until_flush(&mut input)?;
 
-    let client = Client { server, principal };
+    let client = Client { server, token };
     for command in &commands {
         let mut parts = command.split(' ');
         let (Some(_old), Some(new), Some(ref_name)) = (parts.next(), parts.next(), parts.next())
@@ -205,7 +205,7 @@ fn read_commit(oid: &str) -> Result<String, String> {
 
 struct Client<'a> {
     server: &'a str,
-    principal: &'a str,
+    token: &'a str,
 }
 
 impl Client<'_> {
@@ -219,7 +219,7 @@ impl Client<'_> {
                 "{}/api/git/pushes",
                 self.server.trim_end_matches('/')
             ))
-            .header("x-cairn-principal", self.principal)
+            .header("Authorization", format!("Bearer {}", self.token))
             .send_json(body)
             .map_err(|e| format!("forge unreachable: {e}"))?;
         let status = response.status().as_u16();
@@ -256,7 +256,7 @@ mod tests {
             Cursor::new(request),
             &mut response,
             "http://127.0.0.1:9", // discard port: nothing listens
-            "scout",
+            "cairnpush_test",
             "demo",
         )
         .unwrap();
@@ -275,7 +275,7 @@ mod tests {
     fn non_refs_for_pushes_are_rejected_without_touching_the_forge() {
         let client = Client {
             server: "http://127.0.0.1:9",
-            principal: "scout",
+            token: "cairnpush_test",
         };
         let err = handle_push(&client, "demo", &"a".repeat(40), "refs/heads/main").unwrap_err();
         assert!(err.contains("refs/for/<branch>"));

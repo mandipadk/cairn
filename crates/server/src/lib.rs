@@ -65,6 +65,16 @@ pub fn router(state: AppState) -> Router {
         .route("/api/changes/{id}/readiness", get(routes::merge_readiness))
         .route("/api/changes/{id}/merge", post(routes::merge_change))
         .route("/api/changes/{id}/abandon", post(routes::abandon_change))
+        .route(
+            "/api/principals/{id}/tokens",
+            post(routes::mint_token).get(routes::list_tokens),
+        )
+        .route("/api/tokens/{id}/revoke", post(routes::revoke_token))
+        .route(
+            "/api/grants",
+            post(routes::issue_grant).get(routes::list_grants),
+        )
+        .route("/api/grants/{id}/revoke", post(routes::revoke_grant))
         .route("/api/events", get(routes::list_events))
         .route("/api/events/stream", get(sse::stream))
         .route("/api/git/pushes", post(git_http::record_push))

@@ -23,6 +23,7 @@ struct Forge {
     app: Router,
     addr: SocketAddr,
     work: PathBuf,
+    scout_token: String,
 }
 
 /// Boot a forge with git hosting, principals (human `ada`, agents
@@ -64,11 +65,25 @@ async fn boot_with(object_format: &str) -> Forge {
             None,
         )
         .unwrap();
+    store
+        .issue_grant(
+            &ada,
+            &scout,
+            None,
+            vec![cairn_core::Capability::Task, cairn_core::Capability::Push],
+            None,
+        )
+        .unwrap();
+    let (_, scout_token, _) = store.mint_token(&scout, &scout, Some("test")).unwrap();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let git_store = GitStore::new(&repos, env!("CARGO_BIN_EXE_cairn"));
-    let app = router(AppState::new(store).with_git(git_store, format!("http://{addr}")));
+    let app = router(
+        AppState::new(store)
+            .with_dev_identity()
+            .with_git(git_store, format!("http://{addr}")),
+    );
     tokio::spawn(axum::serve(listener, app.clone()).into_future());
 
     let (status, _) = api(
@@ -87,6 +102,7 @@ async fn boot_with(object_format: &str) -> Forge {
         app,
         addr,
         work,
+        scout_token,
     }
 }
 
@@ -243,8 +259,10 @@ async fn single_change_flow(forge: Forge, oid_len: usize) {
     // Anonymous pushes are refused before touching receive-pack.
     git_expect_fail(&wc, &["push", "origin", "HEAD:refs/for/main"]);
 
-    // The transport IS the API: push to refs/for/main creates a change.
-    let push_url = format!("http://scout:x@{addr}/git/demo");
+    // The transport IS the API: push with scout's real token as the
+    // Basic password (dev mode would also accept it; the strict path
+    // has its own test below).
+    let push_url = format!("http://scout:{}@{addr}/git/demo", forge.scout_token);
     git(&wc, &["remote", "set-url", "origin", &push_url]);
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
 
@@ -297,12 +315,23 @@ async fn single_change_flow(forge: Forge, oid_len: usize) {
     git(&wc, &["fetch", "origin", "refs/changes/1/1"]);
     assert_eq!(git(&wc, &["rev-parse", "FETCH_HEAD"]).trim(), first_oid);
 
-    // Refused until policy is satisfied; then the merge moves the branch.
+    // Capability precedes policy: scout cannot merge at all, and even
+    // the sovereign human is refused until policy is satisfied.
     let (status, refusal) = api(
         app,
         "POST",
         &format!("/api/changes/{change_id}/merge"),
         "scout",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(refusal["kind"], "forbidden");
+    let (status, refusal) = api(
+        app,
+        "POST",
+        &format!("/api/changes/{change_id}/merge"),
+        "ada",
         None,
     )
     .await;
@@ -452,4 +481,71 @@ async fn stacked_push_with_guards_and_bottom_up_merge() {
             change["number"]
         );
     }
+}
+
+/// Push credentials are real: with dev identity off, only a live API
+/// token as the Basic password gets through receive-pack.
+#[tokio::test(flavor = "multi_thread")]
+async fn push_requires_a_live_token_without_dev_mode() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repos = tmp.path().join("repos");
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+
+    let mut store = Store::open_in_memory().unwrap();
+    let ada = PrincipalId::new("ada").unwrap();
+    let scout = PrincipalId::new("scout").unwrap();
+    store
+        .register_principal(&ada, &ada, PrincipalKind::Human, "Ada", None, None)
+        .unwrap();
+    store
+        .register_principal(&ada, &scout, PrincipalKind::Agent, "Scout", Some("m"), None)
+        .unwrap();
+    store
+        .issue_grant(&ada, &scout, None, vec![cairn_core::Capability::Push], None)
+        .unwrap();
+    let (_, token, _) = store.mint_token(&scout, &scout, None).unwrap();
+    store
+        .create_repo(&ada, "demo", "main", cairn_core::ObjectFormat::Sha1)
+        .unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let git_store = GitStore::new(&repos, env!("CARGO_BIN_EXE_cairn"));
+    // The repo entered the graph through the store, so create the bare
+    // repo directly too; no dev identity anywhere in this test.
+    git_store.create_repo("demo", "main", "sha1").await.unwrap();
+    let app = router(AppState::new(store).with_git(git_store, format!("http://{addr}")));
+    tokio::spawn(axum::serve(listener, app.clone()).into_future());
+
+    git(&work, &["clone", &format!("http://{addr}/git/demo"), "wc"]);
+    let wc = work.join("wc");
+    commit_file(&wc, "f.txt", "x\n", "Add f\n\nChange-Id: Itok01");
+
+    // Wrong password refused; bare username refused.
+    for bad in [
+        format!("http://scout:wrong@{addr}/git/demo"),
+        format!("http://scout@{addr}/git/demo"),
+    ] {
+        let output = git_raw(&wc, &["push", &bad, "HEAD:refs/for/main"]);
+        assert!(
+            !output.status.success(),
+            "push with bad credentials must fail"
+        );
+    }
+
+    // The live token authenticates and the change lands on the wire.
+    git(
+        &wc,
+        &[
+            "push",
+            &format!("http://scout:{token}@{addr}/git/demo"),
+            "HEAD:refs/for/main",
+        ],
+    );
+    let refs = git(&wc, &["ls-remote", &format!("http://{addr}/git/demo")]);
+    assert!(
+        refs.contains("refs/changes/1/1"),
+        "missing change ref:\n{refs}"
+    );
 }

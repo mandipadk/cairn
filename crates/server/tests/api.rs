@@ -13,7 +13,9 @@ use tokio::net::TcpStream;
 use tower::ServiceExt;
 
 fn test_router() -> Router {
-    router(AppState::new(cairn_core::Store::open_in_memory().unwrap()))
+    // Dev identity is explicit here: these tests exercise the protocol,
+    // not credentials. Token enforcement has its own test below.
+    router(AppState::new(cairn_core::Store::open_in_memory().unwrap()).with_dev_identity())
 }
 
 async fn call(
@@ -82,6 +84,21 @@ async fn seed(app: &Router) {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    // Agents act only under grants; ada delegates.
+    for (grantee, actions) in [
+        ("scout", json!(["task", "push", "review"])),
+        ("arbiter", json!(["task", "review"])),
+    ] {
+        let (status, _) = call(
+            app,
+            "POST",
+            "/api/grants",
+            Some("ada"),
+            Some(json!({ "grantee": grantee, "actions": actions })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
 }
 
 const OID: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -196,12 +213,23 @@ async fn full_protocol_over_http() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body[0]["unchecked"][0], "load beyond 1k concurrent agents");
 
-    // A refused merge teaches: 409 plus the exact unmet requirements.
+    // Capability precedes policy: scout holds no merge capability.
     let (status, body) = call(
         &app,
         "POST",
         &format!("/api/changes/{change}/merge"),
         Some("scout"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["kind"], "forbidden");
+    // A refused merge teaches: 409 plus the exact unmet requirements.
+    let (status, body) = call(
+        &app,
+        "POST",
+        &format!("/api/changes/{change}/merge"),
+        Some("ada"),
         None,
     )
     .await;
@@ -337,6 +365,7 @@ async fn sse_stream_catches_up_heals_and_follows_live() {
     tokio::spawn(axum::serve(listener, app.clone()).into_future());
 
     // Resume from cursor 2: catch-up must start at exactly seq 3.
+    // (Seed events run past this cursor either way.)
     let mut stream = TcpStream::connect(addr).await.unwrap();
     stream
         .write_all(
@@ -384,7 +413,7 @@ async fn sse_stream_catches_up_heals_and_follows_live() {
 #[tokio::test]
 async fn last_event_id_header_overrides_query_cursor() {
     let app = test_router();
-    seed(&app).await; // seeds events 1..=4
+    seed(&app).await; // seeds events 1..=6
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -416,7 +445,7 @@ async fn last_event_id_header_overrides_query_cursor() {
 #[tokio::test]
 async fn concurrent_writers_keep_the_stream_gapless() {
     let app = test_router();
-    seed(&app).await; // seeds events 1..=4
+    seed(&app).await; // seeds events 1..=6
     const WRITERS: usize = 20;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -460,7 +489,7 @@ async fn concurrent_writers_keep_the_stream_gapless() {
         writer.await.unwrap();
     }
 
-    let expected = 4 + WRITERS as i64;
+    let expected = 6 + WRITERS as i64;
     let mut buffer = String::new();
     read_until(&mut stream, &mut buffer, |b| {
         parse_sse(b).0.len() >= expected as usize
@@ -491,6 +520,15 @@ async fn claim_storm_has_exactly_one_winner() {
             Some(json!({
                 "id": format!("racer-{i}"), "kind": "agent", "display": format!("Racer {i}")
             })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = call(
+            &app,
+            "POST",
+            "/api/grants",
+            Some("ada"),
+            Some(json!({ "grantee": format!("racer-{i}"), "actions": ["task"] })),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -603,7 +641,7 @@ async fn sustained_concurrent_writes_keep_stream_and_pages_consistent() {
         writer.await.unwrap();
     }
 
-    let expected = (4 + WRITERS * PER_WRITER) as i64;
+    let expected = (6 + WRITERS * PER_WRITER) as i64;
     let mut buffer = String::new();
     read_until_within(&mut stream, &mut buffer, Duration::from_secs(60), |b| {
         parse_sse(b).0.len() >= expected as usize
@@ -641,4 +679,180 @@ async fn sustained_concurrent_writes_keep_stream_and_pages_consistent() {
         total += page.len();
     }
     assert_eq!(total as i64, expected);
+}
+
+/// The real credential path, dev identity OFF: tokens authenticate,
+/// grants authorize, revocations bite immediately, and asserted
+/// headers are worthless.
+#[tokio::test]
+async fn tokens_and_grants_enforce_without_dev_identity() {
+    // Bootstrap happens out-of-band (cairn admin): first human + token.
+    let mut store = cairn_core::Store::open_in_memory().unwrap();
+    let ada = cairn_core::PrincipalId::new("ada").unwrap();
+    store
+        .register_principal(
+            &ada,
+            &ada,
+            cairn_core::PrincipalKind::Human,
+            "Ada",
+            None,
+            None,
+        )
+        .unwrap();
+    let (_, ada_token, _) = store.mint_token(&ada, &ada, Some("bootstrap")).unwrap();
+    let app = router(AppState::new(store));
+
+    async fn call_auth(
+        app: &Router,
+        method: &str,
+        path: &str,
+        auth: Option<&str>,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
+        let mut request = Request::builder().method(method).uri(path);
+        if let Some(auth) = auth {
+            request = request.header("authorization", auth);
+        }
+        let request = match body {
+            Some(json) => request
+                .header("content-type", "application/json")
+                .body(Body::from(json.to_string())),
+            None => request.body(Body::empty()),
+        }
+        .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let value = if bytes.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap()
+        };
+        (status, value)
+    }
+
+    // Asserted identity is refused when dev mode is off.
+    let (status, _) = call(&app, "GET", "/api/tasks", Some("ada"), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // Garbage tokens are refused.
+    let (status, _) = call_auth(&app, "GET", "/api/tasks", Some("Bearer cairn_nope"), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // The bootstrap token works; ada builds the world over HTTP.
+    let ada_auth = format!("Bearer {ada_token}");
+    let (status, _) = call_auth(
+        &app,
+        "POST",
+        "/api/repos",
+        Some(&ada_auth),
+        Some(json!({
+            "name": "demo"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call_auth(
+        &app,
+        "POST",
+        "/api/principals",
+        Some(&ada_auth),
+        Some(json!({
+            "id": "drone", "kind": "agent", "display": "Drone", "model": "m"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, minted) = call_auth(
+        &app,
+        "POST",
+        "/api/principals/drone/tokens",
+        Some(&ada_auth),
+        Some(json!({ "label": "ci" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let drone_token = minted["token"].as_str().unwrap().to_owned();
+    let drone_auth = format!("Bearer {drone_token}");
+
+    // Authenticated but ungranted: 403 with the fix spelled out.
+    let (status, body) = call_auth(
+        &app,
+        "POST",
+        "/api/tasks",
+        Some(&drone_auth),
+        Some(json!({
+            "repo": "demo", "title": "T", "spec": "S"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(body["error"].as_str().unwrap().contains("task"));
+
+    // Granted: allowed. Revoked: refused again, immediately.
+    let (status, granted) = call_auth(
+        &app,
+        "POST",
+        "/api/grants",
+        Some(&ada_auth),
+        Some(json!({
+            "grantee": "drone", "actions": ["task"], "repo": "demo"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call_auth(
+        &app,
+        "POST",
+        "/api/tasks",
+        Some(&drone_auth),
+        Some(json!({
+            "repo": "demo", "title": "T", "spec": "S"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let grant = granted["id"].as_str().unwrap();
+    let (status, _) = call_auth(
+        &app,
+        "POST",
+        &format!("/api/grants/{grant}/revoke"),
+        Some(&ada_auth),
+        Some(json!({ "reason": "done" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call_auth(
+        &app,
+        "POST",
+        "/api/tasks",
+        Some(&drone_auth),
+        Some(json!({
+            "repo": "demo", "title": "T2", "spec": "S"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Token metadata never leaks secrets; token revocation kills auth.
+    let (_, tokens) = call_auth(
+        &app,
+        "GET",
+        "/api/principals/drone/tokens",
+        Some(&ada_auth),
+        None,
+    )
+    .await;
+    assert!(!tokens.to_string().contains(&drone_token));
+    let token_id = minted["id"].as_str().unwrap();
+    let (status, _) = call_auth(
+        &app,
+        "POST",
+        &format!("/api/tokens/{token_id}/revoke"),
+        Some(&ada_auth),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call_auth(&app, "GET", "/api/tasks", Some(&drone_auth), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }

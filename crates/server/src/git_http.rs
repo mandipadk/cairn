@@ -83,33 +83,55 @@ fn request_body(headers: &HeaderMap, body: Bytes) -> ApiResult<Vec<u8>> {
     Ok(decoded)
 }
 
-/// The pushing principal: Basic auth username (password ignored in
-/// dev-mode) or the dev header.
+/// The pushing principal. Normal path: HTTP Basic with the principal
+/// as username and a live API token as password. Dev mode additionally
+/// accepts a bare username or the dev header — asserted, not proven.
 fn push_principal(app: &AppState, headers: &HeaderMap) -> ApiResult<PrincipalId> {
     let unauthorized = || {
         ApiError::new(
             StatusCode::UNAUTHORIZED,
             "unauthenticated",
-            "push requires identity: use http://<principal>:<any>@host/... or the dev header",
+            "push requires identity: http://<principal>:<api-token>@host/...",
         )
     };
-    let from_basic = headers
+    let basic = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Basic "))
         .and_then(|b64| BASE64_STANDARD.decode(b64).ok())
         .and_then(|raw| String::from_utf8(raw).ok())
-        .and_then(|creds| creds.split_once(':').map(|(user, _)| user.to_owned()));
-    let from_header = headers
-        .get(PRINCIPAL_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
-    let name = from_basic.or(from_header).ok_or_else(unauthorized)?;
-    let principal = PrincipalId::new(&name).ok_or_else(unauthorized)?;
-    if app.with_store(|s| s.principal(&principal))?.is_none() {
-        return Err(unauthorized());
+        .and_then(|creds| {
+            creds
+                .split_once(':')
+                .map(|(user, pass)| (user.to_owned(), pass.to_owned()))
+        });
+    if let Some((user, password)) = &basic {
+        let claimed = PrincipalId::new(user).ok_or_else(unauthorized)?;
+        let owner = app.with_store(|s| s.principal_for_token(password))?;
+        match owner {
+            Some(owner) if owner == claimed => return Ok(claimed),
+            Some(_) => return Err(unauthorized()),
+            None if !app.dev_identity() => return Err(unauthorized()),
+            None => {}
+        }
     }
-    Ok(principal)
+    if app.dev_identity() {
+        let asserted = basic
+            .map(|(user, _)| user)
+            .or_else(|| {
+                headers
+                    .get(PRINCIPAL_HEADER)
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned)
+            })
+            .ok_or_else(unauthorized)?;
+        let principal = PrincipalId::new(&asserted).ok_or_else(unauthorized)?;
+        if app.with_store(|s| s.principal(&principal))?.is_none() {
+            return Err(unauthorized());
+        }
+        return Ok(principal);
+    }
+    Err(unauthorized())
 }
 
 fn challenge_basic(err: ApiError) -> Response {
@@ -204,10 +226,11 @@ pub async fn receive_pack(
         let principal = push_principal(&app, &headers)?;
         let input = request_body(&headers, body)?;
         // The hook inherits this env and records pushes back through
-        // the API as the authenticated principal.
+        // the API as the authenticated pusher, via an ephemeral token
+        // that outlives nothing but this receive-pack.
         let env = vec![
             ("CAIRN_SERVER".to_owned(), git.base_url.clone()),
-            ("CAIRN_PRINCIPAL".to_owned(), principal.as_str().to_owned()),
+            ("CAIRN_TOKEN".to_owned(), app.issue_push_token(&principal)),
             ("CAIRN_REPO".to_owned(), name.clone()),
         ];
         let output = git

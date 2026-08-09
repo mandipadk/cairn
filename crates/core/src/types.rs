@@ -1,6 +1,6 @@
 //! Projection types: the current state of the graph, derived from the log.
 
-use crate::id::{ChangeId, ClaimId, PrincipalId, SessionId, TaskId, VerdictId};
+use crate::id::{ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, TokenId, VerdictId};
 use serde::{Deserialize, Serialize};
 
 macro_rules! str_enum {
@@ -71,6 +71,23 @@ str_enum!(ReviewDomain {
     Design => "design",
     Style => "style",
 });
+
+str_enum!(
+    /// What a principal may do. Humans hold every capability
+    /// implicitly; agents act only under grants.
+    Capability {
+        /// Create, claim, and work tasks (sessions included).
+        Task => "task",
+        /// Produce output: open changes, push revisions, attach claims.
+        Push => "push",
+        /// Judge: give verdicts.
+        Review => "review",
+        /// Land or abandon changes.
+        Merge => "merge",
+        /// Register principals, create repos, manage grants and tokens.
+        Admin => "admin",
+    }
+);
 
 str_enum!(Disposition {
     Approve => "approve",
@@ -200,6 +217,30 @@ pub struct Claim {
     pub summary: String,
     pub unchecked: Vec<String>,
     pub by: PrincipalId,
+}
+
+/// A capability delegation: grantor gives grantee the right to act,
+/// optionally scoped to one repo and bounded in time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Grant {
+    pub id: GrantId,
+    pub grantor: PrincipalId,
+    pub grantee: PrincipalId,
+    /// None scopes the grant to every repo, including repo-less work.
+    pub repo: Option<String>,
+    pub actions: Vec<Capability>,
+    /// RFC 3339 expiry; None means until revoked.
+    pub until: Option<String>,
+    pub revoked: bool,
+}
+
+/// Token metadata — the secret itself is never stored or shown again.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenInfo {
+    pub id: TokenId,
+    pub principal: PrincipalId,
+    pub label: Option<String>,
+    pub revoked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

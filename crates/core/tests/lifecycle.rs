@@ -2,8 +2,8 @@
 //! judgment → policy-decided outcome, all against an in-memory store.
 
 use cairn_core::{
-    ChangeSpec, ClaimKind, ClaimSpec, CoreError, Disposition, Event, EventSeq, ObjectFormat,
-    PrincipalId, PrincipalKind, ReviewDomain, SessionState, Store, TaskState,
+    Capability, ChangeSpec, ClaimKind, ClaimSpec, CoreError, Disposition, Event, EventSeq,
+    ObjectFormat, PrincipalId, PrincipalKind, ReviewDomain, SessionState, Store, TaskState,
 };
 
 const OID: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -53,6 +53,25 @@ fn seeded() -> (Store, PrincipalId, PrincipalId, PrincipalId) {
         .unwrap();
     store
         .create_repo(&human, "forge", "main", ObjectFormat::Sha1)
+        .unwrap();
+    // Agents act only under grants; the human delegates.
+    store
+        .issue_grant(
+            &human,
+            &scout,
+            None,
+            vec![Capability::Task, Capability::Push, Capability::Review],
+            None,
+        )
+        .unwrap();
+    store
+        .issue_grant(
+            &human,
+            &arbiter,
+            None,
+            vec![Capability::Task, Capability::Review],
+            None,
+        )
         .unwrap();
     (store, human, scout, arbiter)
 }
@@ -121,7 +140,11 @@ fn full_lifecycle_intent_to_merge() {
         trace.requirements.iter().filter(|r| !r.satisfied).count(),
         1
     );
+    // Capability precedes policy: scout holds no merge capability at
+    // all, while the human clears capability and hits the policy wall.
     let err = store.merge_change(&scout, &change).unwrap_err();
+    assert!(matches!(err, CoreError::Forbidden(_)));
+    let err = store.merge_change(&human, &change).unwrap_err();
     assert!(matches!(err, CoreError::PolicyUnsatisfied(_)));
 
     // One agent approval is not enough: independence needs a human or
@@ -192,6 +215,8 @@ fn full_lifecycle_intent_to_merge() {
             "principal_registered",
             "principal_registered",
             "repo_created",
+            "grant_issued",
+            "grant_issued",
             "task_created",
             "task_claimed",
             "session_opened",
@@ -220,6 +245,9 @@ fn two_distinct_agent_models_satisfy_independence() {
             Some("gemini-3"),
             None,
         )
+        .unwrap();
+    store
+        .issue_grant(&human, &sentinel, None, vec![Capability::Review], None)
         .unwrap();
 
     let (change, _, _) = store
@@ -455,7 +483,7 @@ fn protocol_misuse_is_rejected_with_typed_errors() {
 fn event_cursor_pagination_resumes_cleanly() {
     let (store, ..) = seeded();
     let all = store.events_after(EventSeq(0), 100).unwrap();
-    assert_eq!(all.len(), 4);
+    assert_eq!(all.len(), 6);
 
     let first_two = store.events_after(EventSeq(0), 2).unwrap();
     let rest = store
@@ -467,4 +495,161 @@ fn event_cursor_pagination_resumes_cleanly() {
         first_two.last().unwrap().seq.0 + 1
     );
     assert_eq!(store.latest_seq().unwrap(), all.last().unwrap().seq);
+}
+
+#[test]
+fn tokens_authenticate_and_revoke_immediately() {
+    let (mut store, human, scout, _) = seeded();
+
+    // Self-mint; the secret resolves to its owner exactly while live.
+    let (token, secret, _) = store.mint_token(&scout, &scout, Some("laptop")).unwrap();
+    assert!(secret.starts_with("cairn_"));
+    assert_eq!(
+        store.principal_for_token(&secret).unwrap(),
+        Some(scout.clone())
+    );
+    assert_eq!(store.principal_for_token("cairn_wrong").unwrap(), None);
+
+    // An agent may not mint for someone else; a human may.
+    assert!(matches!(
+        store.mint_token(&scout, &human, None).unwrap_err(),
+        CoreError::Forbidden(_)
+    ));
+    let (_, human_secret, _) = store.mint_token(&human, &scout, Some("issued")).unwrap();
+    assert_eq!(
+        store.principal_for_token(&human_secret).unwrap(),
+        Some(scout.clone())
+    );
+
+    // Revocation is immediate; the metadata never leaks the secret.
+    store.revoke_token(&scout, &token).unwrap();
+    assert_eq!(store.principal_for_token(&secret).unwrap(), None);
+    let tokens = store.tokens_of(&scout).unwrap();
+    assert_eq!(tokens.len(), 2);
+    assert!(tokens.iter().any(|t| t.revoked));
+    assert!(!serde_json::to_string(&tokens).unwrap().contains("cairn_"));
+}
+
+#[test]
+fn capability_law_scopes_expires_and_revokes() {
+    let mut store = Store::open_in_memory().unwrap();
+    let human = PrincipalId::new("ada").unwrap();
+    let agent = PrincipalId::new("drone").unwrap();
+    store
+        .register_principal(&human, &human, PrincipalKind::Human, "Ada", None, None)
+        .unwrap();
+    store
+        .register_principal(
+            &human,
+            &agent,
+            PrincipalKind::Agent,
+            "Drone",
+            Some("m"),
+            None,
+        )
+        .unwrap();
+    store
+        .create_repo(&human, "alpha", "main", ObjectFormat::Sha1)
+        .unwrap();
+    store
+        .create_repo(&human, "beta", "main", ObjectFormat::Sha1)
+        .unwrap();
+
+    // No grant: refused, and the refusal says what to do about it.
+    let err = store
+        .open_change(&agent, ChangeSpec::new("alpha", "main", "X"))
+        .unwrap_err();
+    match err {
+        CoreError::Forbidden(message) => {
+            assert!(
+                message.contains("push"),
+                "should name the capability: {message}"
+            );
+            assert!(
+                message.contains("/api/grants"),
+                "should say how to fix: {message}"
+            );
+        }
+        other => panic!("expected Forbidden, got {other:?}"),
+    }
+
+    // Repo-scoped grant covers alpha, not beta, and not repo-less work.
+    let (grant, _) = store
+        .issue_grant(&human, &agent, Some("alpha"), vec![Capability::Push], None)
+        .unwrap();
+    store
+        .open_change(&agent, ChangeSpec::new("alpha", "main", "X"))
+        .unwrap();
+    assert!(matches!(
+        store
+            .open_change(&agent, ChangeSpec::new("beta", "main", "Y"))
+            .unwrap_err(),
+        CoreError::Forbidden(_)
+    ));
+    // Capability is not identity: push does not confer review.
+    let (change, _, _) = store
+        .open_change(&agent, ChangeSpec::new("alpha", "main", "Z"))
+        .unwrap();
+    store
+        .push_revision(&agent, &change, OID, None, "z")
+        .unwrap();
+    assert!(matches!(
+        store
+            .give_verdict(
+                &agent,
+                &change,
+                1,
+                ReviewDomain::Correctness,
+                Disposition::Approve,
+                "self-review"
+            )
+            .unwrap_err(),
+        CoreError::Forbidden(_)
+    ));
+
+    // Revocation is immediate.
+    store.revoke_grant(&human, &grant, "trial over").unwrap();
+    assert!(matches!(
+        store
+            .open_change(&agent, ChangeSpec::new("alpha", "main", "W"))
+            .unwrap_err(),
+        CoreError::Forbidden(_)
+    ));
+
+    // Expired grants do not cover; unexpired ones do.
+    store
+        .issue_grant(
+            &human,
+            &agent,
+            Some("alpha"),
+            vec![Capability::Push],
+            Some("2020-01-01T00:00:00Z"),
+        )
+        .unwrap();
+    assert!(matches!(
+        store
+            .open_change(&agent, ChangeSpec::new("alpha", "main", "W"))
+            .unwrap_err(),
+        CoreError::Forbidden(_)
+    ));
+    store
+        .issue_grant(
+            &human,
+            &agent,
+            Some("alpha"),
+            vec![Capability::Push],
+            Some("2100-01-01T00:00:00Z"),
+        )
+        .unwrap();
+    store
+        .open_change(&agent, ChangeSpec::new("alpha", "main", "W"))
+        .unwrap();
+
+    // Delegation is a human act; agents cannot widen authority.
+    assert!(matches!(
+        store
+            .issue_grant(&agent, &agent, None, vec![Capability::Admin], None)
+            .unwrap_err(),
+        CoreError::Forbidden(_)
+    ));
 }

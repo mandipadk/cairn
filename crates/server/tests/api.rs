@@ -371,3 +371,96 @@ async fn sse_stream_catches_up_heals_and_follows_live() {
     // The events carry their full envelopes.
     assert!(buffer.contains("\"actor\":\"ada\""));
 }
+
+#[tokio::test]
+async fn last_event_id_header_overrides_query_cursor() {
+    let app = test_router();
+    seed(&app).await; // seeds events 1..=4
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(axum::serve(listener, app.clone()).into_future());
+
+    // A reconnecting client sends Last-Event-ID; it must win over ?after=.
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(
+            b"GET /api/events/stream?after=0 HTTP/1.1\r\n\
+              Host: cairn\r\n\
+              x-cairn-principal: ada\r\n\
+              Last-Event-ID: 3\r\n\
+              Accept: text/event-stream\r\n\r\n",
+        )
+        .await
+        .unwrap();
+
+    let mut buffer = String::new();
+    read_until(&mut stream, &mut buffer, |b| !parse_sse(b).0.is_empty()).await;
+    let (ids, _) = parse_sse(&buffer);
+    assert_eq!(
+        ids.first(),
+        Some(&4),
+        "resume must start after Last-Event-ID, got {ids:?}"
+    );
+}
+
+#[tokio::test]
+async fn concurrent_writers_keep_the_stream_gapless() {
+    let app = test_router();
+    seed(&app).await; // seeds events 1..=4
+    const WRITERS: usize = 20;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(axum::serve(listener, app.clone()).into_future());
+
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(
+            b"GET /api/events/stream?after=0 HTTP/1.1\r\n\
+              Host: cairn\r\n\
+              x-cairn-principal: ada\r\n\
+              Accept: text/event-stream\r\n\r\n",
+        )
+        .await
+        .unwrap();
+
+    // Hammer the API from many concurrent writers; their commit and
+    // publish orders will interleave, which is exactly what the stream's
+    // gap-healing must absorb.
+    let writers: Vec<_> = (0..WRITERS)
+        .map(|i| {
+            let app = app.clone();
+            tokio::spawn(async move {
+                let (status, _) = call(
+                    &app,
+                    "POST",
+                    "/api/tasks",
+                    Some("ada"),
+                    Some(json!({
+                        "title": format!("Task {i}"),
+                        "spec": "Concurrency probe."
+                    })),
+                )
+                .await;
+                assert_eq!(status, StatusCode::OK);
+            })
+        })
+        .collect();
+    for writer in writers {
+        writer.await.unwrap();
+    }
+
+    let expected = 4 + WRITERS as i64;
+    let mut buffer = String::new();
+    read_until(&mut stream, &mut buffer, |b| {
+        parse_sse(b).0.len() >= expected as usize
+    })
+    .await;
+    let (ids, _) = parse_sse(&buffer);
+    let want: Vec<i64> = (1..=expected).collect();
+    assert_eq!(
+        ids, want,
+        "stream must be gapless and in order despite concurrent writers"
+    );
+}

@@ -1,3 +1,5 @@
+mod mcp;
+
 use anyhow::Context;
 use cairn_core::Store;
 use cairn_server::{AppState, router};
@@ -23,11 +25,22 @@ enum Command {
         #[arg(long, default_value = "127.0.0.1:6160")]
         listen: SocketAddr,
     },
+    /// Expose a running forge as MCP tools over stdio for an AI agent.
+    Mcp {
+        /// Base URL of the forge server to proxy to.
+        #[arg(long, default_value = "http://127.0.0.1:6160")]
+        server: String,
+        /// Principal to act as on the forge.
+        #[arg(long)]
+        principal: String,
+    },
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Logs go to stderr: in MCP mode stdout belongs to the protocol.
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
@@ -48,6 +61,9 @@ async fn main() -> anyhow::Result<()> {
                     let _ = tokio::signal::ctrl_c().await;
                 })
                 .await?;
+        }
+        Command::Mcp { server, principal } => {
+            mcp::run(&server, &principal)?;
         }
     }
     Ok(())

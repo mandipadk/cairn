@@ -1,0 +1,56 @@
+use axum::Json;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use cairn_core::CoreError;
+use serde_json::json;
+
+pub type ApiResult<T> = Result<T, ApiError>;
+
+/// A typed API failure. The `kind` field is stable vocabulary for
+/// machine callers; the message is for the human reading the log.
+pub struct ApiError {
+    pub status: StatusCode,
+    pub kind: &'static str,
+    pub message: String,
+    /// Extra structured context, e.g. the policy trace on a refused merge.
+    pub detail: Option<serde_json::Value>,
+}
+
+impl ApiError {
+    pub fn new(status: StatusCode, kind: &'static str, message: impl Into<String>) -> Self {
+        ApiError {
+            status,
+            kind,
+            message: message.into(),
+            detail: None,
+        }
+    }
+}
+
+impl From<CoreError> for ApiError {
+    fn from(err: CoreError) -> Self {
+        let (status, kind) = match &err {
+            CoreError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
+            CoreError::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
+            CoreError::Invalid(_) => (StatusCode::BAD_REQUEST, "invalid"),
+            CoreError::PolicyUnsatisfied(_) => (StatusCode::CONFLICT, "policy_unsatisfied"),
+            CoreError::Db(_) | CoreError::Corrupt { .. } => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal")
+            }
+        };
+        if status == StatusCode::INTERNAL_SERVER_ERROR {
+            tracing::error!(error = %err, "internal store failure");
+        }
+        ApiError::new(status, kind, err.to_string())
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let mut body = json!({ "kind": self.kind, "error": self.message });
+        if let Some(detail) = self.detail {
+            body["detail"] = detail;
+        }
+        (self.status, Json(body)).into_response()
+    }
+}

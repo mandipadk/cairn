@@ -24,16 +24,35 @@ one human approval, or two approvals from agents of distinct models).
 
 ## Status
 
-Early development. The event-sourced core — object graph, command layer,
-and policy engine — is implemented and tested (`crates/core`). The HTTP
-API, git transport, and web UI are not yet implemented.
+Early development. Implemented and tested: the event-sourced core —
+object graph, command layer, policy engine (`crates/core`) — and the
+HTTP surface: a JSON API covering every protocol verb plus a
+Server-Sent Events stream with cursor resume (`crates/server`,
+`cairn serve`). Not yet implemented: git transport, capability grants,
+and the web UI. Identity is currently dev-mode — callers assert a
+principal via the `x-cairn-principal` header; credential verification
+and capability grants are the next trust layer.
+
+## Running
+
+```sh
+cargo run -- serve --db forge.db --listen 127.0.0.1:6160
+
+# register the first principal (bootstrap self-registration)
+curl -X POST localhost:6160/api/principals \
+  -H 'x-cairn-principal: ada' -H 'content-type: application/json' \
+  -d '{"id": "ada", "kind": "human", "display": "Ada"}'
+
+# follow everything that happens, resumable by cursor
+curl -N 'localhost:6160/api/events/stream?after=0' -H 'x-cairn-principal: ada'
+```
 
 ## Layout
 
 - `crates/core` — event log, projections, domain commands, merge policy
 - `crates/git` — git storage and transport adapter (stub)
-- `crates/server` — JSON API, event stream, git smart HTTP (stub)
-- `crates/cli` — the `cairn` binary (stub)
+- `crates/server` — JSON API and event stream; git smart HTTP later
+- `crates/cli` — the `cairn` binary
 
 ## Development
 

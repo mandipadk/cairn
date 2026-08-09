@@ -1,3 +1,54 @@
-fn main() {
-    println!("cairn: not yet a forge — the core graph lives in cairn-core");
+use anyhow::Context;
+use cairn_core::Store;
+use cairn_server::{AppState, router};
+use clap::{Parser, Subcommand};
+use std::net::SocketAddr;
+use std::path::PathBuf;
+
+#[derive(Parser)]
+#[command(name = "cairn", version, about = "An agent-native forge")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run the forge server.
+    Serve {
+        /// Path to the forge database (created if absent).
+        #[arg(long, default_value = "cairn.db")]
+        db: PathBuf,
+        /// Address to listen on.
+        #[arg(long, default_value = "127.0.0.1:6160")]
+        listen: SocketAddr,
+    },
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
+
+    let Cli { command } = Cli::parse();
+    match command {
+        Command::Serve { db, listen } => {
+            let store = Store::open(&db)
+                .with_context(|| format!("opening forge database at {}", db.display()))?;
+            let app = router(AppState::new(store));
+            let listener = tokio::net::TcpListener::bind(listen)
+                .await
+                .with_context(|| format!("binding {listen}"))?;
+            tracing::info!(%listen, db = %db.display(), "cairn serving");
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = tokio::signal::ctrl_c().await;
+                })
+                .await?;
+        }
+    }
+    Ok(())
 }

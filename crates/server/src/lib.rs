@@ -1,3 +1,66 @@
-//! HTTP surface for the cairn graph: JSON API, SSE event stream, MCP.
+//! HTTP surface for the cairn graph.
 //!
-//! Not yet implemented.
+//! One API for every consumer: agents, the CLI, the web UI, and the MCP
+//! adapter all speak exactly these routes — no privileged surface. The
+//! shape mirrors the core protocol verbs one-to-one, and every mutation
+//! response carries the event envelope it produced, so a caller always
+//! leaves with the cursor it needs to resume the world.
+//!
+//! Identity is currently dev-mode (see [`auth`]): a principal header,
+//! asserted rather than proven. Capability grants and real credentials
+//! are the trust layer scheduled to replace it; nothing else in the API
+//! will change shape when they do.
+
+mod auth;
+mod error;
+mod routes;
+mod sse;
+mod state;
+
+pub use state::AppState;
+
+use axum::Router;
+use axum::routing::{get, post};
+
+pub fn router(state: AppState) -> Router {
+    Router::new()
+        .route("/api/principals", post(routes::register_principal))
+        .route("/api/principals/{id}", get(routes::get_principal))
+        .route("/api/repos", post(routes::create_repo))
+        .route("/api/repos/{name}", get(routes::get_repo))
+        .route("/api/repos/{name}/changes", get(routes::list_changes))
+        .route(
+            "/api/repos/{name}/changes/{number}",
+            get(routes::get_change_by_number),
+        )
+        .route(
+            "/api/tasks",
+            post(routes::create_task).get(routes::list_tasks),
+        )
+        .route("/api/tasks/{id}", get(routes::get_task))
+        .route("/api/tasks/{id}/claim", post(routes::claim_task))
+        .route("/api/tasks/{id}/state", post(routes::set_task_state))
+        .route("/api/tasks/{id}/sessions", post(routes::open_session))
+        .route("/api/sessions/{id}", get(routes::get_session))
+        .route("/api/sessions/{id}/end", post(routes::end_session))
+        .route("/api/changes", post(routes::open_change))
+        .route("/api/changes/{id}", get(routes::get_change))
+        .route(
+            "/api/changes/{id}/revisions",
+            post(routes::push_revision).get(routes::list_revisions),
+        )
+        .route(
+            "/api/changes/{id}/claims",
+            post(routes::attach_claim).get(routes::list_claims),
+        )
+        .route(
+            "/api/changes/{id}/verdicts",
+            post(routes::give_verdict).get(routes::list_verdicts),
+        )
+        .route("/api/changes/{id}/readiness", get(routes::merge_readiness))
+        .route("/api/changes/{id}/merge", post(routes::merge_change))
+        .route("/api/changes/{id}/abandon", post(routes::abandon_change))
+        .route("/api/events", get(routes::list_events))
+        .route("/api/events/stream", get(sse::stream))
+        .with_state(state)
+}

@@ -29,14 +29,7 @@ fn seeded() -> (Store, PrincipalId, PrincipalId, PrincipalId) {
     let scout = principal("scout");
     let arbiter = principal("arbiter");
     store
-        .register_principal(
-            &human,
-            &human,
-            PrincipalKind::Human,
-            "Ada",
-            None,
-            None,
-        )
+        .register_principal(&human, &human, PrincipalKind::Human, "Ada", None, None)
         .unwrap();
     store
         .register_principal(

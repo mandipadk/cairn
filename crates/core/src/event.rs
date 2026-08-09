@@ -82,6 +82,10 @@ pub enum Event {
         task: Option<TaskId>,
         /// Stack parent: this change builds on another open change.
         parent_change: Option<ChangeId>,
+        /// Client-chosen stable key (e.g. a Change-Id commit trailer),
+        /// letting git pushes address the same change across amends.
+        #[serde(default)]
+        external_key: Option<String>,
     },
     RevisionPushed {
         change: ChangeId,

@@ -29,8 +29,13 @@ object graph, command layer, policy engine (`crates/core`); the HTTP
 surface: a JSON API covering every protocol verb plus a Server-Sent
 Events stream with cursor resume (`crates/server`, `cairn serve`); and
 an MCP adapter exposing the protocol as tools for AI agents
-(`cairn mcp`). Not yet implemented: git transport, capability grants,
-and the web UI. Identity is currently dev-mode — callers assert a
+(`cairn mcp`); and git hosting with change-native transport — pushing
+to `refs/for/<branch>` opens a change or adds a revision (matched by
+`Change-Id` trailer, as emitted by Gerrit tooling and jj), every
+revision stays fetchable at `refs/changes/<number>/<revision>`, and a
+policy-approved merge fast-forwards the real branch. Not yet
+implemented: capability grants, merge queue, stacked-change
+auto-rebase, and the web UI. Identity is currently dev-mode — callers assert a
 principal via the `x-cairn-principal` header; credential verification
 and capability grants are the next trust layer.
 
@@ -54,12 +59,22 @@ Agents connect natively over MCP — the adapter proxies the same API:
 cairn mcp --server http://127.0.0.1:6160 --principal scout
 ```
 
+The transport is also the API — plain git speaks to the graph:
+
+```sh
+git clone http://127.0.0.1:6160/git/demo
+git commit -m $'Do the thing\n\nChange-Id: I8f3a1c2e'
+git push http://scout:x@127.0.0.1:6160/git/demo HEAD:refs/for/main
+# remote reports the change ref, e.g. refs/changes/1/1;
+# amend + push again with the same Change-Id -> revision 2
+```
+
 ## Layout
 
 - `crates/core` — event log, projections, domain commands, merge policy
-- `crates/git` — git storage and transport adapter (stub)
-- `crates/server` — JSON API and event stream; git smart HTTP later
-- `crates/cli` — the `cairn` binary and the MCP adapter
+- `crates/git` — bare-repo storage, pkt-line codec, commit parsing
+- `crates/server` — JSON API, event stream, git smart HTTP
+- `crates/cli` — the `cairn` binary: server, MCP adapter, push hook
 
 ## Development
 

@@ -67,9 +67,12 @@ CREATE TABLE IF NOT EXISTS changes (
   state           TEXT NOT NULL,
   owner           TEXT NOT NULL,
   latest_revision INTEGER NOT NULL DEFAULT 0,
+  external_key    TEXT,
   UNIQUE (repo, number)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_changes_repo_state ON changes (repo, state);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_changes_key
+  ON changes (repo, external_key) WHERE external_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS revisions (
   change_id  TEXT NOT NULL,
@@ -274,10 +277,11 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             title,
             task,
             parent_change,
+            external_key,
         } => {
             tx.execute(
-                "INSERT INTO changes (id, repo, number, target, title, task, parent_change, state, owner)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+                "INSERT INTO changes (id, repo, number, target, title, task, parent_change, state, owner, external_key)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)",
                 params![
                     change.as_str(),
                     repo,
@@ -286,7 +290,8 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                     title,
                     task.as_ref().map(|t| t.as_str()),
                     parent_change.as_ref().map(|c| c.as_str()),
-                    actor
+                    actor,
+                    external_key
                 ],
             )?;
         }

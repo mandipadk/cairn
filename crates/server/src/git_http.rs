@@ -1,0 +1,404 @@
+//! Git over HTTP, feeding the graph.
+//!
+//! Smart-HTTP requests are relayed to real git via `GitStore`; pushes
+//! to `refs/for/<branch>` reach the proc-receive hook, which calls
+//! [`record_push`] here to enter the revision into the graph before
+//! receive-pack creates the `refs/changes/<number>/<revision>` ref it
+//! reports back to the pusher.
+//!
+//! Reads (clone/fetch) are anonymous in dev-mode; pushes identify the
+//! principal from HTTP Basic auth's username (any password) or the
+//! dev header — the same seam as the rest of the API.
+
+use crate::auth::{Actor, PRINCIPAL_HEADER};
+use crate::error::{ApiError, ApiResult};
+use crate::routes::committed;
+use crate::state::AppState;
+use axum::Json;
+use axum::body::Bytes;
+use axum::extract::{Path, Query, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use base64::prelude::*;
+use cairn_core::{ChangeState, PrincipalId};
+use cairn_git::Service;
+use serde::Deserialize;
+use serde_json::{Value, json};
+use std::collections::HashSet;
+use std::io::Read;
+
+/// Clone URLs may spell the repo with or without a `.git` suffix.
+fn repo_name(raw: &str) -> String {
+    raw.strip_suffix(".git").unwrap_or(raw).to_owned()
+}
+
+fn git_enabled(app: &AppState) -> ApiResult<&crate::state::GitContext> {
+    app.git().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "git hosting is not enabled",
+        )
+    })
+}
+
+fn ensure_repo(app: &AppState, name: &str) -> ApiResult<()> {
+    app.with_store(|s| s.repo(name))?
+        .map(|_| ())
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                format!("repo {name} not found"),
+            )
+        })
+}
+
+fn git_protocol(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("git-protocol")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+}
+
+/// Request bodies from git clients may arrive gzip-compressed.
+fn request_body(headers: &HeaderMap, body: Bytes) -> ApiResult<Vec<u8>> {
+    let gzipped = headers
+        .get(header::CONTENT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("gzip"));
+    if !gzipped {
+        return Ok(body.to_vec());
+    }
+    let mut decoded = Vec::new();
+    flate2::read::GzDecoder::new(body.as_ref())
+        .read_to_end(&mut decoded)
+        .map_err(|e| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid",
+                format!("bad gzip body: {e}"),
+            )
+        })?;
+    Ok(decoded)
+}
+
+/// The pushing principal: Basic auth username (password ignored in
+/// dev-mode) or the dev header.
+fn push_principal(app: &AppState, headers: &HeaderMap) -> ApiResult<PrincipalId> {
+    let unauthorized = || {
+        ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "push requires identity: use http://<principal>:<any>@host/... or the dev header",
+        )
+    };
+    let from_basic = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Basic "))
+        .and_then(|b64| BASE64_STANDARD.decode(b64).ok())
+        .and_then(|raw| String::from_utf8(raw).ok())
+        .and_then(|creds| creds.split_once(':').map(|(user, _)| user.to_owned()));
+    let from_header = headers
+        .get(PRINCIPAL_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let name = from_basic.or(from_header).ok_or_else(unauthorized)?;
+    let principal = PrincipalId::new(&name).ok_or_else(unauthorized)?;
+    if app.with_store(|s| s.principal(&principal))?.is_none() {
+        return Err(unauthorized());
+    }
+    Ok(principal)
+}
+
+fn challenge_basic(err: ApiError) -> Response {
+    let mut response = err.into_response();
+    if response.status() == StatusCode::UNAUTHORIZED {
+        response.headers_mut().insert(
+            header::WWW_AUTHENTICATE,
+            "Basic realm=\"cairn\"".parse().unwrap(),
+        );
+    }
+    response
+}
+
+#[derive(Deserialize)]
+pub struct InfoRefsQuery {
+    service: String,
+}
+
+pub async fn info_refs(
+    State(app): State<AppState>,
+    Path(repo): Path<String>,
+    Query(query): Query<InfoRefsQuery>,
+    headers: HeaderMap,
+) -> Response {
+    let result: ApiResult<Response> = async {
+        let git = git_enabled(&app)?;
+        let name = repo_name(&repo);
+        ensure_repo(&app, &name)?;
+        let service = Service::parse(&query.service)
+            .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "invalid", "unknown service"))?;
+        let body = git
+            .store
+            .advertise_refs(service, &name, git_protocol(&headers).as_deref())
+            .await?;
+        Ok((
+            [
+                (header::CONTENT_TYPE, service.advertisement_content_type()),
+                (header::CACHE_CONTROL, "no-cache".to_owned()),
+            ],
+            body,
+        )
+            .into_response())
+    }
+    .await;
+    result.unwrap_or_else(IntoResponse::into_response)
+}
+
+pub async fn upload_pack(
+    State(app): State<AppState>,
+    Path(repo): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let result: ApiResult<Response> = async {
+        let git = git_enabled(&app)?;
+        let name = repo_name(&repo);
+        ensure_repo(&app, &name)?;
+        let input = request_body(&headers, body)?;
+        let output = git
+            .store
+            .serve_rpc(
+                Service::UploadPack,
+                &name,
+                input,
+                Vec::new(),
+                git_protocol(&headers).as_deref(),
+            )
+            .await?;
+        Ok((
+            [(
+                header::CONTENT_TYPE,
+                Service::UploadPack.result_content_type(),
+            )],
+            output,
+        )
+            .into_response())
+    }
+    .await;
+    result.unwrap_or_else(IntoResponse::into_response)
+}
+
+pub async fn receive_pack(
+    State(app): State<AppState>,
+    Path(repo): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let result: ApiResult<Response> = async {
+        let git = git_enabled(&app)?;
+        let name = repo_name(&repo);
+        ensure_repo(&app, &name)?;
+        let principal = push_principal(&app, &headers)?;
+        let input = request_body(&headers, body)?;
+        // The hook inherits this env and records pushes back through
+        // the API as the authenticated principal.
+        let env = vec![
+            ("CAIRN_SERVER".to_owned(), git.base_url.clone()),
+            ("CAIRN_PRINCIPAL".to_owned(), principal.as_str().to_owned()),
+            ("CAIRN_REPO".to_owned(), name.clone()),
+        ];
+        let output = git
+            .store
+            .serve_rpc(
+                Service::ReceivePack,
+                &name,
+                input,
+                env,
+                git_protocol(&headers).as_deref(),
+            )
+            .await?;
+        // Objects have left quarantine now; project the graph's revisions
+        // onto refs/changes/<number>/<revision>.
+        reconcile_change_refs(&app, &name).await;
+        Ok((
+            [(
+                header::CONTENT_TYPE,
+                Service::ReceivePack.result_content_type(),
+            )],
+            output,
+        )
+            .into_response())
+    }
+    .await;
+    result.unwrap_or_else(challenge_basic)
+}
+
+/// `refs/changes/<n>/<rev>` is a projection of the graph onto git,
+/// maintained by reconciliation: create whatever refs the graph says
+/// should exist and git doesn't have yet. Idempotent, so a ref missed
+/// by a failed push heals on the next one. proc-receive cannot create
+/// these refs itself — ref updates are forbidden while pushed objects
+/// sit in quarantine.
+async fn reconcile_change_refs(app: &AppState, repo: &str) {
+    let Some(git) = app.git() else { return };
+    let wanted = match app.with_store(|s| s.revision_refs(repo)) {
+        Ok(wanted) => wanted,
+        Err(err) => {
+            tracing::warn!(%err, repo, "listing revisions for ref reconciliation failed");
+            return;
+        }
+    };
+    let existing: HashSet<String> = match git.store.list_refs(repo, "refs/changes/").await {
+        Ok(refs) => refs.into_iter().map(|(name, _)| name).collect(),
+        Err(err) => {
+            tracing::warn!(%err, repo, "listing change refs failed");
+            return;
+        }
+    };
+    for (change_number, revision, oid) in wanted {
+        let refname = format!("refs/changes/{change_number}/{revision}");
+        if existing.contains(&refname) {
+            continue;
+        }
+        if let Err(err) = git.store.set_ref(repo, &refname, &oid).await {
+            // Likely a revision whose objects never landed; it will heal
+            // or keep failing quietly, and the graph stays authoritative.
+            tracing::debug!(%err, %refname, repo, "revision ref not creatable yet");
+        }
+    }
+}
+
+/// What the proc-receive hook reports about one pushed commit.
+#[derive(Deserialize)]
+pub struct RecordPush {
+    pub repo: String,
+    pub target: String,
+    pub commit_oid: String,
+    pub title: String,
+    #[serde(default)]
+    pub message: String,
+    /// Change-Id trailer, when the commit carries one.
+    pub change_id: Option<String>,
+}
+
+/// Enter a pushed commit into the graph: a new revision of the change
+/// addressed by its Change-Id trailer, or a brand-new change.
+pub async fn record_push(
+    State(app): State<AppState>,
+    actor: Actor,
+    Json(body): Json<RecordPush>,
+) -> ApiResult<Json<Value>> {
+    let existing = match &body.change_id {
+        Some(key) => app.with_store(|s| s.change_by_key(&body.repo, key))?,
+        None => None,
+    };
+
+    let (change, number, opened) = match existing {
+        Some(change) if change.state == ChangeState::Open && change.target == body.target => {
+            (change.id, change.number, None)
+        }
+        Some(change) => {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "conflict",
+                format!(
+                    "change {} (key {}) is {} on target {}; start a new Change-Id",
+                    change.number,
+                    body.change_id.as_deref().unwrap_or(""),
+                    change.state.as_str(),
+                    change.target
+                ),
+            ));
+        }
+        None => {
+            let spec = cairn_core::ChangeSpec {
+                external_key: body.change_id.clone(),
+                ..cairn_core::ChangeSpec::new(&body.repo, &body.target, &body.title)
+            };
+            let (id, number, env) = app.with_store(|s| s.open_change(&actor.0, spec))?;
+            (id, number, Some(env))
+        }
+    };
+    let (revision, pushed) = app.with_store(|s| {
+        s.push_revision(&actor.0, &change, &body.commit_oid, None, &body.message)
+    })?;
+    if let Some(env) = &opened {
+        app.publish(env);
+    }
+    app.publish(&pushed);
+    Ok(Json(json!({
+        "change": change,
+        "number": number,
+        "revision": revision,
+        "created": opened.is_some(),
+        "seq": pushed.seq.0,
+    })))
+}
+
+/// Merge with the git executor: refuse non-fast-forward, record the
+/// merge in the graph, then advance the target ref (compare-and-swap
+/// against the tip we checked).
+pub async fn merge_with_git(
+    app: &AppState,
+    actor: &Actor,
+    change_id: &cairn_core::ChangeId,
+) -> ApiResult<Json<Value>> {
+    let git = git_enabled(app)?;
+    let change = app
+        .with_store(|s| s.change(change_id))?
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not_found", "change not found"))?;
+    let revisions = app.with_store(|s| s.revisions(change_id))?;
+    let Some(revision) = revisions.last() else {
+        // No revisions: let core merge produce its policy refusal.
+        let env = crate::routes::merge_core(app, actor, change_id)?;
+        app.publish(&env);
+        return Ok(committed(None, &env));
+    };
+
+    let old_tip = git.store.tip(&change.repo, &change.target).await?;
+    if let Some(tip) = &old_tip
+        && !git
+            .store
+            .is_ancestor(&change.repo, tip, &revision.commit_oid)
+            .await?
+    {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "not_fast_forward",
+            format!(
+                "target {} has advanced past revision {}; rebase and push a new revision",
+                change.target, revision.number
+            ),
+        ));
+    }
+
+    let env = crate::routes::merge_core(app, actor, change_id)?;
+    app.publish(&env);
+
+    if let Err(err) = git
+        .store
+        .advance_ref(
+            &change.repo,
+            &change.target,
+            &revision.commit_oid,
+            old_tip.as_deref(),
+        )
+        .await
+    {
+        // The graph recorded the merge but the ref did not move — say
+        // exactly that, loudly; a retry of update-ref is safe.
+        tracing::error!(error = %err, change = %change.id, "merge recorded but ref advance failed");
+        return Err(ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "ref_advance_failed",
+            format!(
+                "merge recorded in the graph, but advancing refs/heads/{} failed: {err}",
+                change.target
+            ),
+        ));
+    }
+    Ok(committed(None, &env))
+}

@@ -12,13 +12,13 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use cairn_core::{
-    ChangeId, ClaimSpec, CoreError, Disposition, Envelope, EventSeq, PrincipalId, PrincipalKind,
-    ReviewDomain, SessionId, SessionState, TaskId, TaskState,
+    ChangeId, ChangeSpec, ClaimSpec, CoreError, Disposition, Envelope, EventSeq, PrincipalId,
+    PrincipalKind, ReviewDomain, SessionId, SessionState, TaskId, TaskState,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-fn committed(id: Option<String>, envelope: &Envelope) -> Json<Value> {
+pub(crate) fn committed(id: Option<String>, envelope: &Envelope) -> Json<Value> {
     let mut body = json!({ "seq": envelope.seq.0, "event": envelope });
     if let Some(id) = id {
         body["id"] = json!(id);
@@ -100,6 +100,20 @@ pub async fn create_repo(
     actor: Actor,
     Json(body): Json<CreateRepo>,
 ) -> ApiResult<Json<Value>> {
+    if app.with_store(|s| s.repo(&body.name))?.is_some() {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "conflict",
+            format!("repo {} already exists", body.name),
+        ));
+    }
+    // The bare repo lands on disk first; the graph event follows. An
+    // orphan directory from a lost race is harmless, the reverse is not.
+    if let Some(git) = app.git() {
+        git.store
+            .create_repo(&body.name, &body.default_branch)
+            .await?;
+    }
     let env = app.with_store(|s| s.create_repo(&actor.0, &body.name, &body.default_branch))?;
     app.publish(&env);
     Ok(committed(Some(body.name), &env))
@@ -232,30 +246,12 @@ pub async fn end_session(
 
 // ---- changes ----
 
-#[derive(Deserialize)]
-pub struct OpenChange {
-    pub repo: String,
-    pub target: String,
-    pub title: String,
-    pub task: Option<TaskId>,
-    pub parent_change: Option<ChangeId>,
-}
-
 pub async fn open_change(
     State(app): State<AppState>,
     actor: Actor,
-    Json(body): Json<OpenChange>,
+    Json(body): Json<ChangeSpec>,
 ) -> ApiResult<Json<Value>> {
-    let (change, number, env) = app.with_store(|s| {
-        s.open_change(
-            &actor.0,
-            &body.repo,
-            &body.target,
-            &body.title,
-            body.task.as_ref(),
-            body.parent_change.as_ref(),
-        )
-    })?;
+    let (change, number, env) = app.with_store(|s| s.open_change(&actor.0, body))?;
     app.publish(&env);
     let mut response = committed(Some(change.0), &env);
     response.0["number"] = json!(number);
@@ -429,27 +425,35 @@ pub async fn merge_readiness(
     Ok(Json(json!(trace)))
 }
 
-pub async fn merge_change(
-    State(app): State<AppState>,
-    actor: Actor,
-    Path(id): Path<String>,
-) -> ApiResult<Json<Value>> {
-    let change = ChangeId(id);
-    match app.with_store(|s| s.merge_change(&actor.0, &change)) {
-        Ok(env) => {
-            app.publish(&env);
-            Ok(committed(None, &env))
-        }
+/// Record a merge in the graph, translating a policy refusal into a
+/// 409 carrying the full trace. Publishing is the caller's job.
+pub(crate) fn merge_core(app: &AppState, actor: &Actor, change: &ChangeId) -> ApiResult<Envelope> {
+    match app.with_store(|s| s.merge_change(&actor.0, change)) {
+        Ok(env) => Ok(env),
         // A refused merge answers with the full trace: the caller learns
         // exactly which requirement to go satisfy, not just "no".
         Err(CoreError::PolicyUnsatisfied(message)) => {
-            let trace = app.with_store(|s| s.merge_readiness(&change))?;
+            let trace = app.with_store(|s| s.merge_readiness(change))?;
             let mut error = ApiError::from(CoreError::PolicyUnsatisfied(message));
             error.detail = Some(json!({ "trace": trace }));
             Err(error)
         }
         Err(err) => Err(err.into()),
     }
+}
+
+pub async fn merge_change(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let change = ChangeId(id);
+    if app.git().is_some() {
+        return crate::git_http::merge_with_git(&app, &actor, &change).await;
+    }
+    let env = merge_core(&app, &actor, &change)?;
+    app.publish(&env);
+    Ok(committed(None, &env))
 }
 
 #[derive(Deserialize)]

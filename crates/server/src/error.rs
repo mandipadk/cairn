@@ -45,6 +45,21 @@ impl From<CoreError> for ApiError {
     }
 }
 
+impl From<cairn_git::GitError> for ApiError {
+    fn from(err: cairn_git::GitError) -> Self {
+        use cairn_git::GitError as G;
+        let (status, kind) = match &err {
+            G::InvalidRepoName(_) => (StatusCode::BAD_REQUEST, "invalid"),
+            G::RepoMissing(_) => (StatusCode::NOT_FOUND, "not_found"),
+            G::CommandFailed { .. } | G::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
+        };
+        if status == StatusCode::INTERNAL_SERVER_ERROR {
+            tracing::error!(error = %err, "git operation failed");
+        }
+        ApiError::new(status, kind, err.to_string())
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let mut body = json!({ "kind": self.kind, "error": self.message });

@@ -13,8 +13,8 @@ use crate::policy::{self, PolicyTrace};
 use crate::queries::raw;
 use crate::store::{Store, append};
 use crate::types::{
-    ChangeState, ClaimSpec, Disposition, Principal, PrincipalKind, ReviewDomain, SessionState,
-    TaskState,
+    ChangeSpec, ChangeState, ClaimSpec, Disposition, Principal, PrincipalKind, ReviewDomain,
+    SessionState, TaskState,
 };
 use rusqlite::Transaction;
 
@@ -272,29 +272,38 @@ impl Store {
     pub fn open_change(
         &mut self,
         actor: &PrincipalId,
-        repo: &str,
-        target: &str,
-        title: &str,
-        task: Option<&TaskId>,
-        parent_change: Option<&ChangeId>,
+        spec: ChangeSpec,
     ) -> CoreResult<(ChangeId, i64, Envelope)> {
         let tx = self.conn.transaction()?;
         ensure_actor(&tx, actor)?;
-        raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
-        require(valid_branch(target), || {
-            format!("{target:?} is not a valid branch name")
+        raw::repo(&tx, &spec.repo)?
+            .ok_or_else(|| CoreError::NotFound(format!("repo {}", spec.repo)))?;
+        require(valid_branch(&spec.target), || {
+            format!("{:?} is not a valid branch name", spec.target)
         })?;
-        require(!title.trim().is_empty(), || {
+        require(!spec.title.trim().is_empty(), || {
             "change title must not be empty".into()
         })?;
-        if let Some(task) = task {
+        if let Some(task) = &spec.task {
             raw::task(&tx, task.as_str())?
                 .ok_or_else(|| CoreError::NotFound(format!("task {task}")))?;
         }
-        if let Some(parent) = parent_change {
+        if let Some(key) = &spec.external_key {
+            require(
+                (1..=100).contains(&key.len()) && !key.contains(char::is_whitespace),
+                || format!("{key:?} is not a valid external key"),
+            )?;
+            if raw::change_by_key(&tx, &spec.repo, key)?.is_some() {
+                return Err(CoreError::Conflict(format!(
+                    "a change with key {key} already exists in {}",
+                    spec.repo
+                )));
+            }
+        }
+        if let Some(parent) = &spec.parent_change {
             let parent_change = raw::change(&tx, parent.as_str())?
                 .ok_or_else(|| CoreError::NotFound(format!("change {parent}")))?;
-            require(parent_change.repo == repo, || {
+            require(parent_change.repo == spec.repo, || {
                 format!("stack parent {parent} lives in repo {}", parent_change.repo)
             })?;
             if parent_change.state != ChangeState::Open {
@@ -305,18 +314,19 @@ impl Store {
             }
         }
         let change = ChangeId::generate();
-        let number = raw::next_change_number(&tx, repo)?;
+        let number = raw::next_change_number(&tx, &spec.repo)?;
         let env = append(
             &tx,
             actor,
             Event::ChangeOpened {
                 change: change.clone(),
-                repo: repo.to_owned(),
+                repo: spec.repo,
                 number,
-                target: target.to_owned(),
-                title: title.to_owned(),
-                task: task.cloned(),
-                parent_change: parent_change.cloned(),
+                target: spec.target,
+                title: spec.title,
+                task: spec.task,
+                parent_change: spec.parent_change,
+                external_key: spec.external_key,
             },
         )?;
         tx.commit()?;

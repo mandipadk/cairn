@@ -256,6 +256,7 @@ fn tool_definitions() -> Vec<Value> {
                 "title": s("What this change does"),
                 "task": s("Task id this change serves (optional)"),
                 "parent_change": s("Change id this stacks on (optional)"),
+                "external_key": s("Stable client-chosen key, e.g. a Change-Id trailer (optional)"),
             }),
         ),
         tool(

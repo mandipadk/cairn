@@ -2,8 +2,8 @@
 //! judgment → policy-decided outcome, all against an in-memory store.
 
 use cairn_core::{
-    ClaimKind, ClaimSpec, CoreError, Disposition, Event, EventSeq, PrincipalId, PrincipalKind,
-    ReviewDomain, SessionState, Store, TaskState,
+    ChangeSpec, ClaimKind, ClaimSpec, CoreError, Disposition, Event, EventSeq, PrincipalId,
+    PrincipalKind, ReviewDomain, SessionState, Store, TaskState,
 };
 
 const OID: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -78,11 +78,10 @@ fn full_lifecycle_intent_to_merge() {
     let (change, number, _) = store
         .open_change(
             &scout,
-            "forge",
-            "main",
-            "Harden slug validation",
-            Some(&task),
-            None,
+            ChangeSpec {
+                task: Some(task.clone()),
+                ..ChangeSpec::new("forge", "main", "Harden slug validation")
+            },
         )
         .unwrap();
     assert_eq!(number, 1);
@@ -222,7 +221,7 @@ fn two_distinct_agent_models_satisfy_independence() {
         .unwrap();
 
     let (change, _, _) = store
-        .open_change(&scout, "forge", "main", "Refactor", None, None)
+        .open_change(&scout, ChangeSpec::new("forge", "main", "Refactor"))
         .unwrap();
     store
         .push_revision(&scout, &change, OID, None, "refactor")
@@ -271,7 +270,7 @@ fn two_distinct_agent_models_satisfy_independence() {
 fn blocking_verdict_vetoes_and_concern_does_not() {
     let (mut store, human, scout, _) = seeded();
     let (change, _, _) = store
-        .open_change(&scout, "forge", "main", "Risky", None, None)
+        .open_change(&scout, ChangeSpec::new("forge", "main", "Risky"))
         .unwrap();
     store
         .push_revision(&scout, &change, OID, None, "risky")
@@ -325,7 +324,7 @@ fn blocking_verdict_vetoes_and_concern_does_not() {
 fn owner_approval_does_not_count_as_independent() {
     let (mut store, human, scout, _) = seeded();
     let (change, _, _) = store
-        .open_change(&human, "forge", "main", "Self-serve", None, None)
+        .open_change(&human, ChangeSpec::new("forge", "main", "Self-serve"))
         .unwrap();
     store
         .push_revision(&human, &change, OID, None, "self")
@@ -387,7 +386,7 @@ fn protocol_misuse_is_rejected_with_typed_errors() {
 
     // Empty rationale and bad oids are invalid.
     let (change, _, _) = store
-        .open_change(&scout, "forge", "main", "C", None, None)
+        .open_change(&scout, ChangeSpec::new("forge", "main", "C"))
         .unwrap();
     assert!(matches!(
         store

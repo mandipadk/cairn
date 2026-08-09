@@ -1,6 +1,14 @@
 use cairn_core::{Envelope, Store};
+use cairn_git::GitStore;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
+
+/// Git hosting context: the repo store plus the base URL the
+/// proc-receive hook uses to call back into this server.
+pub(crate) struct GitContext {
+    pub(crate) store: Arc<GitStore>,
+    pub(crate) base_url: String,
+}
 
 /// Shared server state: the store behind a mutex, and a broadcast bus
 /// carrying every committed event to live subscribers.
@@ -14,6 +22,7 @@ use tokio::sync::broadcast;
 pub struct AppState {
     store: Arc<Mutex<Store>>,
     events: broadcast::Sender<Envelope>,
+    git: Option<Arc<GitContext>>,
 }
 
 impl AppState {
@@ -22,7 +31,22 @@ impl AppState {
         AppState {
             store: Arc::new(Mutex::new(store)),
             events,
+            git: None,
         }
+    }
+
+    /// Enable git hosting. `base_url` must be reachable from spawned
+    /// receive-pack processes (i.e. this server's own address).
+    pub fn with_git(mut self, git: GitStore, base_url: impl Into<String>) -> Self {
+        self.git = Some(Arc::new(GitContext {
+            store: Arc::new(git),
+            base_url: base_url.into(),
+        }));
+        self
+    }
+
+    pub(crate) fn git(&self) -> Option<&GitContext> {
+        self.git.as_deref()
     }
 
     /// Run a closure against the store. Sync on purpose: the closure must

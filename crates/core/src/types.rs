@@ -105,6 +105,39 @@ pub struct Session {
     pub outcome: Option<String>,
 }
 
+/// A change as requested: where it lands, what it does, what it serves.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangeSpec {
+    pub repo: String,
+    pub target: String,
+    pub title: String,
+    #[serde(default)]
+    pub task: Option<TaskId>,
+    /// Stack parent: an open change this one builds on.
+    #[serde(default)]
+    pub parent_change: Option<ChangeId>,
+    /// Client-chosen stable key (e.g. a Change-Id commit trailer).
+    #[serde(default)]
+    pub external_key: Option<String>,
+}
+
+impl ChangeSpec {
+    pub fn new(
+        repo: impl Into<String>,
+        target: impl Into<String>,
+        title: impl Into<String>,
+    ) -> Self {
+        ChangeSpec {
+            repo: repo.into(),
+            target: target.into(),
+            title: title.into(),
+            task: None,
+            parent_change: None,
+            external_key: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Change {
     pub id: ChangeId,
@@ -119,6 +152,8 @@ pub struct Change {
     pub owner: PrincipalId,
     /// Highest revision number, 0 when nothing has been pushed yet.
     pub latest_revision: i64,
+    /// Client-chosen stable key (e.g. a Change-Id commit trailer).
+    pub external_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

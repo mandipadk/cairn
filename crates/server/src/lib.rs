@@ -13,6 +13,7 @@
 
 mod auth;
 mod error;
+mod git_http;
 mod routes;
 mod sse;
 mod state;
@@ -21,6 +22,10 @@ pub use state::AppState;
 
 use axum::Router;
 use axum::routing::{get, post};
+
+/// Pack payloads dwarf JSON bodies; axum's 2 MB default would reject
+/// any real push.
+const GIT_BODY_LIMIT: usize = 256 * 1024 * 1024;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -62,5 +67,16 @@ pub fn router(state: AppState) -> Router {
         .route("/api/changes/{id}/abandon", post(routes::abandon_change))
         .route("/api/events", get(routes::list_events))
         .route("/api/events/stream", get(sse::stream))
+        .route("/api/git/pushes", post(git_http::record_push))
+        .route("/git/{repo}/info/refs", get(git_http::info_refs))
+        .route(
+            "/git/{repo}/git-upload-pack",
+            post(git_http::upload_pack).layer(axum::extract::DefaultBodyLimit::max(GIT_BODY_LIMIT)),
+        )
+        .route(
+            "/git/{repo}/git-receive-pack",
+            post(git_http::receive_pack)
+                .layer(axum::extract::DefaultBodyLimit::max(GIT_BODY_LIMIT)),
+        )
         .with_state(state)
 }

@@ -142,8 +142,8 @@ pub(crate) mod raw {
             .transpose()
     }
 
-    const CHANGE_COLS: &str =
-        "id, repo, number, target, title, task, parent_change, state, owner, latest_revision";
+    const CHANGE_COLS: &str = "id, repo, number, target, title, task, parent_change, state, \
+                               owner, latest_revision, external_key";
 
     fn change_from_row(row: &Row) -> rusqlite::Result<(Change, String)> {
         Ok((
@@ -158,6 +158,7 @@ pub(crate) mod raw {
                 state: ChangeState::Open,
                 owner: PrincipalId(row.get(8)?),
                 latest_revision: row.get(9)?,
+                external_key: row.get(10)?,
             },
             row.get::<_, String>(7)?,
         ))
@@ -185,6 +186,16 @@ pub(crate) mod raw {
             "SELECT {CHANGE_COLS} FROM changes WHERE repo = ? AND number = ?"
         ))?
         .query_row(params![repo, number], change_from_row)
+        .optional()?
+        .map(finish_change)
+        .transpose()
+    }
+
+    pub fn change_by_key(conn: &Connection, repo: &str, key: &str) -> CoreResult<Option<Change>> {
+        conn.prepare_cached(&format!(
+            "SELECT {CHANGE_COLS} FROM changes WHERE repo = ? AND external_key = ?"
+        ))?
+        .query_row(params![repo, key], change_from_row)
         .optional()?
         .map(finish_change)
         .transpose()
@@ -295,6 +306,21 @@ pub(crate) mod raw {
             .collect()
     }
 
+    /// Every (change number, revision number, commit oid) in a repo —
+    /// the git-side `refs/changes/<n>/<rev>` projection wants exactly this.
+    pub fn revision_refs(conn: &Connection, repo: &str) -> CoreResult<Vec<(i64, i64, String)>> {
+        Ok(conn
+            .prepare_cached(
+                "SELECT c.number, r.number, r.commit_oid
+                 FROM revisions r JOIN changes c ON c.id = r.change_id
+                 WHERE c.repo = ? ORDER BY c.number, r.number",
+            )?
+            .query_map(params![repo], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
     pub fn principal_count(conn: &Connection) -> CoreResult<i64> {
         Ok(conn.query_row("SELECT COUNT(*) FROM principals", [], |r| r.get(0))?)
     }
@@ -335,6 +361,14 @@ impl Store {
 
     pub fn change_by_number(&self, repo: &str, number: i64) -> CoreResult<Option<Change>> {
         raw::change_by_number(&self.conn, repo, number)
+    }
+
+    pub fn change_by_key(&self, repo: &str, key: &str) -> CoreResult<Option<Change>> {
+        raw::change_by_key(&self.conn, repo, key)
+    }
+
+    pub fn revision_refs(&self, repo: &str) -> CoreResult<Vec<(i64, i64, String)>> {
+        raw::revision_refs(&self.conn, repo)
     }
 
     pub fn changes_in_repo(&self, repo: &str) -> CoreResult<Vec<Change>> {

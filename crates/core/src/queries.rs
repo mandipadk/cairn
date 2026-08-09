@@ -8,8 +8,8 @@ use crate::error::{CoreError, CoreResult};
 use crate::id::{ChangeId, PrincipalId, SessionId, TaskId};
 use crate::store::Store;
 use crate::types::{
-    Change, ChangeState, Claim, ClaimKind, Disposition, Principal, PrincipalKind, Repo,
-    ReviewDomain, Revision, Session, SessionState, Task, TaskState, Verdict,
+    Change, ChangeState, Claim, ClaimKind, Disposition, ObjectFormat, Principal, PrincipalKind,
+    Repo, ReviewDomain, Revision, Session, SessionState, Task, TaskState, Verdict,
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
@@ -54,15 +54,23 @@ pub(crate) mod raw {
     }
 
     pub fn repo(conn: &Connection, name: &str) -> CoreResult<Option<Repo>> {
-        Ok(conn
-            .prepare_cached("SELECT name, default_branch FROM repos WHERE name = ?")?
+        conn.prepare_cached("SELECT name, default_branch, object_format FROM repos WHERE name = ?")?
             .query_row(params![name], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .optional()?
+            .map(|(name, default_branch, format)| {
                 Ok(Repo {
-                    name: row.get(0)?,
-                    default_branch: row.get(1)?,
+                    object_format: parsed(&format!("repo {name}"), &format, ObjectFormat::parse)?,
+                    name,
+                    default_branch,
                 })
             })
-            .optional()?)
+            .transpose()
     }
 
     fn task_from_row(row: &Row) -> rusqlite::Result<(Task, String)> {

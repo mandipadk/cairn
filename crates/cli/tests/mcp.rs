@@ -101,7 +101,9 @@ async fn full_agent_workflow_over_mcp() {
             None,
         )
         .unwrap();
-    store.create_repo(&ada, "demo", "main").unwrap();
+    store
+        .create_repo(&ada, "demo", "main", cairn_core::ObjectFormat::Sha1)
+        .unwrap();
     let (task, _) = store
         .create_task(
             &ada,

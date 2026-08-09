@@ -77,6 +77,23 @@ impl Service {
 const HOOK_SCRIPT: &str =
     "#!/bin/sh\nexec \"${CAIRN_HOOK_BIN:?cairn hook binary not set}\" internal-proc-receive\n";
 
+/// Branches advance only by policy-approved merges; every other write
+/// path is closed. proc-receive owns refs/for/*, and this pre-receive
+/// guard refuses everything else (direct branch pushes, tags).
+const PRE_RECEIVE_SCRIPT: &str = r#"#!/bin/sh
+status=0
+while read old new ref; do
+  case "$ref" in
+    refs/for/*) ;;
+    *)
+      echo "cairn: direct push to $ref refused; push to refs/for/<branch> - branches advance only by merge" >&2
+      status=1
+      ;;
+  esac
+done
+exit $status
+"#;
+
 pub struct GitStore {
     root: PathBuf,
     hook_bin: PathBuf,
@@ -130,7 +147,12 @@ impl GitStore {
         Ok(output.stdout)
     }
 
-    pub async fn create_repo(&self, name: &str, default_branch: &str) -> GitResult<()> {
+    pub async fn create_repo(
+        &self,
+        name: &str,
+        default_branch: &str,
+        object_format: &str,
+    ) -> GitResult<()> {
         let path = self.repo_path(name)?;
         tokio::fs::create_dir_all(&self.root).await?;
         self.run(
@@ -140,6 +162,7 @@ impl GitStore {
                 "--bare",
                 "--initial-branch",
                 default_branch,
+                &format!("--object-format={object_format}"),
                 path.to_str().unwrap(),
             ],
         )
@@ -149,12 +172,18 @@ impl GitStore {
             &["config", "receive.procReceiveRefs", "refs/for"],
         )
         .await?;
-        let hook_path = path.join("hooks/proc-receive");
-        tokio::fs::write(&hook_path, HOOK_SCRIPT).await?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            tokio::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755)).await?;
+        for (hook, script) in [
+            ("proc-receive", HOOK_SCRIPT),
+            ("pre-receive", PRE_RECEIVE_SCRIPT),
+        ] {
+            let hook_path = path.join("hooks").join(hook);
+            tokio::fs::write(&hook_path, script).await?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                tokio::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755))
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -305,7 +334,10 @@ impl GitStore {
         expected_old: Option<&str>,
     ) -> GitResult<()> {
         let path = self.existing_repo_path(name)?;
-        let old = expected_old.unwrap_or("0000000000000000000000000000000000000000");
+        // The zero-oid must match the repo's hash width (40 for SHA-1,
+        // 64 for SHA-256); the new oid is already the right size.
+        let zero = "0".repeat(to_oid.len());
+        let old = expected_old.unwrap_or(&zero);
         self.run(
             Some(&path),
             &["update-ref", &format!("refs/heads/{branch}"), to_oid, old],

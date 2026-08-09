@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS principals (
 
 CREATE TABLE IF NOT EXISTS repos (
   name           TEXT PRIMARY KEY,
-  default_branch TEXT NOT NULL
+  default_branch TEXT NOT NULL,
+  object_format  TEXT NOT NULL DEFAULT 'sha1'
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -215,10 +216,11 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
         Event::RepoCreated {
             repo,
             default_branch,
+            object_format,
         } => {
             tx.execute(
-                "INSERT INTO repos (name, default_branch) VALUES (?, ?)",
-                params![repo, default_branch],
+                "INSERT INTO repos (name, default_branch, object_format) VALUES (?, ?, ?)",
+                params![repo, default_branch, object_format.as_str()],
             )?;
         }
         Event::TaskCreated {

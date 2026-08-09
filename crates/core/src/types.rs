@@ -26,6 +26,16 @@ macro_rules! str_enum {
 
 str_enum!(PrincipalKind { Human => "human", Agent => "agent" });
 
+str_enum!(
+    /// Hash function of a repo's git object database.
+    #[derive(Default)]
+    ObjectFormat {
+        #[default]
+        Sha1 => "sha1",
+        Sha256 => "sha256",
+    }
+);
+
 str_enum!(TaskState {
     Open => "open",
     Claimed => "claimed",
@@ -82,6 +92,7 @@ pub struct Principal {
 pub struct Repo {
     pub name: String,
     pub default_branch: String,
+    pub object_format: ObjectFormat,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

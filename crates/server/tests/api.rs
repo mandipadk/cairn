@@ -306,7 +306,16 @@ fn parse_sse(buffer: &str) -> (Vec<i64>, Vec<String>) {
 }
 
 async fn read_until(stream: &mut TcpStream, buffer: &mut String, predicate: impl Fn(&str) -> bool) {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    read_until_within(stream, buffer, Duration::from_secs(5), predicate).await;
+}
+
+async fn read_until_within(
+    stream: &mut TcpStream,
+    buffer: &mut String,
+    limit: Duration,
+    predicate: impl Fn(&str) -> bool,
+) {
+    tokio::time::timeout(limit, async {
         let mut chunk = [0u8; 4096];
         while !predicate(buffer) {
             let n = stream.read(&mut chunk).await.expect("stream read");
@@ -463,4 +472,173 @@ async fn concurrent_writers_keep_the_stream_gapless() {
         ids, want,
         "stream must be gapless and in order despite concurrent writers"
     );
+}
+
+/// Contention correctness: many agents race to claim one task; the
+/// transactional core must crown exactly one winner, and everyone
+/// else must get a typed conflict.
+#[tokio::test(flavor = "multi_thread")]
+async fn claim_storm_has_exactly_one_winner() {
+    const AGENTS: usize = 30;
+    let app = test_router();
+    seed(&app).await;
+    for i in 0..AGENTS {
+        let (status, _) = call(
+            &app,
+            "POST",
+            "/api/principals",
+            Some("ada"),
+            Some(json!({
+                "id": format!("racer-{i}"), "kind": "agent", "display": format!("Racer {i}")
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let (_, body) = call(
+        &app,
+        "POST",
+        "/api/tasks",
+        Some("ada"),
+        Some(json!({
+            "title": "Contended", "spec": "Exactly one of you may take this."
+        })),
+    )
+    .await;
+    let task = body["id"].as_str().unwrap().to_owned();
+
+    let racers: Vec<_> = (0..AGENTS)
+        .map(|i| {
+            let app = app.clone();
+            let task = task.clone();
+            tokio::spawn(async move {
+                let (status, _) = call(
+                    &app,
+                    "POST",
+                    &format!("/api/tasks/{task}/claim"),
+                    Some(&format!("racer-{i}")),
+                    None,
+                )
+                .await;
+                status
+            })
+        })
+        .collect();
+    let mut wins = 0;
+    let mut conflicts = 0;
+    for racer in racers {
+        match racer.await.unwrap() {
+            StatusCode::OK => wins += 1,
+            StatusCode::CONFLICT => conflicts += 1,
+            other => panic!("unexpected status {other}"),
+        }
+    }
+    assert_eq!((wins, conflicts), (1, AGENTS - 1));
+
+    // The projection agrees: claimed exactly once, by a racer.
+    let (_, task_body) = call(
+        &app,
+        "GET",
+        &format!("/api/tasks/{task}"),
+        Some("ada"),
+        None,
+    )
+    .await;
+    assert_eq!(task_body["state"], "claimed");
+    assert!(
+        task_body["claimed_by"]
+            .as_str()
+            .unwrap()
+            .starts_with("racer-")
+    );
+}
+
+/// Sustained concurrent writes: the stream contract (every event,
+/// exactly once, in order) and cursor pagination must both hold at a
+/// scale well beyond the other tests. Correctness under concurrency,
+/// not a benchmark.
+#[tokio::test(flavor = "multi_thread")]
+async fn sustained_concurrent_writes_keep_stream_and_pages_consistent() {
+    const WRITERS: usize = 50;
+    const PER_WRITER: usize = 30;
+    let app = test_router();
+    seed(&app).await; // events 1..=4
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(axum::serve(listener, app.clone()).into_future());
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(
+            b"GET /api/events/stream?after=0 HTTP/1.1\r\n\
+              Host: cairn\r\n\
+              x-cairn-principal: ada\r\n\
+              Accept: text/event-stream\r\n\r\n",
+        )
+        .await
+        .unwrap();
+
+    let writers: Vec<_> = (0..WRITERS)
+        .map(|w| {
+            let app = app.clone();
+            tokio::spawn(async move {
+                for i in 0..PER_WRITER {
+                    let (status, _) = call(
+                        &app,
+                        "POST",
+                        "/api/tasks",
+                        Some("ada"),
+                        Some(json!({
+                            "title": format!("w{w} task {i}"),
+                            "spec": "Sustained load probe."
+                        })),
+                    )
+                    .await;
+                    assert_eq!(status, StatusCode::OK);
+                }
+            })
+        })
+        .collect();
+    for writer in writers {
+        writer.await.unwrap();
+    }
+
+    let expected = (4 + WRITERS * PER_WRITER) as i64;
+    let mut buffer = String::new();
+    read_until_within(&mut stream, &mut buffer, Duration::from_secs(60), |b| {
+        parse_sse(b).0.len() >= expected as usize
+    })
+    .await;
+    let (ids, _) = parse_sse(&buffer);
+    let want: Vec<i64> = (1..=expected).collect();
+    assert_eq!(
+        ids, want,
+        "stream lost ordering or events under sustained load"
+    );
+
+    // Cursor pagination walks the same log without gaps or overlap.
+    let mut cursor = 0i64;
+    let mut total = 0usize;
+    loop {
+        let (status, page) = call(
+            &app,
+            "GET",
+            &format!("/api/events?after={cursor}&limit=100"),
+            Some("ada"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let page = page.as_array().unwrap().clone();
+        if page.is_empty() {
+            break;
+        }
+        for event in &page {
+            let seq = event["seq"].as_i64().unwrap();
+            assert_eq!(seq, cursor + 1, "pagination must be gapless");
+            cursor = seq;
+        }
+        total += page.len();
+    }
+    assert_eq!(total as i64, expected);
 }

@@ -7,7 +7,9 @@
 
 use crate::id::{ChangeId, ClaimId, PrincipalId, SessionId, TaskId, VerdictId};
 use crate::policy::PolicyTrace;
-use crate::types::{ClaimKind, Disposition, PrincipalKind, ReviewDomain, SessionState, TaskState};
+use crate::types::{
+    ClaimKind, Disposition, ObjectFormat, PrincipalKind, ReviewDomain, SessionState, TaskState,
+};
 use serde::{Deserialize, Serialize};
 
 /// Position in the append-only log. The cursor agents resume from.
@@ -43,6 +45,8 @@ pub enum Event {
     RepoCreated {
         repo: String,
         default_branch: String,
+        #[serde(default)]
+        object_format: ObjectFormat,
     },
 
     TaskCreated {
@@ -163,6 +167,7 @@ mod tests {
         let e = Event::RepoCreated {
             repo: "demo".into(),
             default_branch: "main".into(),
+            object_format: ObjectFormat::Sha1,
         };
         let v = serde_json::to_value(&e).unwrap();
         assert_eq!(v["kind"], e.kind());

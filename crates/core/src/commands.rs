@@ -13,8 +13,8 @@ use crate::policy::{self, PolicyTrace};
 use crate::queries::raw;
 use crate::store::{Store, append};
 use crate::types::{
-    ChangeSpec, ChangeState, ClaimSpec, Disposition, Principal, PrincipalKind, ReviewDomain,
-    SessionState, TaskState,
+    ChangeSpec, ChangeState, ClaimSpec, Disposition, ObjectFormat, Principal, PrincipalKind,
+    ReviewDomain, SessionState, TaskState,
 };
 use rusqlite::Transaction;
 
@@ -91,6 +91,7 @@ impl Store {
         actor: &PrincipalId,
         name: &str,
         default_branch: &str,
+        object_format: ObjectFormat,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
         ensure_actor(&tx, actor)?;
@@ -109,6 +110,7 @@ impl Store {
             Event::RepoCreated {
                 repo: name.to_owned(),
                 default_branch: default_branch.to_owned(),
+                object_format,
             },
         )?;
         tx.commit()?;

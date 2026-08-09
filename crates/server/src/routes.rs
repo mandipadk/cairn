@@ -12,8 +12,8 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use cairn_core::{
-    ChangeId, ChangeSpec, ClaimSpec, CoreError, Disposition, Envelope, EventSeq, PrincipalId,
-    PrincipalKind, ReviewDomain, SessionId, SessionState, TaskId, TaskState,
+    ChangeId, ChangeSpec, ClaimSpec, CoreError, Disposition, Envelope, EventSeq, ObjectFormat,
+    PrincipalId, PrincipalKind, ReviewDomain, SessionId, SessionState, TaskId, TaskState,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -89,6 +89,8 @@ pub struct CreateRepo {
     pub name: String,
     #[serde(default = "default_branch")]
     pub default_branch: String,
+    #[serde(default)]
+    pub object_format: ObjectFormat,
 }
 
 fn default_branch() -> String {
@@ -111,10 +113,21 @@ pub async fn create_repo(
     // orphan directory from a lost race is harmless, the reverse is not.
     if let Some(git) = app.git() {
         git.store
-            .create_repo(&body.name, &body.default_branch)
+            .create_repo(
+                &body.name,
+                &body.default_branch,
+                body.object_format.as_str(),
+            )
             .await?;
     }
-    let env = app.with_store(|s| s.create_repo(&actor.0, &body.name, &body.default_branch))?;
+    let env = app.with_store(|s| {
+        s.create_repo(
+            &actor.0,
+            &body.name,
+            &body.default_branch,
+            body.object_format,
+        )
+    })?;
     app.publish(&env);
     Ok(committed(Some(body.name), &env))
 }

@@ -42,6 +42,7 @@ pub use id::{ChangeId, ClaimId, PrincipalId, SessionId, TaskId, VerdictId};
 pub use policy::{PolicyTrace, Requirement};
 pub use store::Store;
 pub use types::{
-    Change, ChangeSpec, ChangeState, Claim, ClaimKind, ClaimSpec, Disposition, Principal,
-    PrincipalKind, Repo, ReviewDomain, Revision, Session, SessionState, Task, TaskState, Verdict,
+    Change, ChangeSpec, ChangeState, Claim, ClaimKind, ClaimSpec, Disposition, ObjectFormat,
+    Principal, PrincipalKind, Repo, ReviewDomain, Revision, Session, SessionState, Task, TaskState,
+    Verdict,
 };

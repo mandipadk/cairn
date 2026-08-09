@@ -271,11 +271,9 @@ async fn reconcile_change_refs(app: &AppState, repo: &str) {
     }
 }
 
-/// What the proc-receive hook reports about one pushed commit.
+/// One pushed commit, bottom-up in stack order.
 #[derive(Deserialize)]
-pub struct RecordPush {
-    pub repo: String,
-    pub target: String,
+pub struct PushedCommit {
     pub commit_oid: String,
     pub title: String,
     #[serde(default)]
@@ -284,57 +282,126 @@ pub struct RecordPush {
     pub change_id: Option<String>,
 }
 
-/// Enter a pushed commit into the graph: a new revision of the change
-/// addressed by its Change-Id trailer, or a brand-new change.
+/// What the proc-receive hook reports about one push: every new commit
+/// between the target branch and the pushed tip.
+#[derive(Deserialize)]
+pub struct RecordPush {
+    pub repo: String,
+    pub target: String,
+    pub commits: Vec<PushedCommit>,
+}
+
+/// Stacks larger than this are almost certainly a mistaken push of
+/// history; refuse with advice rather than mint hundreds of changes.
+const MAX_STACK: usize = 64;
+
+/// Enter a pushed stack into the graph, bottom-up. Each commit becomes
+/// a revision of the change addressed by its Change-Id trailer — or a
+/// new change stacked on the previous commit's change. Unchanged
+/// commits (same oid as the change's latest revision) record nothing,
+/// so re-pushing a stack after amending one commit touches one change.
 pub async fn record_push(
     State(app): State<AppState>,
     actor: Actor,
     Json(body): Json<RecordPush>,
 ) -> ApiResult<Json<Value>> {
-    let existing = match &body.change_id {
-        Some(key) => app.with_store(|s| s.change_by_key(&body.repo, key))?,
-        None => None,
-    };
-
-    let (change, number, opened) = match existing {
-        Some(change) if change.state == ChangeState::Open && change.target == body.target => {
-            (change.id, change.number, None)
-        }
-        Some(change) => {
-            return Err(ApiError::new(
-                StatusCode::CONFLICT,
-                "conflict",
-                format!(
-                    "change {} (key {}) is {} on target {}; start a new Change-Id",
-                    change.number,
-                    body.change_id.as_deref().unwrap_or(""),
-                    change.state.as_str(),
-                    change.target
-                ),
-            ));
-        }
-        None => {
-            let spec = cairn_core::ChangeSpec {
-                external_key: body.change_id.clone(),
-                ..cairn_core::ChangeSpec::new(&body.repo, &body.target, &body.title)
-            };
-            let (id, number, env) = app.with_store(|s| s.open_change(&actor.0, spec))?;
-            (id, number, Some(env))
-        }
-    };
-    let (revision, pushed) = app.with_store(|s| {
-        s.push_revision(&actor.0, &change, &body.commit_oid, None, &body.message)
-    })?;
-    if let Some(env) = &opened {
-        app.publish(env);
+    if body.commits.is_empty() {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid",
+            "push contains no new commits",
+        ));
     }
-    app.publish(&pushed);
+    if body.commits.len() > MAX_STACK {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid",
+            format!(
+                "push contains {} new commits (limit {MAX_STACK}); this looks like history, not a stack",
+                body.commits.len()
+            ),
+        ));
+    }
+    // Stack identity across amends and rebases requires per-commit keys.
+    if body.commits.len() > 1 && body.commits.iter().any(|c| c.change_id.is_none()) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid",
+            "multi-commit pushes require a Change-Id trailer on every commit, so each \
+             change keeps its identity across amends",
+        ));
+    }
+
+    let mut results = Vec::new();
+    let mut parent: Option<cairn_core::ChangeId> = None;
+    let mut last_seq = 0i64;
+    for commit in &body.commits {
+        let existing = match &commit.change_id {
+            Some(key) => app.with_store(|s| s.change_by_key(&body.repo, key))?,
+            None => None,
+        };
+        let (change, number, created) = match existing {
+            Some(change) if change.state == ChangeState::Open && change.target == body.target => {
+                let unchanged = app
+                    .with_store(|s| s.revisions(&change.id))?
+                    .last()
+                    .is_some_and(|r| r.commit_oid == commit.commit_oid);
+                if unchanged {
+                    results.push(json!({
+                        "change": change.id,
+                        "number": change.number,
+                        "revision": change.latest_revision,
+                        "created": false,
+                        "unchanged": true,
+                    }));
+                    parent = Some(change.id);
+                    continue;
+                }
+                (change.id, change.number, false)
+            }
+            Some(change) => {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "conflict",
+                    format!(
+                        "change {} (key {}) is {} on target {}; start a new Change-Id",
+                        change.number,
+                        commit.change_id.as_deref().unwrap_or(""),
+                        change.state.as_str(),
+                        change.target
+                    ),
+                ));
+            }
+            None => {
+                let spec = cairn_core::ChangeSpec {
+                    external_key: commit.change_id.clone(),
+                    parent_change: parent.clone(),
+                    ..cairn_core::ChangeSpec::new(&body.repo, &body.target, &commit.title)
+                };
+                let (id, number, env) = app.with_store(|s| s.open_change(&actor.0, spec))?;
+                app.publish(&env);
+                (id, number, true)
+            }
+        };
+        let (revision, pushed) = app.with_store(|s| {
+            s.push_revision(&actor.0, &change, &commit.commit_oid, None, &commit.message)
+        })?;
+        app.publish(&pushed);
+        last_seq = pushed.seq.0;
+        results.push(json!({
+            "change": change,
+            "number": number,
+            "revision": revision,
+            "created": created,
+            "unchanged": false,
+        }));
+        parent = Some(change);
+    }
+    let tip = results.last().cloned().expect("commits is non-empty");
     Ok(Json(json!({
-        "change": change,
-        "number": number,
-        "revision": revision,
-        "created": opened.is_some(),
-        "seq": pushed.seq.0,
+        "results": results,
+        "tip": { "number": tip["number"], "revision": tip["revision"] },
+        "seq": last_seq,
     })))
 }
 

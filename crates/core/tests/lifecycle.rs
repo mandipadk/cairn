@@ -2,8 +2,8 @@
 //! judgment → policy-decided outcome, all against an in-memory store.
 
 use cairn_core::{
-    ChangeSpec, ClaimKind, ClaimSpec, CoreError, Disposition, Event, EventSeq, PrincipalId,
-    PrincipalKind, ReviewDomain, SessionState, Store, TaskState,
+    ChangeSpec, ClaimKind, ClaimSpec, CoreError, Disposition, Event, EventSeq, ObjectFormat,
+    PrincipalId, PrincipalKind, ReviewDomain, SessionState, Store, TaskState,
 };
 
 const OID: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -51,7 +51,9 @@ fn seeded() -> (Store, PrincipalId, PrincipalId, PrincipalId) {
             Some("codex"),
         )
         .unwrap();
-    store.create_repo(&human, "forge", "main").unwrap();
+    store
+        .create_repo(&human, "forge", "main", ObjectFormat::Sha1)
+        .unwrap();
     (store, human, scout, arbiter)
 }
 
@@ -380,7 +382,9 @@ fn protocol_misuse_is_rejected_with_typed_errors() {
     // Unknown actors are rejected.
     let ghost = principal("ghost");
     assert!(matches!(
-        store.create_repo(&ghost, "x-repo", "main").unwrap_err(),
+        store
+            .create_repo(&ghost, "x-repo", "main", ObjectFormat::Sha1)
+            .unwrap_err(),
         CoreError::NotFound(_)
     ));
 

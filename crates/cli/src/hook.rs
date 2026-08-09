@@ -88,8 +88,8 @@ fn conversation(
     Ok(())
 }
 
-/// One ref update → one recorded revision. Returns (change number,
-/// revision number) or a reason the pusher will read.
+/// One ref update → one recorded stack. Returns the tip's (change
+/// number, revision number) or a reason the pusher will read.
 fn handle_push(
     client: &Client,
     repo: &str,
@@ -102,24 +102,89 @@ fn handle_push(
     if new_oid.starts_with(ZERO_OID_PREFIX) {
         return Err("deleting a change ref is not supported".to_owned());
     }
-    let raw = read_commit(new_oid)?;
-    let info = cairn_git::parse_commit_object(&raw);
+
+    // Bottom-up: every commit the target branch does not already have.
+    let commits = list_new_commits(new_oid, target)?;
+    if commits.is_empty() {
+        return Err(format!(
+            "nothing to push: {target} already contains these commits"
+        ));
+    }
+    let mut entries = Vec::new();
+    for oid in &commits {
+        let info = cairn_git::parse_commit_object(&read_commit(oid)?);
+        entries.push(json!({
+            "commit_oid": oid,
+            "title": info.title,
+            "message": info.message,
+            "change_id": info.change_id,
+        }));
+    }
+    // Fail the stack-needs-trailers case here, where the message can
+    // name the exact commits, before bothering the forge.
+    if entries.len() > 1 {
+        let missing: Vec<&str> = entries
+            .iter()
+            .filter(|e| e["change_id"].is_null())
+            .filter_map(|e| e["commit_oid"].as_str())
+            .collect();
+        if !missing.is_empty() {
+            return Err(format!(
+                "a stack push needs a Change-Id trailer on every commit; missing on: {} \
+                 (add trailers, e.g. git rebase --exec with a commit-msg amend, then push again)",
+                missing.join(", ")
+            ));
+        }
+    }
+
     let (status, body) = client.record_push(&json!({
         "repo": repo,
         "target": target,
-        "commit_oid": new_oid,
-        "title": info.title,
-        "message": info.message,
-        "change_id": info.change_id,
+        "commits": entries,
     }))?;
     if !(200..300).contains(&status) {
         let detail = body["error"].as_str().unwrap_or("forge rejected the push");
         return Err(detail.to_owned());
     }
-    match (body["number"].as_i64(), body["revision"].as_i64()) {
+    match (
+        body["tip"]["number"].as_i64(),
+        body["tip"]["revision"].as_i64(),
+    ) {
         (Some(number), Some(revision)) => Ok((number, revision)),
         _ => Err(format!("forge returned an unexpected response: {body}")),
     }
+}
+
+/// Commits reachable from the pushed tip but not from the target
+/// branch, oldest first. Inside the hook, quarantined objects are
+/// visible through receive-pack's environment.
+fn list_new_commits(new_oid: &str, target: &str) -> Result<Vec<String>, String> {
+    let target_ref = format!("refs/heads/{target}");
+    let target_exists = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet", &target_ref])
+        .output()
+        .map_err(|e| format!("running git rev-parse: {e}"))?
+        .status
+        .success();
+    let mut args = vec!["rev-list", "--reverse", new_oid];
+    if target_exists {
+        args.push("--not");
+        args.push(&target_ref);
+    }
+    let output = std::process::Command::new("git")
+        .args(&args)
+        .output()
+        .map_err(|e| format!("running git rev-list: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "listing pushed commits failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect())
 }
 
 /// Read a commit object. Inside the hook, receive-pack's environment

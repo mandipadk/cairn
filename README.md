@@ -31,11 +31,14 @@ Events stream with cursor resume (`crates/server`, `cairn serve`); and
 an MCP adapter exposing the protocol as tools for AI agents
 (`cairn mcp`); and git hosting with change-native transport — pushing
 to `refs/for/<branch>` opens a change or adds a revision (matched by
-`Change-Id` trailer, as emitted by Gerrit tooling and jj), every
-revision stays fetchable at `refs/changes/<number>/<revision>`, and a
-policy-approved merge fast-forwards the real branch. Not yet
-implemented: capability grants, merge queue, stacked-change
-auto-rebase, and the web UI. Identity is currently dev-mode — callers assert a
+`Change-Id` trailer, as emitted by Gerrit tooling and jj), a
+multi-commit push becomes a stack of linked changes (one per commit,
+requiring a trailer on each), every revision stays fetchable at
+`refs/changes/<number>/<revision>`, and a policy-approved merge
+fast-forwards the real branch. Direct pushes to branches are refused —
+branches advance only by merge. Repos may use SHA-1 or SHA-256 object
+databases. Not yet implemented: capability grants, merge queue,
+stacked-change auto-rebase, and the web UI. Identity is currently dev-mode — callers assert a
 principal via the `x-cairn-principal` header; credential verification
 and capability grants are the next trust layer.
 

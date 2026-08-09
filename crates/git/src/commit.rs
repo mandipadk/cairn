@@ -10,14 +10,26 @@ pub struct CommitInfo {
     /// The `Change-Id:` trailer, if present — the stable key that lets
     /// an amended commit address the same change.
     pub change_id: Option<String>,
+    /// `(name, email, raw date)` from the author header, preserved when
+    /// the queue re-commits a rebased change.
+    pub author: Option<(String, String, String)>,
 }
 
 pub fn parse_commit_object(raw: &str) -> CommitInfo {
     // Headers run until the first blank line; the rest is the message.
-    let message = match raw.split_once("\n\n") {
-        Some((_headers, message)) => message.trim_end().to_owned(),
-        None => String::new(),
+    let (headers, message) = match raw.split_once("\n\n") {
+        Some((headers, message)) => (headers, message.trim_end().to_owned()),
+        None => (raw, String::new()),
     };
+    // "author Name <email> 1700000000 +0000"
+    let author = headers
+        .lines()
+        .find_map(|line| line.strip_prefix("author "))
+        .and_then(|line| {
+            let (name, rest) = line.split_once(" <")?;
+            let (email, date) = rest.split_once("> ")?;
+            Some((name.to_owned(), email.to_owned(), date.to_owned()))
+        });
     let title = message.lines().next().unwrap_or("").to_owned();
     let change_id = message
         .lines()
@@ -29,6 +41,7 @@ pub fn parse_commit_object(raw: &str) -> CommitInfo {
         title,
         message,
         change_id,
+        author,
     }
 }
 
@@ -49,6 +62,14 @@ mod tests {
     #[test]
     fn parses_title_message_and_trailer() {
         let info = parse_commit_object(RAW);
+        assert_eq!(
+            info.author,
+            Some((
+                "Ada".into(),
+                "ada@example.test".into(),
+                "1700000000 +0000".into()
+            ))
+        );
         assert_eq!(info.title, "Add greeting");
         assert!(info.message.starts_with("Add greeting"));
         assert!(info.message.ends_with("Change-Id: If00dcafe"));

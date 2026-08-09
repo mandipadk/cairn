@@ -9,8 +9,8 @@ use crate::id::{ChangeId, PrincipalId, SessionId, TaskId};
 use crate::store::Store;
 use crate::types::{
     Capability, Change, ChangeState, Claim, ClaimKind, Disposition, Grant, ObjectFormat, Principal,
-    PrincipalKind, Repo, ReviewDomain, Revision, Session, SessionState, Task, TaskState, TokenInfo,
-    Verdict,
+    PrincipalKind, QueueEntry, Repo, ReviewDomain, Revision, Session, SessionState, Task,
+    TaskState, TokenInfo, Verdict,
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
@@ -438,6 +438,52 @@ pub(crate) mod raw {
         })
     }
 
+    fn queue_entry_from_row(row: &Row) -> rusqlite::Result<QueueEntry> {
+        Ok(QueueEntry {
+            change: ChangeId(row.get(0)?),
+            repo: row.get(1)?,
+            target: row.get(2)?,
+            enqueued_by: PrincipalId(row.get(3)?),
+            enqueued_seq: row.get(4)?,
+        })
+    }
+
+    const QUEUE_COLS: &str = "change_id, repo, target, enqueued_by, enqueued_seq";
+
+    pub fn queue_entry(conn: &Connection, change: &str) -> CoreResult<Option<QueueEntry>> {
+        Ok(conn
+            .prepare_cached(&format!(
+                "SELECT {QUEUE_COLS} FROM merge_queue WHERE change_id = ?"
+            ))?
+            .query_row(params![change], queue_entry_from_row)
+            .optional()?)
+    }
+
+    /// A branch's landing queue, FIFO.
+    pub fn queue_for(conn: &Connection, repo: &str, target: &str) -> CoreResult<Vec<QueueEntry>> {
+        Ok(conn
+            .prepare_cached(&format!(
+                "SELECT {QUEUE_COLS} FROM merge_queue
+                 WHERE repo = ? AND target = ? ORDER BY enqueued_seq"
+            ))?
+            .query_map(params![repo, target], queue_entry_from_row)?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// The head of every non-empty (repo, target) lane, oldest first —
+    /// exactly what the landing processor works through.
+    pub fn queue_heads(conn: &Connection) -> CoreResult<Vec<QueueEntry>> {
+        Ok(conn
+            .prepare_cached(&format!(
+                "SELECT {QUEUE_COLS} FROM merge_queue
+                 WHERE enqueued_seq IN
+                   (SELECT MIN(enqueued_seq) FROM merge_queue GROUP BY repo, target)
+                 ORDER BY enqueued_seq"
+            ))?
+            .query_map([], queue_entry_from_row)?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
     pub fn principal_count(conn: &Connection) -> CoreResult<i64> {
         Ok(conn.query_row("SELECT COUNT(*) FROM principals", [], |r| r.get(0))?)
     }
@@ -499,6 +545,18 @@ impl Store {
 
     pub fn grants_of(&self, grantee: &PrincipalId) -> CoreResult<Vec<Grant>> {
         raw::grants_of(&self.conn, grantee.as_str())
+    }
+
+    pub fn queue_entry(&self, change: &ChangeId) -> CoreResult<Option<QueueEntry>> {
+        raw::queue_entry(&self.conn, change.as_str())
+    }
+
+    pub fn queue_for(&self, repo: &str, target: &str) -> CoreResult<Vec<QueueEntry>> {
+        raw::queue_for(&self.conn, repo, target)
+    }
+
+    pub fn queue_heads(&self) -> CoreResult<Vec<QueueEntry>> {
+        raw::queue_heads(&self.conn)
     }
 
     pub fn changes_in_repo(&self, repo: &str) -> CoreResult<Vec<Change>> {

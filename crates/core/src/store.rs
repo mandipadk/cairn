@@ -117,6 +117,15 @@ CREATE TABLE IF NOT EXISTS claims (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_claims_change ON claims (change_id, revision);
 
+CREATE TABLE IF NOT EXISTS merge_queue (
+  change_id    TEXT PRIMARY KEY,
+  repo         TEXT NOT NULL,
+  target       TEXT NOT NULL,
+  enqueued_by  TEXT NOT NULL,
+  enqueued_seq INTEGER NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_queue_lane ON merge_queue (repo, target, enqueued_seq);
+
 CREATE TABLE IF NOT EXISTS verdicts (
   id        TEXT PRIMARY KEY,
   change_id TEXT NOT NULL,
@@ -431,9 +440,27 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                 ],
             )?;
         }
+        Event::ChangeEnqueued { change } => {
+            tx.execute(
+                "INSERT INTO merge_queue (change_id, repo, target, enqueued_by, enqueued_seq)
+                 SELECT id, repo, target, ?, ? FROM changes WHERE id = ?",
+                params![actor, env.seq.0, change.as_str()],
+            )?;
+        }
+        Event::ChangeDequeued { change, .. } => {
+            tx.execute(
+                "DELETE FROM merge_queue WHERE change_id = ?",
+                params![change.as_str()],
+            )?;
+        }
         Event::ChangeMerged { change, .. } => {
             tx.execute(
                 "UPDATE changes SET state = 'merged' WHERE id = ?",
+                params![change.as_str()],
+            )?;
+            // A merged change leaves the queue however it landed.
+            tx.execute(
+                "DELETE FROM merge_queue WHERE change_id = ?",
                 params![change.as_str()],
             )?;
         }

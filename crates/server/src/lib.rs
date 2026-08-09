@@ -14,10 +14,12 @@
 mod auth;
 mod error;
 mod git_http;
+mod queue;
 mod routes;
 mod sse;
 mod state;
 
+pub use queue::spawn_queue_processor;
 pub use state::AppState;
 
 use axum::Router;
@@ -64,6 +66,9 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/changes/{id}/readiness", get(routes::merge_readiness))
         .route("/api/changes/{id}/merge", post(routes::merge_change))
+        .route("/api/changes/{id}/enqueue", post(routes::enqueue_change))
+        .route("/api/changes/{id}/dequeue", post(routes::dequeue_change))
+        .route("/api/repos/{name}/queue", get(routes::list_queue))
         .route("/api/changes/{id}/abandon", post(routes::abandon_change))
         .route(
             "/api/principals/{id}/tokens",

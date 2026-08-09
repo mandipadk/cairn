@@ -653,3 +653,114 @@ fn capability_law_scopes_expires_and_revokes() {
         CoreError::Forbidden(_)
     ));
 }
+
+#[test]
+fn merge_queue_lifecycle_and_guards() {
+    let (mut store, human, scout, _) = seeded();
+    let (change, _, _) = store
+        .open_change(&scout, ChangeSpec::new("forge", "main", "Queued work"))
+        .unwrap();
+    store
+        .push_revision(&scout, &change, OID, None, "work")
+        .unwrap();
+    store
+        .attach_claim(&scout, &change, 1, passing_tests())
+        .unwrap();
+
+    // The queue lands ready work; unready work is refused with policy.
+    assert!(matches!(
+        store.enqueue_change(&human, &change).unwrap_err(),
+        CoreError::PolicyUnsatisfied(_)
+    ));
+    store
+        .give_verdict(
+            &human,
+            &change,
+            1,
+            ReviewDomain::Correctness,
+            Disposition::Approve,
+            "ok",
+        )
+        .unwrap();
+
+    // Entering the queue is merge intent: scout holds no merge capability.
+    assert!(matches!(
+        store.enqueue_change(&scout, &change).unwrap_err(),
+        CoreError::Forbidden(_)
+    ));
+    store.enqueue_change(&human, &change).unwrap();
+    assert!(store.queue_entry(&change).unwrap().is_some());
+    assert_eq!(store.queue_for("forge", "main").unwrap().len(), 1);
+    assert!(matches!(
+        store.enqueue_change(&human, &change).unwrap_err(),
+        CoreError::Conflict(_)
+    ));
+
+    // Merging (here: as the queue would, with a rebased oid) records
+    // merged_as and clears the queue.
+    let landed = "f".repeat(40);
+    let merged = store
+        .merge_change_as(&human, &change, Some(&landed))
+        .unwrap();
+    match &merged.event {
+        Event::ChangeMerged { merged_as, .. } => {
+            assert_eq!(merged_as.as_deref(), Some(landed.as_str()));
+        }
+        other => panic!("expected ChangeMerged, got {other:?}"),
+    }
+    assert!(store.queue_entry(&change).unwrap().is_none());
+
+    // Stacks land bottom-up: a child cannot queue past its open parent.
+    let (parent, _, _) = store
+        .open_change(&scout, ChangeSpec::new("forge", "main", "Parent"))
+        .unwrap();
+    store
+        .push_revision(&scout, &parent, OID, None, "p")
+        .unwrap();
+    let (child, _, _) = store
+        .open_change(
+            &scout,
+            ChangeSpec {
+                parent_change: Some(parent.clone()),
+                ..ChangeSpec::new("forge", "main", "Child")
+            },
+        )
+        .unwrap();
+    store.push_revision(&scout, &child, OID, None, "c").unwrap();
+    store
+        .attach_claim(&scout, &child, 1, passing_tests())
+        .unwrap();
+    store
+        .give_verdict(
+            &human,
+            &child,
+            1,
+            ReviewDomain::Correctness,
+            Disposition::Approve,
+            "ok",
+        )
+        .unwrap();
+    let err = store.enqueue_change(&human, &child).unwrap_err();
+    assert!(matches!(err, CoreError::Conflict(_)));
+    assert!(err.to_string().contains("bottom-up"), "got: {err}");
+
+    // The owner can withdraw their own queued change.
+    store
+        .attach_claim(&scout, &parent, 1, passing_tests())
+        .unwrap();
+    store
+        .give_verdict(
+            &human,
+            &parent,
+            1,
+            ReviewDomain::Correctness,
+            Disposition::Approve,
+            "ok",
+        )
+        .unwrap();
+    store.enqueue_change(&human, &parent).unwrap();
+    store
+        .dequeue_change(&scout, &parent, "want to amend first")
+        .unwrap();
+    assert!(store.queue_entry(&parent).unwrap().is_none());
+}

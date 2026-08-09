@@ -79,11 +79,11 @@ async fn boot_with(object_format: &str) -> Forge {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let git_store = GitStore::new(&repos, env!("CARGO_BIN_EXE_cairn"));
-    let app = router(
-        AppState::new(store)
-            .with_dev_identity()
-            .with_git(git_store, format!("http://{addr}")),
-    );
+    let state = AppState::new(store)
+        .with_dev_identity()
+        .with_git(git_store, format!("http://{addr}"));
+    cairn_server::spawn_queue_processor(state.clone());
+    let app = router(state);
     tokio::spawn(axum::serve(listener, app.clone()).into_future());
 
     let (status, _) = api(
@@ -547,5 +547,223 @@ async fn push_requires_a_live_token_without_dev_mode() {
     assert!(
         refs.contains("refs/changes/1/1"),
         "missing change ref:\n{refs}"
+    );
+}
+
+/// Poll the API until a condition holds; panic with context on timeout.
+async fn wait_for<F>(app: &Router, what: &str, mut check: F)
+where
+    F: AsyncFnMut(&Router) -> bool,
+{
+    for _ in 0..100 {
+        if check(app).await {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("timed out waiting for: {what}");
+}
+
+/// The landing train: two ready changes enqueue; the first lands as a
+/// fast-forward, the second is auto-rebased past it (new commit,
+/// recorded as merged_as, original author preserved); a genuinely
+/// conflicting change is dequeued with the file named in the reason.
+#[tokio::test(flavor = "multi_thread")]
+async fn merge_queue_lands_trains_and_reports_conflicts() {
+    let forge = boot().await;
+    let (app, addr) = (&forge.app, forge.addr);
+
+    // Seed main with a first landed change so later work has a base.
+    git(
+        &forge.work,
+        &["clone", &format!("http://scout:x@{addr}/git/demo"), "wc"],
+    );
+    let wc = forge.work.join("wc");
+    commit_file(&wc, "base.txt", "base\n", "Base\n\nChange-Id: Iq00");
+    git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
+    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let base_change = changes[0]["id"].as_str().unwrap().to_owned();
+    approve_and_merge(app, &base_change).await;
+    git(&wc, &["fetch", "-q", "origin", "main"]);
+    git(&wc, &["reset", "-q", "--hard", "FETCH_HEAD"]);
+
+    // Two independent changes from the same base, different files.
+    commit_file(&wc, "left.txt", "left\n", "Left\n\nChange-Id: Iq01");
+    let left_oid = git(&wc, &["rev-parse", "HEAD"]).trim().to_owned();
+    git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
+    git(&wc, &["reset", "-q", "--hard", "HEAD~1"]);
+    commit_file(&wc, "right.txt", "right\n", "Right\n\nChange-Id: Iq02");
+    let right_oid = git(&wc, &["rev-parse", "HEAD"]).trim().to_owned();
+    git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
+
+    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let by_key = |key: &str| {
+        changes
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["external_key"] == key)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let (left, right) = (by_key("Iq01"), by_key("Iq02"));
+
+    // Make both ready, then hand both to the queue.
+    for change in [&left, &right] {
+        let (status, _) = api(
+            app,
+            "POST",
+            &format!("/api/changes/{change}/claims"),
+            "scout",
+            Some(json!({ "kind": "test", "passed": true, "summary": "ok" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = api(
+            app,
+            "POST",
+            &format!("/api/changes/{change}/verdicts"),
+            "ada",
+            Some(json!({
+                "domain": "correctness", "disposition": "approve", "rationale": "fine"
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) = api(
+            app,
+            "POST",
+            &format!("/api/changes/{change}/enqueue"),
+            "ada",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "enqueue failed: {body}");
+    }
+
+    // The train lands both without any further help.
+    wait_for(app, "both queued changes to merge", async |app: &Router| {
+        let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+        changes
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["state"] == "merged")
+    })
+    .await;
+
+    // First-in landed as pushed; second was rebased to a fresh commit.
+    let (_, events) = api(app, "GET", "/api/events?after=0&limit=200", "ada", None).await;
+    let merged: Vec<&Value> = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "change_merged")
+        .collect();
+    let landed_of = |id: &str| {
+        merged
+            .iter()
+            .find(|e| e["change"] == id)
+            .map(|e| e["merged_as"].clone())
+            .unwrap()
+    };
+    assert!(
+        landed_of(&left).is_null(),
+        "first in line lands fast-forward"
+    );
+    let rebased = landed_of(&right);
+    let rebased = rebased.as_str().expect("second in line must be rebased");
+    assert_ne!(rebased, right_oid);
+
+    // The branch carries both, authorship survived the rebase, and a
+    // fresh clone agrees.
+    git(&wc, &["fetch", "-q", "origin", "main"]);
+    let tip = git(&wc, &["rev-parse", "FETCH_HEAD"]).trim().to_owned();
+    assert_eq!(tip, rebased);
+    let author = git(&wc, &["log", "-1", "--format=%an <%ae>", &tip]);
+    assert_eq!(author.trim(), "Ada <ada@example.test>");
+    assert!(git(&wc, &["rev-list", "FETCH_HEAD"]).contains(&left_oid));
+    git(
+        &forge.work,
+        &["clone", "-q", &format!("http://{addr}/git/demo"), "train"],
+    );
+    assert!(forge.work.join("train/left.txt").exists());
+    assert!(forge.work.join("train/right.txt").exists());
+
+    // A change conflicting with landed work is dequeued, and the reason
+    // names the file.
+    git(&wc, &["reset", "-q", "--hard", "HEAD~1"]); // back before left/right
+    commit_file(
+        &wc,
+        "left.txt",
+        "different left\n",
+        "Clash\n\nChange-Id: Iq03",
+    );
+    git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
+    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let clash = changes
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["external_key"] == "Iq03")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, _) = api(
+        app,
+        "POST",
+        &format!("/api/changes/{clash}/claims"),
+        "scout",
+        Some(json!({ "kind": "test", "passed": true, "summary": "ok" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = api(
+        app,
+        "POST",
+        &format!("/api/changes/{clash}/verdicts"),
+        "ada",
+        Some(json!({ "domain": "correctness", "disposition": "approve", "rationale": "fine" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = api(
+        app,
+        "POST",
+        &format!("/api/changes/{clash}/enqueue"),
+        "ada",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    wait_for(
+        app,
+        "the conflicting change to be dequeued",
+        async |app: &Router| {
+            let (_, queue) = api(app, "GET", "/api/repos/demo/queue", "ada", None).await;
+            queue.as_array().unwrap().is_empty()
+        },
+    )
+    .await;
+    let (_, change) = api(app, "GET", &format!("/api/changes/{clash}"), "ada", None).await;
+    assert_eq!(
+        change["state"], "open",
+        "a conflict must not merge or abandon the change"
+    );
+    let (_, events) = api(app, "GET", "/api/events?after=0&limit=300", "ada", None).await;
+    let dequeued = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["kind"] == "change_dequeued" && e["change"] == clash.as_str())
+        .expect("expected a dequeue event");
+    let reason = dequeued["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("left.txt"),
+        "reason should name the file: {reason}"
     );
 }

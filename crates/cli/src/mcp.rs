@@ -154,6 +154,14 @@ fn dispatch(client: &ApiClient, name: &str, args: &Value) -> Result<(u16, Value)
         "merge_readiness" => {
             client.get(&format!("/api/changes/{}/readiness", need(args, "change")?))
         }
+        "enqueue_change" => client.post(
+            &format!("/api/changes/{}/enqueue", need(args, "change")?),
+            args,
+        ),
+        "dequeue_change" => client.post(
+            &format!("/api/changes/{}/dequeue", need(args, "change")?),
+            args,
+        ),
         "merge_change" => client.post(
             &format!("/api/changes/{}/merge", need(args, "change")?),
             args,
@@ -307,6 +315,21 @@ fn tool_definitions() -> Vec<Value> {
              Use this to learn what to do next instead of attempting blind merges.",
             &["change"],
             json!({ "change": s("Change id") }),
+        ),
+        tool(
+            "enqueue_change",
+            "Enter the landing queue: once enqueued, the forge lands the change for you \
+             — rebasing onto the moved target if needed — or dequeues it with a reason \
+             event saying exactly why it could not land. Requires policy to already be \
+             satisfied. Prefer this over merge_change when the target branch is busy.",
+            &["change"],
+            json!({ "change": s("Change id") }),
+        ),
+        tool(
+            "dequeue_change",
+            "Withdraw a change from the landing queue.",
+            &["change", "reason"],
+            json!({ "change": s("Change id"), "reason": s("Why it is being withdrawn") }),
         ),
         tool(
             "merge_change",

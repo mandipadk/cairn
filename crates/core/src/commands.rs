@@ -513,6 +513,17 @@ impl Store {
     /// justification; advancing the git ref is the transport layer's job,
     /// driven by this event.
     pub fn merge_change(&mut self, actor: &PrincipalId, change: &ChangeId) -> CoreResult<Envelope> {
+        self.merge_change_as(actor, change, None)
+    }
+
+    /// Merge with an explicit landed commit — the queue's path when it
+    /// rebased the reviewed revision onto a moved target.
+    pub fn merge_change_as(
+        &mut self,
+        actor: &PrincipalId,
+        change: &ChangeId,
+        merged_as: Option<&str>,
+    ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
         let current = raw::change(&tx, change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
@@ -522,6 +533,11 @@ impl Store {
                 "change {change} is {}, not open",
                 current.state.as_str()
             )));
+        }
+        if let Some(oid) = merged_as {
+            require(valid_commit_oid(oid), || {
+                format!("{oid:?} is not a valid commit oid")
+            })?;
         }
         let trace = policy::evaluate(&tx, &current)?;
         if !trace.satisfied {
@@ -533,7 +549,91 @@ impl Store {
             Event::ChangeMerged {
                 change: change.clone(),
                 revision: current.latest_revision,
+                merged_as: merged_as.map(str::to_owned),
                 trace,
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
+    /// Enter the landing queue. Policy must already be satisfied — the
+    /// queue lands ready work, it does not wait for reviews — and a
+    /// stacked change may only follow its merged parent.
+    pub fn enqueue_change(
+        &mut self,
+        actor: &PrincipalId,
+        change: &ChangeId,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        let current = raw::change(&tx, change.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
+        authorize(&tx, actor, Capability::Merge, Some(&current.repo))?;
+        if current.state != ChangeState::Open {
+            return Err(CoreError::Conflict(format!(
+                "change {change} is {}, not open",
+                current.state.as_str()
+            )));
+        }
+        if raw::queue_entry(&tx, change.as_str())?.is_some() {
+            return Err(CoreError::Conflict(format!(
+                "change {change} is already queued"
+            )));
+        }
+        if let Some(parent) = &current.parent_change {
+            let parent_change = raw::change(&tx, parent.as_str())?
+                .ok_or_else(|| CoreError::NotFound(format!("change {parent}")))?;
+            if parent_change.state != ChangeState::Merged {
+                return Err(CoreError::Conflict(format!(
+                    "stack parent (change {}) is {}, not merged; enqueue the stack bottom-up",
+                    parent_change.number,
+                    parent_change.state.as_str()
+                )));
+            }
+        }
+        let trace = policy::evaluate(&tx, &current)?;
+        if !trace.satisfied {
+            return Err(CoreError::PolicyUnsatisfied(trace.unmet_summary()));
+        }
+        let env = append(
+            &tx,
+            actor,
+            Event::ChangeEnqueued {
+                change: change.clone(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
+    /// Leave the queue without merging. The enqueuer, the change's
+    /// owner, or anyone holding merge authority (the processor uses
+    /// this to record why a landing was abandoned).
+    pub fn dequeue_change(
+        &mut self,
+        actor: &PrincipalId,
+        change: &ChangeId,
+        reason: &str,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        require(!reason.trim().is_empty(), || {
+            "dequeue reason must not be empty".into()
+        })?;
+        let entry = raw::queue_entry(&tx, change.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("change {change} is not queued")))?;
+        let current = raw::change(&tx, change.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
+        if entry.enqueued_by != *actor && current.owner != *actor {
+            authorize(&tx, actor, Capability::Merge, Some(&current.repo))?;
+        } else {
+            ensure_actor(&tx, actor)?;
+        }
+        let env = append(
+            &tx,
+            actor,
+            Event::ChangeDequeued {
+                change: change.clone(),
+                reason: reason.to_owned(),
             },
         )?;
         tx.commit()?;

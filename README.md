@@ -49,8 +49,18 @@ that would fix it. Git pushes authenticate with a token as the
 Basic-auth password. An asserted-identity dev header exists behind an
 explicit `--dev` flag, off by default.
 
-Not yet implemented: merge queue, stacked-change auto-rebase, and the
-web UI.
+Ready changes land through a merge queue: enqueue a change (policy
+must already be satisfied) and the forge lands it — fast-forward when
+the target is unmoved, otherwise auto-rebased in memory with the
+original author preserved and the landed commit recorded as
+`merged_as` on the merge event. Whatever cannot land is dequeued with
+a reason event naming exactly why: a policy regression, a revoked
+capability, or the conflicting files. Policy is re-checked at landing
+time, and stacks enqueue bottom-up.
+
+Not yet implemented: claim re-verification by trusted runners,
+speculative queue batching, path leases with conflict forecasting, and
+the web UI.
 
 ## Running
 

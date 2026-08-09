@@ -33,6 +33,17 @@ pub enum GitError {
 
 pub type GitResult<T> = Result<T, GitError>;
 
+/// How a queued change can land on a moved (or unmoved) target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RebaseOutcome {
+    /// The revision already descends from the tip — land it as-is.
+    FastForward,
+    /// A fresh commit carrying the change's work merged onto the tip.
+    Rebased(String),
+    /// The change and the target both touched these files.
+    Conflicts(Vec<String>),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Service {
     UploadPack,
@@ -289,6 +300,79 @@ impl GitStore {
         let path = self.existing_repo_path(name)?;
         self.run(Some(&path), &["update-ref", refname, oid]).await?;
         Ok(())
+    }
+
+    /// Land-readiness of `commit` against `tip`: fast-forward if
+    /// possible, otherwise a real three-way merge computed in memory
+    /// (`git merge-tree`, no worktree) committed with the original
+    /// author preserved and the forge as committer.
+    pub async fn rebase_onto(
+        &self,
+        name: &str,
+        tip: &str,
+        commit: &str,
+    ) -> GitResult<RebaseOutcome> {
+        let path = self.existing_repo_path(name)?;
+        if self.is_ancestor(name, tip, commit).await? {
+            return Ok(RebaseOutcome::FastForward);
+        }
+        let merge = Command::new("git")
+            .current_dir(&path)
+            .args(["merge-tree", "--write-tree", "--name-only", tip, commit])
+            .stdin(Stdio::null())
+            .output()
+            .await?;
+        let stdout = String::from_utf8_lossy(&merge.stdout);
+        let mut lines = stdout.lines();
+        let tree = lines.next().unwrap_or("").trim().to_owned();
+        match merge.status.code() {
+            Some(0) => {}
+            // Exit 1 is a content conflict; the remaining lines name
+            // the files both sides touched.
+            Some(1) => {
+                let mut files: Vec<String> = lines
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                files.dedup();
+                return Ok(RebaseOutcome::Conflicts(files));
+            }
+            _ => {
+                return Err(GitError::CommandFailed {
+                    args: "merge-tree --write-tree".into(),
+                    stderr: String::from_utf8_lossy(&merge.stderr).trim().to_owned(),
+                });
+            }
+        }
+        // Re-commit the merged tree on the tip, preserving authorship.
+        let raw = self
+            .run(Some(&path), &["cat-file", "commit", commit])
+            .await?;
+        let info = crate::commit::parse_commit_object(&String::from_utf8_lossy(&raw));
+        let mut command = Command::new("git");
+        command
+            .current_dir(&path)
+            .args(["commit-tree", &tree, "-p", tip, "-m", &info.message])
+            .env("GIT_COMMITTER_NAME", "cairn")
+            .env("GIT_COMMITTER_EMAIL", "queue@cairn.invalid")
+            .stdin(Stdio::null());
+        if let Some((author_name, email, date)) = &info.author {
+            command
+                .env("GIT_AUTHOR_NAME", author_name)
+                .env("GIT_AUTHOR_EMAIL", email)
+                .env("GIT_AUTHOR_DATE", date);
+        }
+        let committed = command.output().await?;
+        if !committed.status.success() {
+            return Err(GitError::CommandFailed {
+                args: "commit-tree".into(),
+                stderr: String::from_utf8_lossy(&committed.stderr).trim().to_owned(),
+            });
+        }
+        Ok(RebaseOutcome::Rebased(
+            String::from_utf8_lossy(&committed.stdout).trim().to_owned(),
+        ))
     }
 
     /// Current tip of a branch, or None if the branch doesn't exist yet.

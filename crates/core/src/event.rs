@@ -148,9 +148,24 @@ pub enum Event {
         rationale: String,
     },
 
+    /// The change entered the landing queue: from here, landing it —
+    /// rebasing if the target moved — is the forge's responsibility.
+    ChangeEnqueued {
+        change: ChangeId,
+    },
+    /// The change left the queue without merging; the reason says
+    /// exactly why (conflict, policy regression, cancellation).
+    ChangeDequeued {
+        change: ChangeId,
+        reason: String,
+    },
     ChangeMerged {
         change: ChangeId,
         revision: i64,
+        /// The commit that actually landed on the target, when the
+        /// queue rebased it past the reviewed revision's oid.
+        #[serde(default)]
+        merged_as: Option<String>,
         /// The full policy evaluation that justified this merge. A merge
         /// is always explainable after the fact from the log alone.
         trace: PolicyTrace,
@@ -181,6 +196,8 @@ impl Event {
             Event::RevisionPushed { .. } => "revision_pushed",
             Event::ClaimAttached { .. } => "claim_attached",
             Event::VerdictGiven { .. } => "verdict_given",
+            Event::ChangeEnqueued { .. } => "change_enqueued",
+            Event::ChangeDequeued { .. } => "change_dequeued",
             Event::ChangeMerged { .. } => "change_merged",
             Event::ChangeAbandoned { .. } => "change_abandoned",
         }

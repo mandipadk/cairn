@@ -243,6 +243,16 @@ pub struct TokenInfo {
     pub revoked: bool,
 }
 
+/// One change waiting in a branch's landing queue.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueueEntry {
+    pub change: ChangeId,
+    pub repo: String,
+    pub target: String,
+    pub enqueued_by: PrincipalId,
+    pub enqueued_seq: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Verdict {
     pub id: VerdictId,

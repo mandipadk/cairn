@@ -113,6 +113,7 @@ async fn main() -> anyhow::Result<()> {
                 tracing::warn!("dev identity enabled: the x-cairn-principal header is trusted");
                 state = state.with_dev_identity();
             }
+            cairn_server::spawn_queue_processor(state.clone());
             let app = router(state);
             tracing::info!(%listen, db = %db.display(), repos = %repos.display(), "cairn serving");
             axum::serve(listener, app)

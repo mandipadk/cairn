@@ -605,3 +605,62 @@ pub async fn revoke_grant(
     app.publish(&env);
     Ok(committed(None, &env))
 }
+
+// ---- merge queue ----
+
+pub async fn enqueue_change(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let change = ChangeId(id);
+    match app.with_store(|s| s.enqueue_change(&actor.0, &change)) {
+        Ok(env) => {
+            app.publish(&env);
+            Ok(committed(None, &env))
+        }
+        // Same teaching refusal as a direct merge: the full trace.
+        Err(CoreError::PolicyUnsatisfied(message)) => {
+            let trace = app.with_store(|s| s.merge_readiness(&change))?;
+            let mut error = ApiError::from(CoreError::PolicyUnsatisfied(message));
+            error.detail = Some(json!({ "trace": trace }));
+            Err(error)
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct DequeueChange {
+    pub reason: String,
+}
+
+pub async fn dequeue_change(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Json(body): Json<DequeueChange>,
+) -> ApiResult<Json<Value>> {
+    let env = app.with_store(|s| s.dequeue_change(&actor.0, &ChangeId(id), &body.reason))?;
+    app.publish(&env);
+    Ok(committed(None, &env))
+}
+
+#[derive(Deserialize)]
+pub struct QueueQuery {
+    pub target: Option<String>,
+}
+
+pub async fn list_queue(
+    State(app): State<AppState>,
+    _actor: Actor,
+    Path(repo): Path<String>,
+    Query(query): Query<QueueQuery>,
+) -> ApiResult<Json<Value>> {
+    let target = match query.target {
+        Some(target) => target,
+        None => found(app.with_store(|s| s.repo(&repo))?, "repo")?.default_branch,
+    };
+    let entries = app.with_store(|s| s.queue_for(&repo, &target))?;
+    Ok(Json(json!(entries)))
+}

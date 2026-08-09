@@ -132,10 +132,14 @@ impl Store {
         default_branch: &str,
         object_format: ObjectFormat,
     ) -> CoreResult<Envelope> {
+        const RESERVED: &[&str] = &["api", "git", "login", "logout", "assets", "ui"];
         let tx = self.conn.transaction()?;
         authorize(&tx, actor, Capability::Admin, None)?;
         require(validate_slug(name), || {
             format!("repo name {name:?} is not a valid slug")
+        })?;
+        require(!RESERVED.contains(&name), || {
+            format!("repo name {name:?} is reserved")
         })?;
         require(valid_branch(default_branch), || {
             format!("{default_branch:?} is not a valid branch name")

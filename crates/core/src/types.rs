@@ -182,6 +182,8 @@ pub struct Change {
     pub latest_revision: i64,
     /// Client-chosen stable key (e.g. a Change-Id commit trailer).
     pub external_key: Option<String>,
+    /// The commit this change put on its target branch, once merged.
+    pub landed_oid: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

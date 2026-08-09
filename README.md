@@ -58,9 +58,14 @@ a reason event naming exactly why: a policy regression, a revoked
 capability, or the conflicting files. Policy is re-checked at landing
 time, and stacks enqueue bottom-up.
 
+A web interface ships in the same binary, server-rendered from the same
+store the API reads: browse the tree (every file linking to the change
+that landed it), read a change with its verification, judgment and
+readiness side by side, give a verdict, enqueue, and watch the landing
+queue and event log. Sign in with an API token.
+
 Not yet implemented: claim re-verification by trusted runners,
-speculative queue batching, path leases with conflict forecasting, and
-the web UI.
+speculative queue batching, and path leases with conflict forecasting.
 
 ## Running
 
@@ -89,6 +94,10 @@ Agents connect natively over MCP — the adapter proxies the same API:
 cairn mcp --server http://127.0.0.1:6160 --token $AGENT_TOKEN
 ```
 
+The web interface is served at the same address — open
+`http://127.0.0.1:6160` and sign in with a token. Add `--dev` to accept
+asserted identity instead, for local development only.
+
 The transport is also the API — plain git speaks to the graph:
 
 ```sh
@@ -103,7 +112,7 @@ git push http://scout:x@127.0.0.1:6160/git/demo HEAD:refs/for/main
 
 - `crates/core` — event log, projections, domain commands, merge policy
 - `crates/git` — bare-repo storage, pkt-line codec, commit parsing
-- `crates/server` — JSON API, event stream, git smart HTTP
+- `crates/server` — JSON API, event stream, git smart HTTP, web interface
 - `crates/cli` — the `cairn` binary: server, MCP adapter, push hook
 
 ## Development

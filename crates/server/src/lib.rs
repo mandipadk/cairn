@@ -18,6 +18,7 @@ mod queue;
 mod routes;
 mod sse;
 mod state;
+mod web;
 
 pub use queue::spawn_queue_processor;
 pub use state::AppState;
@@ -93,5 +94,6 @@ pub fn router(state: AppState) -> Router {
             post(git_http::receive_pack)
                 .layer(axum::extract::DefaultBodyLimit::max(GIT_BODY_LIMIT)),
         )
+        .merge(web::routes())
         .with_state(state)
 }

@@ -54,6 +54,28 @@ pub(crate) mod raw {
         .transpose()
     }
 
+    pub fn repos(conn: &Connection) -> CoreResult<Vec<Repo>> {
+        let rows = conn
+            .prepare_cached("SELECT name, default_branch, object_format FROM repos ORDER BY name")?
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(name, default_branch, format)| {
+                Ok(Repo {
+                    object_format: parsed(&format!("repo {name}"), &format, ObjectFormat::parse)?,
+                    name,
+                    default_branch,
+                })
+            })
+            .collect()
+    }
+
     pub fn repo(conn: &Connection, name: &str) -> CoreResult<Option<Repo>> {
         conn.prepare_cached("SELECT name, default_branch, object_format FROM repos WHERE name = ?")?
             .query_row(params![name], |row| {
@@ -152,7 +174,7 @@ pub(crate) mod raw {
     }
 
     const CHANGE_COLS: &str = "id, repo, number, target, title, task, parent_change, state, \
-                               owner, latest_revision, external_key";
+                               owner, latest_revision, external_key, landed_oid";
 
     fn change_from_row(row: &Row) -> rusqlite::Result<(Change, String)> {
         Ok((
@@ -168,6 +190,7 @@ pub(crate) mod raw {
                 owner: PrincipalId(row.get(8)?),
                 latest_revision: row.get(9)?,
                 external_key: row.get(10)?,
+                landed_oid: row.get(11)?,
             },
             row.get::<_, String>(7)?,
         ))
@@ -205,6 +228,22 @@ pub(crate) mod raw {
             "SELECT {CHANGE_COLS} FROM changes WHERE repo = ? AND external_key = ?"
         ))?
         .query_row(params![repo, key], change_from_row)
+        .optional()?
+        .map(finish_change)
+        .transpose()
+    }
+
+    /// The change that landed a given commit on a branch — how a file
+    /// in the tree finds the judgment that put it there.
+    pub fn change_by_landed_oid(
+        conn: &Connection,
+        repo: &str,
+        oid: &str,
+    ) -> CoreResult<Option<Change>> {
+        conn.prepare_cached(&format!(
+            "SELECT {CHANGE_COLS} FROM changes WHERE repo = ? AND landed_oid = ?"
+        ))?
+        .query_row(params![repo, oid], change_from_row)
         .optional()?
         .map(finish_change)
         .transpose()
@@ -450,6 +489,25 @@ pub(crate) mod raw {
 
     const QUEUE_COLS: &str = "change_id, repo, target, enqueued_by, enqueued_seq";
 
+    /// Sessions currently running, oldest first — the fleet view.
+    pub fn active_sessions(conn: &Connection) -> CoreResult<Vec<Session>> {
+        conn.prepare_cached(
+            "SELECT id, task, agent, state, outcome FROM sessions
+             WHERE state = 'active' ORDER BY rowid",
+        )?
+        .query_map([], |row| {
+            Ok(Session {
+                id: SessionId(row.get(0)?),
+                task: TaskId(row.get(1)?),
+                agent: PrincipalId(row.get(2)?),
+                state: SessionState::Active,
+                outcome: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+    }
+
     pub fn queue_entry(conn: &Connection, change: &str) -> CoreResult<Option<QueueEntry>> {
         Ok(conn
             .prepare_cached(&format!(
@@ -549,6 +607,18 @@ impl Store {
 
     pub fn queue_entry(&self, change: &ChangeId) -> CoreResult<Option<QueueEntry>> {
         raw::queue_entry(&self.conn, change.as_str())
+    }
+
+    pub fn change_by_landed_oid(&self, repo: &str, oid: &str) -> CoreResult<Option<Change>> {
+        raw::change_by_landed_oid(&self.conn, repo, oid)
+    }
+
+    pub fn active_sessions(&self) -> CoreResult<Vec<Session>> {
+        raw::active_sessions(&self.conn)
+    }
+
+    pub fn repos(&self) -> CoreResult<Vec<Repo>> {
+        raw::repos(&self.conn)
     }
 
     pub fn queue_for(&self, repo: &str, target: &str) -> CoreResult<Vec<QueueEntry>> {

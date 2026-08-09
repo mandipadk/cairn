@@ -89,9 +89,11 @@ CREATE TABLE IF NOT EXISTS changes (
   owner           TEXT NOT NULL,
   latest_revision INTEGER NOT NULL DEFAULT 0,
   external_key    TEXT,
+  landed_oid      TEXT,
   UNIQUE (repo, number)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_changes_repo_state ON changes (repo, state);
+CREATE INDEX IF NOT EXISTS idx_changes_landed ON changes (repo, landed_oid);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_changes_key
   ON changes (repo, external_key) WHERE external_key IS NOT NULL;
 
@@ -453,10 +455,20 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                 params![change.as_str()],
             )?;
         }
-        Event::ChangeMerged { change, .. } => {
+        Event::ChangeMerged {
+            change,
+            revision,
+            merged_as,
+            ..
+        } => {
+            // The landed commit is what the branch now carries: the
+            // rebased oid when the queue rewrote it, else the revision's.
             tx.execute(
-                "UPDATE changes SET state = 'merged' WHERE id = ?",
-                params![change.as_str()],
+                "UPDATE changes SET state = 'merged', landed_oid = COALESCE(
+                     ?,
+                     (SELECT commit_oid FROM revisions WHERE change_id = ? AND number = ?)
+                 ) WHERE id = ?",
+                params![merged_as, change.as_str(), revision, change.as_str()],
             )?;
             // A merged change leaves the queue however it landed.
             tx.execute(

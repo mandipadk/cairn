@@ -375,6 +375,82 @@ impl GitStore {
         ))
     }
 
+    /// Entries of a tree at `rev` (a ref or oid), one path level:
+    /// (kind, name), directories first as git emits them sorted.
+    pub async fn ls_tree(
+        &self,
+        name: &str,
+        rev: &str,
+        path: &str,
+    ) -> GitResult<Vec<(String, String)>> {
+        let repo = self.existing_repo_path(name)?;
+        let spec = if path.is_empty() {
+            rev.to_owned()
+        } else {
+            format!("{rev}:{path}")
+        };
+        let stdout = self
+            .run(
+                Some(&repo),
+                &["ls-tree", "--format=%(objecttype) %(path)", &spec],
+            )
+            .await?;
+        let mut entries: Vec<(String, String)> = String::from_utf8_lossy(&stdout)
+            .lines()
+            .filter_map(|line| {
+                line.split_once(' ')
+                    .map(|(kind, path)| (kind.to_owned(), path.to_owned()))
+            })
+            .collect();
+        entries.sort_by(|a, b| (a.0 != "tree", &a.1).cmp(&(b.0 != "tree", &b.1)));
+        Ok(entries)
+    }
+
+    /// The last commit to touch `path` at `rev`: (oid, subject).
+    pub async fn last_commit_for(
+        &self,
+        name: &str,
+        rev: &str,
+        path: &str,
+    ) -> GitResult<Option<(String, String)>> {
+        let repo = self.existing_repo_path(name)?;
+        let stdout = self
+            .run(
+                Some(&repo),
+                &["log", "-1", "--format=%H%x1f%s", rev, "--", path],
+            )
+            .await?;
+        Ok(String::from_utf8_lossy(&stdout)
+            .trim()
+            .split_once('\u{1f}')
+            .map(|(oid, subject)| (oid.to_owned(), subject.to_owned())))
+    }
+
+    /// A blob's contents at `rev`, or None when the path doesn't exist.
+    pub async fn show_file(&self, name: &str, rev: &str, path: &str) -> GitResult<Option<Vec<u8>>> {
+        let repo = self.existing_repo_path(name)?;
+        match self
+            .run(Some(&repo), &["show", &format!("{rev}:{path}")])
+            .await
+        {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(GitError::CommandFailed { .. }) => Ok(None),
+            Err(other) => Err(other),
+        }
+    }
+
+    /// The unified diff a commit introduces over its first parent.
+    pub async fn show_patch(&self, name: &str, oid: &str) -> GitResult<String> {
+        let repo = self.existing_repo_path(name)?;
+        let stdout = self
+            .run(
+                Some(&repo),
+                &["show", "--format=", "--patch", "--no-color", oid],
+            )
+            .await?;
+        Ok(String::from_utf8_lossy(&stdout).into_owned())
+    }
+
     /// Current tip of a branch, or None if the branch doesn't exist yet.
     pub async fn tip(&self, name: &str, branch: &str) -> GitResult<Option<String>> {
         let path = self.existing_repo_path(name)?;

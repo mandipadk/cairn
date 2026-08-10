@@ -39,6 +39,7 @@ pub fn routes() -> Router<AppState> {
         .route("/theme", post(set_theme))
         .route("/{repo}", get(repo_page))
         .route("/{repo}/tree/{*path}", get(tree_page))
+        .route("/{repo}/blame/{*path}", get(blame_page))
         .route("/{repo}/changes", get(changes_page))
         .route("/{repo}/changes/{number}", get(change_page))
         .route("/{repo}/changes/{number}/verdict", post(submit_verdict))
@@ -370,6 +371,61 @@ fn sidebar_data(
         sessions: app.with_store(|s| s.active_sessions())?,
         numbers,
     })
+}
+
+/// Attribution that answers "what do we know about this line": which
+/// change landed it, what was claimed, who judged it — and what the
+/// claims explicitly left unverified.
+async fn blame_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    viewer: Viewer,
+    Path((repo, path)): Path<(String, String)>,
+) -> Response {
+    let Some(git) = app.git() else {
+        return not_found();
+    };
+    let record = match app.with_store(|s| s.repo(&repo)) {
+        Ok(Some(record)) => record,
+        Ok(None) => return not_found(),
+        Err(err) => return oops(err),
+    };
+    let rev = format!("refs/heads/{}", record.default_branch);
+    let text = match git.store.show_file(&repo, &rev, &path).await {
+        Ok(Some(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
+        Ok(None) => return not_found(),
+        Err(err) => return oops(err),
+    };
+    let oids = git
+        .store
+        .blame_lines(&repo, &rev, &path)
+        .await
+        .unwrap_or_default();
+
+    // One lookup per distinct commit, not per line.
+    let mut known: HashMap<String, Option<std::sync::Arc<cairn_core::Provenance>>> = HashMap::new();
+    let mut rows = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let oid = oids.get(index).cloned().unwrap_or_default();
+        let provenance = match known.get(&oid) {
+            Some(hit) => hit.clone(),
+            None => {
+                let found = app
+                    .with_store(|s| s.provenance_of(&repo, &oid))
+                    .ok()
+                    .flatten()
+                    .map(std::sync::Arc::new);
+                known.insert(oid.clone(), found.clone());
+                found
+            }
+        };
+        rows.push(views::BlameRow {
+            number: index + 1,
+            text: line.to_owned(),
+            provenance,
+        });
+    }
+    views::blame(theme, &viewer, &repo, &path, &rows).into_response()
 }
 
 async fn changes_page(

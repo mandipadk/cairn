@@ -24,7 +24,7 @@ use cairn_core::{ChangeState, PrincipalId};
 use cairn_git::Service;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 
 /// Clone URLs may spell the repo with or without a `.git` suffix.
@@ -491,4 +491,55 @@ pub async fn merge_with_git(
         ));
     }
     Ok(committed(None, &env))
+}
+
+#[derive(Deserialize)]
+pub struct BlameQuery {
+    pub path: String,
+}
+
+/// What is known about each line of a file: the change that landed it,
+/// what was claimed, who judged it, and what the claims left
+/// unverified. The pre-flight question an agent should ask before
+/// touching code it did not write.
+pub async fn blame(
+    State(app): State<AppState>,
+    _actor: Actor,
+    Path(repo): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<BlameQuery>,
+) -> ApiResult<Json<Value>> {
+    let git = git_enabled(&app)?;
+    let record = app
+        .with_store(|s| s.repo(&repo))?
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not_found", "repo not found"))?;
+    let rev = format!("refs/heads/{}", record.default_branch);
+    let oids = git.store.blame_lines(&repo, &rev, &query.path).await?;
+
+    let mut known: HashMap<String, Option<cairn_core::Provenance>> = HashMap::new();
+    let mut lines = Vec::with_capacity(oids.len());
+    for (index, oid) in oids.iter().enumerate() {
+        if !known.contains_key(oid) {
+            known.insert(
+                oid.clone(),
+                app.with_store(|s| s.provenance_of(&repo, oid))?,
+            );
+        }
+        let provenance = known.get(oid).and_then(Option::as_ref);
+        lines.push(json!({
+            "line": index + 1,
+            "commit": oid,
+            "change": provenance.map(|p| p.change.number),
+            "executed_check": provenance.map(|p| p.executed_check()),
+            "unchecked": provenance.map(|p| p.unchecked()).unwrap_or_default(),
+        }));
+    }
+    let unverified = lines
+        .iter()
+        .filter(|l| l["executed_check"] == Value::Bool(false))
+        .count();
+    Ok(Json(json!({
+        "path": query.path,
+        "lines": lines,
+        "unverified_lines": unverified,
+    })))
 }

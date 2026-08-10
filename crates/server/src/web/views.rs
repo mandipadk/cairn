@@ -42,6 +42,13 @@ impl Theme {
     }
 }
 
+/// One line of a file, with everything the graph knows about it.
+pub struct BlameRow {
+    pub number: usize,
+    pub text: String,
+    pub provenance: Option<std::sync::Arc<cairn_core::Provenance>>,
+}
+
 /// One row of a tree listing, with the change that last touched it.
 pub struct Entry {
     pub is_dir: bool,
@@ -388,6 +395,7 @@ pub fn file(
                         "#" (change.number) " " (change.title)
                     }
                 }
+                a class="right-link link" href={ "/" (repo) "/blame/" (path) } { "Blame" }
             }
             @if binary {
                 p class="empty" { "Binary file — nothing to show." }
@@ -949,4 +957,123 @@ pub fn log(
             }
         },
     )
+}
+
+/// Blame that answers what was *known*, not just who typed. Each line
+/// carries the change that landed it; lines whose change never ran an
+/// executed check, or whose claims named a gap, are marked — the
+/// question "which code here was never actually verified" is the one
+/// this view exists to answer.
+pub fn blame(theme: Theme, viewer: &Viewer, repo: &str, path: &str, rows: &[BlameRow]) -> Markup {
+    // A line is flagged when the judgment behind it left something
+    // open: no executed check at all, or a claim that named a gap.
+    let flagged = |row: &BlameRow| {
+        row.provenance
+            .as_ref()
+            .is_some_and(|p| !p.executed_check() || !p.unchecked().is_empty())
+    };
+    let with_gaps = rows.iter().filter(|r| flagged(r)).count();
+    let unattributed = rows.iter().filter(|r| r.provenance.is_none()).count();
+    layout(
+        theme,
+        Some(viewer),
+        Some(repo),
+        Some(Tab::Code),
+        path,
+        html! {
+            div class="crumbs" { (breadcrumbs(repo, path)) }
+            div class="file-bar" {
+                span { (rows.len()) " lines" }
+                @if with_gaps > 0 {
+                    span class="sep" { "·" }
+                    span class="warn" { (with_gaps) " under a declared gap" }
+                }
+                @if unattributed > 0 {
+                    span class="sep" { "·" }
+                    span { (unattributed) " outside the graph" }
+                }
+                a class="right-link link" href={ "/" (repo) "/tree/" (path) } { "Source" }
+            }
+            div class="code blame" {
+                @for (index, row) in rows.iter().enumerate() {
+                    // Attribution is labelled once per run of lines from
+                    // the same change, the way a reader scans it.
+                    @let starts_run = index == 0
+                        || rows[index - 1].provenance.as_ref().map(|p| p.change.number)
+                            != row.provenance.as_ref().map(|p| p.change.number);
+                    div class={ "cline" @if flagged(row) { " gap" } @if starts_run { " run" } } {
+                        span class="who" {
+                            @if starts_run {
+                                @match &row.provenance {
+                                    Some(p) => {
+                                        a class="link" href={ "/" (repo) "/changes/" (p.change.number) }
+                                          title=(attribution(p)) {
+                                            "#" (p.change.number)
+                                        }
+                                    }
+                                    None => { span class="sec3" { "—" } }
+                                }
+                            }
+                        }
+                        span class="no" { (row.number) }
+                        span class={ "src" @if is_comment(&row.text) { " comment" } } { (row.text) }
+                    }
+                }
+            }
+            (coverage_gaps(repo, rows))
+        },
+    )
+}
+
+/// The tooltip a line carries: what was claimed, who approved, and
+/// what nobody checked.
+fn attribution(p: &cairn_core::Provenance) -> String {
+    let mut parts = vec![p.change.title.clone()];
+    for claim in &p.claims {
+        let mark = if claim.passed { "passed" } else { "failed" };
+        parts.push(format!(
+            "{} {mark} — {}",
+            claim.kind.as_str(),
+            claim.summary
+        ));
+    }
+    for verdict in p.approvals() {
+        parts.push(format!(
+            "approved by {} ({})",
+            verdict.by,
+            verdict.domain.as_str()
+        ));
+    }
+    for gap in p.unchecked() {
+        parts.push(format!("not checked: {gap}"));
+    }
+    parts.join("\n")
+}
+
+/// Everything the changes behind this file declared out of scope,
+/// collected in one place.
+fn coverage_gaps(repo: &str, rows: &[BlameRow]) -> Markup {
+    let mut seen: Vec<(i64, String, String)> = Vec::new();
+    for row in rows {
+        let Some(p) = &row.provenance else { continue };
+        for gap in p.unchecked() {
+            let entry = (p.change.number, p.change.title.clone(), gap.to_owned());
+            if !seen.contains(&entry) {
+                seen.push(entry);
+            }
+        }
+    }
+    html! {
+        @if !seen.is_empty() {
+            section class="gaps" {
+                header { h2 { "Declared gaps" } span { (seen.len()) } }
+                @for (number, title, gap) in &seen {
+                    div class="gap-row" {
+                        a class="link sec2" href={ "/" (repo) "/changes/" (number) } { "#" (number) " " (title) }
+                        span { (gap) }
+                    }
+                }
+            }
+        }
+    }
 }

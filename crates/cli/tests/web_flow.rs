@@ -179,7 +179,11 @@ async fn web_ui_full_journey() {
         "POST",
         &format!("/api/changes/{change_id}/claims"),
         "scout",
-        Some(json!({ "kind": "test", "passed": true, "summary": "renders escaped" })),
+        Some(json!({
+            "kind": "test", "passed": true, "summary": "renders escaped",
+            "command": "cargo test -p cairn-server",
+            "unchecked": ["rendering under right-to-left scripts"]
+        })),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -243,6 +247,20 @@ async fn web_ui_full_journey() {
         "a file should link to its change"
     );
     assert!(body.contains(r#"class="cline""#), "lines are numbered rows");
+
+    // Blame answers what was known, not just who typed: the line's
+    // change, and the gap its claim declared.
+    let (status, body, _) = ada.get("/demo/blame/greeting.txt");
+    assert_eq!(status, 200);
+    assert!(body.contains("Declared gaps"), "gaps section should render");
+    assert!(
+        body.contains("rendering under right-to-left scripts"),
+        "the gap a claim declared should surface on the file that inherited it"
+    );
+    assert!(
+        body.contains("/demo/changes/1"),
+        "each line links to its change"
+    );
 
     // Sign out kills the cookie path.
     let (status, _) = ada.post_form("/logout", &[]);

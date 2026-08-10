@@ -426,6 +426,29 @@ impl GitStore {
             .map(|(oid, subject)| (oid.to_owned(), subject.to_owned())))
     }
 
+    /// Which commit last touched each line of a file: one oid per line,
+    /// in file order. `git blame --line-porcelain` gives an oid header
+    /// per line; we keep only that.
+    pub async fn blame_lines(&self, name: &str, rev: &str, path: &str) -> GitResult<Vec<String>> {
+        let repo = self.existing_repo_path(name)?;
+        let stdout = self
+            .run(Some(&repo), &["blame", "--line-porcelain", rev, "--", path])
+            .await?;
+        Ok(String::from_utf8_lossy(&stdout)
+            .lines()
+            .filter(|line| {
+                // Header lines are "<oid> <orig-line> <final-line>[ n]";
+                // porcelain content lines are tab-prefixed.
+                !line.starts_with('\t')
+                    && line.len() > 40
+                    && line.split(' ').next().is_some_and(|first| {
+                        first.len() >= 40 && first.chars().all(|c| c.is_ascii_hexdigit())
+                    })
+            })
+            .filter_map(|line| line.split(' ').next().map(str::to_owned))
+            .collect())
+    }
+
     /// A blob's contents at `rev`, or None when the path doesn't exist.
     pub async fn show_file(&self, name: &str, rev: &str, path: &str) -> GitResult<Option<Vec<u8>>> {
         let repo = self.existing_repo_path(name)?;

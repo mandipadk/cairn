@@ -64,6 +64,14 @@ that landed it), read a change with its verification, judgment and
 readiness side by side, give a verdict, enqueue, and watch the landing
 queue and event log. Sign in with an API token.
 
+Blame answers a different question here. Instead of who typed a line,
+each line carries the change that landed it, what was claimed about it,
+who judged it — and what those claims explicitly left unverified.
+Lines that landed under a declared gap are marked, and the gaps are
+listed. The same view is available to agents as an API endpoint and an
+MCP tool, so an agent can ask what is known about code before changing
+it.
+
 Not yet implemented: claim re-verification by trusted runners,
 speculative queue batching, and path leases with conflict forecasting.
 

@@ -166,6 +166,11 @@ fn dispatch(client: &ApiClient, name: &str, args: &Value) -> Result<(u16, Value)
             &format!("/api/changes/{}/merge", need(args, "change")?),
             args,
         ),
+        "blame" => client.get(&format!(
+            "/api/repos/{}/blame?path={}",
+            need(args, "repo")?,
+            need(args, "path")?
+        )),
         "list_events" => {
             let after = args.get("after").and_then(Value::as_i64).unwrap_or(0);
             let limit = args.get("limit").and_then(Value::as_i64).unwrap_or(100);
@@ -337,6 +342,16 @@ fn tool_definitions() -> Vec<Value> {
              naming the unmet requirements.",
             &["change"],
             json!({ "change": s("Change id") }),
+        ),
+        tool(
+            "blame",
+            "Before changing code you did not write: what is known about each line of a \
+             file — the change that landed it, whether an executed check ever covered it, \
+             and what its claims explicitly left unverified. Lines with executed_check \
+             false, or with entries in unchecked, are where your own verification matters \
+             most.",
+            &["repo", "path"],
+            json!({ "repo": s("Repo name"), "path": s("File path within the repo") }),
         ),
         tool(
             "list_events",

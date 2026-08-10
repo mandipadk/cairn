@@ -184,6 +184,23 @@ a.srow:hover .t { text-decoration: underline; }
 .cline .src { white-space: pre; padding-right: 32px; }
 .cline .src.comment { color: var(--ink2); }
 
+/* blame: attribution as judgment */
+.file-bar .right-link { margin-left: auto; color: var(--ink2); }
+.file-bar .warn { color: var(--bad); }
+.code.blame .cline { grid-template-columns: 52px 56px 1fr; }
+.blame .who { text-align: right; padding-right: 14px; font-size: 11px; color: var(--ink2); }
+.blame .who a:hover { color: var(--ink); text-decoration: underline; }
+.blame .cline.run { border-top: 1px solid var(--hair); }
+.blame .cline.run:first-child { border-top: none; }
+.blame .cline.gap .who a { color: var(--bad); }
+.blame .cline.gap .no { color: var(--bad); opacity: 0.7; }
+.gaps { border-top: 1px solid var(--hair); padding: 18px 22px 30px; }
+.gaps > header { display: flex; align-items: baseline; gap: 8px; padding-bottom: 8px; }
+.gaps > header h2 { font-size: 13px; font-weight: 600; }
+.gaps > header span { font-size: 11.5px; color: var(--ink3); }
+.gap-row { display: grid; grid-template-columns: minmax(0, 22rem) minmax(0, 1fr); gap: 16px; padding: 6px 0; font-size: 12.5px; color: var(--ink2); }
+.gap-row a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* changes list */
 .ctable .trow { grid-template-columns: 16px 52px minmax(0, 1fr) 140px 40px; }
 

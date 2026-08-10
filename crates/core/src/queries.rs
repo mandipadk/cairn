@@ -9,8 +9,8 @@ use crate::id::{ChangeId, PrincipalId, SessionId, TaskId};
 use crate::store::Store;
 use crate::types::{
     Capability, Change, ChangeState, Claim, ClaimKind, Disposition, Grant, ObjectFormat, Principal,
-    PrincipalKind, QueueEntry, Repo, ReviewDomain, Revision, Session, SessionState, Task,
-    TaskState, TokenInfo, Verdict,
+    PrincipalKind, Provenance, QueueEntry, Repo, ReviewDomain, Revision, Session, SessionState,
+    Task, TaskState, TokenInfo, Verdict,
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
@@ -611,6 +611,21 @@ impl Store {
 
     pub fn change_by_landed_oid(&self, repo: &str, oid: &str) -> CoreResult<Option<Change>> {
         raw::change_by_landed_oid(&self.conn, repo, oid)
+    }
+
+    /// The judgment behind a landed commit: the change, what was
+    /// claimed about it, and who judged it. The join that turns
+    /// attribution from "who wrote this" into "what do we know".
+    pub fn provenance_of(&self, repo: &str, oid: &str) -> CoreResult<Option<Provenance>> {
+        let Some(change) = raw::change_by_landed_oid(&self.conn, repo, oid)? else {
+            return Ok(None);
+        };
+        let revision = change.latest_revision;
+        Ok(Some(Provenance {
+            claims: raw::claims_on(&self.conn, change.id.as_str(), revision)?,
+            verdicts: raw::verdicts_on(&self.conn, change.id.as_str(), revision)?,
+            change,
+        }))
     }
 
     pub fn active_sessions(&self) -> CoreResult<Vec<Session>> {

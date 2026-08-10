@@ -764,3 +764,113 @@ fn merge_queue_lifecycle_and_guards() {
         .unwrap();
     assert!(store.queue_entry(&parent).unwrap().is_none());
 }
+
+#[test]
+fn provenance_follows_a_landed_commit_to_its_judgment() {
+    let (mut store, human, scout, _) = seeded();
+    let (change, number, _) = store
+        .open_change(&scout, ChangeSpec::new("forge", "main", "Touch the parser"))
+        .unwrap();
+    store
+        .push_revision(&scout, &change, OID, None, "parse")
+        .unwrap();
+    store
+        .attach_claim(
+            &scout,
+            &change,
+            1,
+            ClaimSpec {
+                kind: ClaimKind::Test,
+                command: Some("cargo test -p parser".into()),
+                passed: true,
+                summary: "18 tests passed".into(),
+                unchecked: vec!["inputs larger than 1 MiB".into(), "invalid utf-8".into()],
+            },
+        )
+        .unwrap();
+    store
+        .give_verdict(
+            &human,
+            &change,
+            1,
+            ReviewDomain::Correctness,
+            Disposition::Approve,
+            "ok",
+        )
+        .unwrap();
+
+    // Nothing is attributable until the change actually lands.
+    assert!(store.provenance_of("forge", OID).unwrap().is_none());
+
+    // The queue rebased it, so the landed commit is not the revision.
+    let landed = "b".repeat(40);
+    store
+        .merge_change_as(&human, &change, Some(&landed))
+        .unwrap();
+
+    let found = store
+        .provenance_of("forge", &landed)
+        .unwrap()
+        .expect("attributable");
+    assert_eq!(found.change.number, number);
+    assert!(
+        found.executed_check(),
+        "a passing test claim is an executed check"
+    );
+    assert_eq!(
+        found.unchecked(),
+        ["inputs larger than 1 MiB", "invalid utf-8"]
+    );
+    assert_eq!(found.approvals().len(), 1);
+    // The reviewed revision's oid is not what the branch carries.
+    assert!(store.provenance_of("forge", OID).unwrap().is_none());
+    // Another repo's commits are not ours to attribute.
+    assert!(store.provenance_of("other", &landed).unwrap().is_none());
+}
+
+#[test]
+fn reasoning_only_claims_are_not_an_executed_check() {
+    let (mut store, human, scout, _) = seeded();
+    let (change, _, _) = store
+        .open_change(&scout, ChangeSpec::new("forge", "main", "Argued, not run"))
+        .unwrap();
+    store
+        .push_revision(&scout, &change, OID, None, "argue")
+        .unwrap();
+    store
+        .attach_claim(
+            &scout,
+            &change,
+            1,
+            ClaimSpec {
+                kind: ClaimKind::Reasoning,
+                command: None,
+                passed: true,
+                summary: "the change is obviously safe".into(),
+                unchecked: vec!["everything an execution would have covered".into()],
+            },
+        )
+        .unwrap();
+    store
+        .give_verdict(
+            &human,
+            &change,
+            1,
+            ReviewDomain::Design,
+            Disposition::Approve,
+            "fine",
+        )
+        .unwrap();
+    // Default policy will not land argument alone, so force the record
+    // the way a repo with a laxer policy would.
+    let landed = "c".repeat(40);
+    assert!(
+        store
+            .merge_change_as(&human, &change, Some(&landed))
+            .is_err()
+    );
+
+    // The distinction the register depends on holds regardless.
+    let claims = store.claims_on(&change, 1).unwrap();
+    assert!(claims.iter().all(|c| c.kind == ClaimKind::Reasoning));
+}

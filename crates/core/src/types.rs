@@ -245,6 +245,45 @@ pub struct TokenInfo {
     pub revoked: bool,
 }
 
+/// What the graph knows about a change that landed: the judgment
+/// behind the code, gathered for attribution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Provenance {
+    pub change: Change,
+    pub claims: Vec<Claim>,
+    pub verdicts: Vec<Verdict>,
+}
+
+impl Provenance {
+    /// Did anything actually run against this revision, or was it
+    /// argued for? Reasoning-only claims are the weakest kind.
+    pub fn executed_check(&self) -> bool {
+        self.claims
+            .iter()
+            .any(|c| c.kind != ClaimKind::Reasoning && c.passed)
+    }
+
+    /// Everything the claims declared out of scope. The question no
+    /// other forge can answer: which lines were never verified?
+    pub fn unchecked(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = self
+            .claims
+            .iter()
+            .flat_map(|c| c.unchecked.iter().map(String::as_str))
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    pub fn approvals(&self) -> Vec<&Verdict> {
+        self.verdicts
+            .iter()
+            .filter(|v| v.disposition == Disposition::Approve)
+            .collect()
+    }
+}
+
 /// One change waiting in a branch's landing queue.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueEntry {

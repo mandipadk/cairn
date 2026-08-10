@@ -11,6 +11,37 @@ use cairn_core::{
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 use std::collections::HashMap;
 
+/// Which palette the page renders in. Dark is the default; a viewer
+/// can switch, and the choice rides in a cookie.
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub enum Theme {
+    Dark,
+    Light,
+}
+
+impl Theme {
+    pub fn attr(self) -> &'static str {
+        match self {
+            Theme::Dark => "dark",
+            Theme::Light => "light",
+        }
+    }
+
+    fn other(self) -> &'static str {
+        match self {
+            Theme::Dark => "light",
+            Theme::Light => "dark",
+        }
+    }
+
+    fn switch_label(self) -> &'static str {
+        match self {
+            Theme::Dark => "Light",
+            Theme::Light => "Dark",
+        }
+    }
+}
+
 /// One row of a tree listing, with the change that last touched it.
 pub struct Entry {
     pub is_dir: bool,
@@ -28,6 +59,7 @@ pub enum Tab {
 }
 
 fn layout(
+    theme: Theme,
     viewer: Option<&Viewer>,
     repo: Option<&str>,
     active: Option<Tab>,
@@ -36,7 +68,7 @@ fn layout(
 ) -> Markup {
     html! {
         (DOCTYPE)
-        html lang="en" {
+        html lang="en" data-theme=(theme.attr()) {
             head {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
@@ -59,8 +91,12 @@ fn layout(
                             }
                         }
                         div class="right" {
+                            form method="post" action="/theme" {
+                                input type="hidden" name="to" value=(theme.other());
+                                button class="quiet" type="submit" { (theme.switch_label()) }
+                            }
                             form method="post" action="/logout" {
-                                button class="signout" type="submit" { "Sign out" }
+                                button class="quiet" type="submit" { "Sign out" }
                             }
                             span class="avatar" { (viewer.0.as_str().chars().next().unwrap_or('?').to_uppercase()) }
                         }
@@ -95,8 +131,9 @@ fn clock(ts: &str) -> &str {
     ts.get(11..16).unwrap_or(ts)
 }
 
-pub fn login(dev: bool, error: Option<&str>) -> Markup {
+pub fn login(theme: Theme, dev: bool, error: Option<&str>) -> Markup {
     layout(
+        theme,
         None,
         None,
         None,
@@ -129,8 +166,9 @@ pub fn login(dev: bool, error: Option<&str>) -> Markup {
     )
 }
 
-pub fn home(viewer: &Viewer, repos: &[Repo]) -> Markup {
+pub fn home(theme: Theme, viewer: &Viewer, repos: &[Repo]) -> Markup {
     layout(
+        theme,
         Some(viewer),
         None,
         None,
@@ -152,6 +190,7 @@ pub fn home(viewer: &Viewer, repos: &[Repo]) -> Markup {
 
 pub fn error_page() -> Markup {
     layout(
+        Theme::Dark,
         None,
         None,
         None,
@@ -164,6 +203,7 @@ pub fn error_page() -> Markup {
 
 pub fn not_found_page() -> Markup {
     layout(
+        Theme::Dark,
         None,
         None,
         None,
@@ -176,6 +216,7 @@ pub fn not_found_page() -> Markup {
 
 #[allow(clippy::too_many_arguments)]
 pub fn repository(
+    theme: Theme,
     viewer: &Viewer,
     repo: &str,
     branch: &str,
@@ -186,6 +227,7 @@ pub fn repository(
     sidebar: &Sidebar,
 ) -> Markup {
     layout(
+        theme,
         Some(viewer),
         Some(repo),
         Some(Tab::Code),
@@ -235,9 +277,12 @@ pub fn repository(
                     }
                 }
                 div class="colr" {
-                    div class="side-sec" {
-                        span class="cap" { "Open changes" }
-                        @if sidebar.open_changes.is_empty() { div class="srow sec3" { "None" } }
+                    section class="side-sec" {
+                        header {
+                            h2 { "Open changes" }
+                            span { (sidebar.open_changes.len()) }
+                        }
+                        @if sidebar.open_changes.is_empty() { p class="none" { "None open." } }
                         @for change in &sidebar.open_changes {
                             a class="srow" href={ "/" (repo) "/changes/" (change.number) } {
                                 (state_dot(change.state))
@@ -246,23 +291,32 @@ pub fn repository(
                             }
                         }
                     }
-                    div class="side-sec" {
-                        span class="cap" { "Landing on " (branch) }
-                        @if sidebar.queue.is_empty() { div class="srow sec3" { "Queue is empty" } }
+                    section class="side-sec" {
+                        header {
+                            h2 { "Landing" }
+                            span { (branch) }
+                        }
+                        @if sidebar.queue.is_empty() { p class="none" { "Queue is empty." } }
                         @for (index, entry) in sidebar.queue.iter().enumerate() {
                             div class="srow" {
                                 span class="sec3" { (index + 1) }
-                                span class={ "t" @if index == 0 { " landing-line" } } { code { (short(entry.change.as_str())) } }
+                                span class={ "t" @if index == 0 { " landing-line" } } {
+                                    (change_short(&sidebar.numbers, entry.change.as_str()))
+                                }
                             }
                         }
                     }
-                    div class="side-sec" {
-                        span class="cap" { "Fleet" }
-                        @if sidebar.sessions.is_empty() { div class="srow sec3" { "No active sessions" } }
+                    section class="side-sec" {
+                        header {
+                            h2 { "Fleet" }
+                            span { (sidebar.sessions.len()) }
+                        }
+                        @if sidebar.sessions.is_empty() { p class="none" { "No active sessions." } }
                         @for session in &sidebar.sessions {
                             div class="srow" {
                                 span class="dot ok" {}
                                 span class="t" { (session.agent) }
+                                span class="age" { "working" }
                             }
                         }
                     }
@@ -302,22 +356,72 @@ fn markdown(source: &str) -> Markup {
     PreEscaped(out)
 }
 
-pub fn file(viewer: &Viewer, repo: &str, path: &str, text: &str) -> Markup {
+pub fn file(
+    theme: Theme,
+    viewer: &Viewer,
+    repo: &str,
+    path: &str,
+    text: &str,
+    landed_by: Option<&Change>,
+) -> Markup {
+    let lines: Vec<&str> = text.split('\n').collect();
+    // A trailing newline is a line terminator, not an empty last line.
+    let lines = match lines.split_last() {
+        Some((last, rest)) if last.is_empty() && !rest.is_empty() => rest,
+        _ => &lines[..],
+    };
+    let binary = text.contains('\u{0}');
     layout(
+        theme,
         Some(viewer),
         Some(repo),
         Some(Tab::Code),
         path,
         html! {
-            div class="repo-bar" {}
             div class="crumbs" { (breadcrumbs(repo, path)) }
-            div class="fileview" { pre { code { (text) } } }
+            div class="file-bar" {
+                span { (lines.len()) " lines" }
+                @if let Some(change) = landed_by {
+                    span class="sep" { "·" }
+                    span { "last landed by " }
+                    a class="link" href={ "/" (repo) "/changes/" (change.number) } {
+                        "#" (change.number) " " (change.title)
+                    }
+                }
+            }
+            @if binary {
+                p class="empty" { "Binary file — nothing to show." }
+            } @else {
+                div class="code" {
+                    @for (index, line) in lines.iter().enumerate() {
+                        div class="cline" {
+                            span class="no" { (index + 1) }
+                            span class={ "src" @if is_comment(line) { " comment" } } { (line) }
+                        }
+                    }
+                }
+            }
         },
     )
 }
 
-pub fn changes(viewer: &Viewer, repo: &str, changes: &[Change]) -> Markup {
+/// Comments read as asides, so they are set in the secondary ink. A
+/// heuristic across languages, kept deliberately conservative: `#` only
+/// counts when followed by a space, so Rust attributes and C includes
+/// stay in full ink.
+fn is_comment(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with("//")
+        || t.starts_with("/*")
+        || t.starts_with('*')
+        || t.starts_with("--")
+        || t.starts_with("# ")
+        || t == "#"
+}
+
+pub fn changes(theme: Theme, viewer: &Viewer, repo: &str, changes: &[Change]) -> Markup {
     layout(
+        theme,
         Some(viewer),
         Some(repo),
         Some(Tab::Changes),
@@ -340,6 +444,7 @@ pub fn changes(viewer: &Viewer, repo: &str, changes: &[Change]) -> Markup {
 }
 
 pub struct ChangePage<'a> {
+    pub theme: Theme,
     pub viewer: &'a Viewer,
     pub repo: &'a str,
     pub change: &'a Change,
@@ -356,6 +461,7 @@ pub struct ChangePage<'a> {
 
 pub fn change(page: ChangePage) -> Markup {
     let ChangePage {
+        theme,
         viewer,
         repo,
         change,
@@ -372,6 +478,7 @@ pub fn change(page: ChangePage) -> Markup {
     let title = format!("#{} {}", change.number, change.title);
     let satisfied = trace.requirements.iter().filter(|r| r.satisfied).count();
     layout(
+        theme,
         Some(viewer),
         Some(repo),
         Some(Tab::Changes),
@@ -537,13 +644,20 @@ fn verdict_row(verdict: &Verdict) -> Markup {
     }
 }
 
-pub fn landing(viewer: &Viewer, repo: &str, branch: &str, data: &LandingData) -> Markup {
+pub fn landing(
+    theme: Theme,
+    viewer: &Viewer,
+    repo: &str,
+    branch: &str,
+    data: &LandingData,
+) -> Markup {
     let numbers: Refs = data
         .numbers
         .iter()
         .map(|(id, (number, title))| (id.as_str(), (*number, title.as_str())))
         .collect();
     layout(
+        theme,
         Some(viewer),
         Some(repo),
         Some(Tab::Landing),
@@ -585,19 +699,26 @@ pub fn landing(viewer: &Viewer, repo: &str, branch: &str, data: &LandingData) ->
                     }
                 }
                 div class="colr" {
-                    div class="side-sec" {
-                        span class="cap" { "Live" }
+                    section class="side-sec" {
+                        header {
+                            h2 { "Live" }
+                            span { "seq " (data.latest_seq) }
+                        }
                         @for envelope in &data.live {
                             (event_row(&numbers, envelope))
                         }
                     }
-                    div class="side-sec" {
-                        span class="cap" { "Fleet" }
-                        @if data.sessions.is_empty() { div class="srow sec3" { "No active sessions" } }
+                    section class="side-sec" {
+                        header {
+                            h2 { "Fleet" }
+                            span { (data.sessions.len()) }
+                        }
+                        @if data.sessions.is_empty() { p class="none" { "No active sessions." } }
                         @for session in &data.sessions {
                             div class="srow" {
                                 span class="dot ok" {}
                                 span class="t" { (session.agent) }
+                                span class="age" { "working" }
                             }
                         }
                     }
@@ -611,6 +732,15 @@ type Refs<'a> = HashMap<&'a str, (i64, &'a str)>;
 
 /// A change referred to the way a person would: number and title.
 fn change_ref(numbers: &Refs, id: &str) -> Markup {
+    match numbers.get(id) {
+        Some((number, title)) => html! { "#" (number) " " (title) },
+        None => html! { code { (short(id)) } },
+    }
+}
+
+/// A compact reference for narrow columns: number and title, elided
+/// by the layout rather than truncated here.
+fn change_short(numbers: &HashMap<String, (i64, String)>, id: &str) -> Markup {
     match numbers.get(id) {
         Some((number, title)) => html! { "#" (number) " " (title) },
         None => html! { code { (short(id)) } },
@@ -782,6 +912,7 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
 }
 
 pub fn log(
+    theme: Theme,
     viewer: &Viewer,
     repo: &str,
     numbers: &HashMap<String, (i64, String)>,
@@ -793,6 +924,7 @@ pub fn log(
         .map(|(id, (number, title))| (id.as_str(), (*number, title.as_str())))
         .collect();
     layout(
+        theme,
         Some(viewer),
         Some(repo),
         Some(Tab::Log),

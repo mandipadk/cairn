@@ -9,10 +9,12 @@ use axum::Router;
 use axum::http::StatusCode;
 use serde_json::json;
 
+/// A minimal browser: one cookie jar, no redirect following, so each
+/// hop is asserted explicitly.
 struct Browser {
     agent: ureq::Agent,
     base: String,
-    cookie: Option<String>,
+    jar: std::collections::BTreeMap<String, String>,
 }
 
 impl Browser {
@@ -24,13 +26,43 @@ impl Browser {
         Browser {
             agent: config.into(),
             base,
-            cookie: None,
+            jar: std::collections::BTreeMap::new(),
+        }
+    }
+
+    fn cookie_header(&self) -> Option<String> {
+        if self.jar.is_empty() {
+            return None;
+        }
+        Some(
+            self.jar
+                .iter()
+                .map(|(name, value)| format!("{name}={value}"))
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
+    }
+
+    fn remember(&mut self, response: &http::response::Parts) {
+        for set in response.headers.get_all("set-cookie") {
+            let Ok(text) = set.to_str() else { continue };
+            let Some((pair, _)) = text.split_once(';') else {
+                continue;
+            };
+            let Some((name, value)) = pair.split_once('=') else {
+                continue;
+            };
+            if value.is_empty() {
+                self.jar.remove(name);
+            } else {
+                self.jar.insert(name.to_owned(), value.to_owned());
+            }
         }
     }
 
     fn get(&self, path: &str) -> (u16, String, Option<String>) {
         let mut request = self.agent.get(format!("{}{path}", self.base));
-        if let Some(cookie) = &self.cookie {
+        if let Some(cookie) = self.cookie_header() {
             request = request.header("cookie", cookie);
         }
         let mut response = request.call().unwrap();
@@ -45,18 +77,16 @@ impl Browser {
 
     fn post_form(&mut self, path: &str, fields: &[(&str, &str)]) -> (u16, Option<String>) {
         let mut request = self.agent.post(format!("{}{path}", self.base));
-        if let Some(cookie) = &self.cookie {
+        if let Some(cookie) = self.cookie_header() {
             request = request.header("cookie", cookie);
         }
         let response = request.send_form(fields.iter().copied()).unwrap();
-        if let Some(set) = response.headers().get("set-cookie") {
-            let pair = set.to_str().unwrap().split(';').next().unwrap().to_owned();
-            self.cookie = Some(pair);
-        }
+        let (parts, _) = response.into_parts();
+        self.remember(&parts);
         (
-            response.status().as_u16(),
-            response
-                .headers()
+            parts.status.as_u16(),
+            parts
+                .headers
                 .get("location")
                 .map(|v| v.to_str().unwrap().to_owned()),
         )
@@ -80,22 +110,19 @@ async fn web_ui_full_journey() {
     // A bad token bounces with a message; a real one signs in.
     let (_, location) = browser.post_form("/login", &[("token", "cairn_bogus")]);
     assert!(location.unwrap().contains("error="));
-    assert!(browser.cookie.is_none());
+    assert!(
+        browser.jar.is_empty(),
+        "a rejected token must not sign anyone in"
+    );
     let scout_token = forge.scout_token.clone();
     let (status, _) = browser.post_form("/login", &[("token", &scout_token)]);
     assert_eq!(status, 303);
-    assert!(
-        browser
-            .cookie
-            .as_deref()
-            .unwrap()
-            .starts_with("cairn_token=")
-    );
+    assert!(browser.jar.contains_key("cairn_token"));
 
     // Dev mode also accepts an asserted principal; ada browses as human.
     let mut ada = Browser::new(base.clone());
     ada.post_form("/login", &[("principal", "ada")]);
-    assert!(ada.cookie.as_deref().unwrap().starts_with("cairn_dev="));
+    assert!(ada.jar.contains_key("cairn_dev"));
 
     // Home redirects into the only repo; the tree is empty pre-merge.
     let (status, _, location) = ada.get("/");
@@ -188,11 +215,39 @@ async fn web_ui_full_journey() {
     let (status, _, _) = ada.get("/nosuchrepo");
     assert_eq!(status, 404);
 
+    // Dark is what a fresh viewer gets; the toggle switches and sticks.
+    let (_, body, _) = ada.get("/demo");
+    assert!(
+        body.contains(r#"data-theme="dark""#),
+        "dark must be the default palette"
+    );
+    assert!(
+        body.contains(">Light<"),
+        "the switch offers the other palette"
+    );
+    let (status, _) = ada.post_form("/theme", &[("to", "light"), ("back", "/demo")]);
+    assert_eq!(status, 303);
+    let (_, body, _) = ada.get("/demo");
+    assert!(
+        body.contains(r#"data-theme="light""#),
+        "the choice must persist"
+    );
+    assert!(body.contains(">Dark<"));
+    ada.post_form("/theme", &[("to", "dark"), ("back", "/demo")]);
+
+    // The file view numbers its lines and names the change that landed it.
+    let (_, body, _) = ada.get("/demo/tree/greeting.txt");
+    assert!(body.contains("1 lines") || body.contains("2 lines"));
+    assert!(
+        body.contains("last landed by"),
+        "a file should link to its change"
+    );
+    assert!(body.contains(r#"class="cline""#), "lines are numbered rows");
+
     // Sign out kills the cookie path.
     let (status, _) = ada.post_form("/logout", &[]);
     assert_eq!(status, 303);
-    let mut signed_out = Browser::new(base);
-    signed_out.cookie = Some("cairn_dev=".to_owned());
+    let signed_out = Browser::new(base);
     let (status, _, location) = signed_out.get("/demo");
     assert_eq!(status, 303);
     assert_eq!(location.as_deref(), Some("/login"));

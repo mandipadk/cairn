@@ -28,6 +28,7 @@ use std::collections::HashMap;
 const STYLE: &str = include_str!("style.css");
 const TOKEN_COOKIE: &str = "cairn_token";
 const DEV_COOKIE: &str = "cairn_dev";
+const THEME_COOKIE: &str = "cairn_theme";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -35,6 +36,7 @@ pub fn routes() -> Router<AppState> {
         .route("/assets/app.css", get(stylesheet))
         .route("/login", get(login_page).post(login_submit))
         .route("/logout", post(logout))
+        .route("/theme", post(set_theme))
         .route("/{repo}", get(repo_page))
         .route("/{repo}/tree/{*path}", get(tree_page))
         .route("/{repo}/changes", get(changes_page))
@@ -57,6 +59,45 @@ fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
         .split("; ")
         .find_map(|pair| pair.strip_prefix(&format!("{name}=")))
         .map(str::to_owned)
+}
+
+/// The viewer's palette. Dark unless they have chosen otherwise.
+pub struct Palette(pub views::Theme);
+
+impl<S: Send + Sync> FromRequestParts<S> for Palette {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let theme = match cookie(&parts.headers, THEME_COOKIE).as_deref() {
+            Some("light") => views::Theme::Light,
+            _ => views::Theme::Dark,
+        };
+        Ok(Palette(theme))
+    }
+}
+
+#[derive(Deserialize)]
+struct ThemeForm {
+    to: String,
+    #[serde(default)]
+    back: String,
+}
+
+async fn set_theme(headers: HeaderMap, Form(form): Form<ThemeForm>) -> Response {
+    let value = if form.to == "light" { "light" } else { "dark" };
+    let cookie = format!("{THEME_COOKIE}={value}; Path=/; SameSite=Lax; Max-Age=31536000");
+    // Return where they were: the referer, or the repo root.
+    let back = if form.back.starts_with('/') {
+        form.back
+    } else {
+        headers
+            .get(header::REFERER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split_once("://").map(|(_, rest)| rest))
+            .and_then(|rest| rest.split_once('/').map(|(_, path)| format!("/{path}")))
+            .unwrap_or_else(|| "/".to_owned())
+    };
+    ([(header::SET_COOKIE, cookie)], Redirect::to(&back)).into_response()
 }
 
 /// The signed-in viewer. Pages redirect to /login instead of failing
@@ -90,19 +131,23 @@ struct FlashQuery {
     error: Option<String>,
 }
 
-async fn home(State(app): State<AppState>, viewer: Viewer) -> Response {
+async fn home(State(app): State<AppState>, Palette(theme): Palette, viewer: Viewer) -> Response {
     let repos = match app.with_store(|s| s.repos()) {
         Ok(repos) => repos,
         Err(err) => return oops(err),
     };
     match repos.as_slice() {
         [only] => Redirect::to(&format!("/{}", only.name)).into_response(),
-        _ => views::home(&viewer, &repos).into_response(),
+        _ => views::home(theme, &viewer, &repos).into_response(),
     }
 }
 
-async fn login_page(State(app): State<AppState>, Query(flash): Query<FlashQuery>) -> Response {
-    views::login(app.dev_identity(), flash.error.as_deref()).into_response()
+async fn login_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    Query(flash): Query<FlashQuery>,
+) -> Response {
+    views::login(theme, app.dev_identity(), flash.error.as_deref()).into_response()
 }
 
 #[derive(Deserialize)]
@@ -162,21 +207,29 @@ fn not_found() -> Response {
 
 async fn repo_page(
     State(app): State<AppState>,
+    Palette(theme): Palette,
     viewer: Viewer,
     Path(repo): Path<String>,
 ) -> Response {
-    render_tree(app, viewer, repo, String::new()).await
+    render_tree(app, theme, viewer, repo, String::new()).await
 }
 
 async fn tree_page(
     State(app): State<AppState>,
+    Palette(theme): Palette,
     viewer: Viewer,
     Path((repo, path)): Path<(String, String)>,
 ) -> Response {
-    render_tree(app, viewer, repo, path).await
+    render_tree(app, theme, viewer, repo, path).await
 }
 
-async fn render_tree(app: AppState, viewer: Viewer, repo: String, path: String) -> Response {
+async fn render_tree(
+    app: AppState,
+    theme: views::Theme,
+    viewer: Viewer,
+    repo: String,
+    path: String,
+) -> Response {
     let Some(git) = app.git() else {
         return not_found();
     };
@@ -204,7 +257,19 @@ async fn render_tree(app: AppState, viewer: Viewer, repo: String, path: String) 
                     .unwrap_or(false);
                 if !is_dir {
                     let text = String::from_utf8_lossy(&bytes).into_owned();
-                    return views::file(&viewer, &repo, &path, &text).into_response();
+                    let landed_by = git
+                        .store
+                        .last_commit_for(&repo, &rev, &path)
+                        .await
+                        .ok()
+                        .flatten()
+                        .and_then(|(oid, _)| {
+                            app.with_store(|s| s.change_by_landed_oid(&repo, &oid))
+                                .ok()
+                                .flatten()
+                        });
+                    return views::file(theme, &viewer, &repo, &path, &text, landed_by.as_ref())
+                        .into_response();
                 }
             }
             Ok(None) => return not_found(),
@@ -262,6 +327,7 @@ async fn render_tree(app: AppState, viewer: Viewer, repo: String, path: String) 
         Err(err) => return oops(err),
     };
     views::repository(
+        theme,
         &viewer,
         &repo,
         &branch,
@@ -278,6 +344,8 @@ pub(crate) struct Sidebar {
     pub open_changes: Vec<cairn_core::Change>,
     pub queue: Vec<cairn_core::QueueEntry>,
     pub sessions: Vec<cairn_core::Session>,
+    /// Change id → (number, title), so queued entries read as changes.
+    pub numbers: HashMap<String, (i64, String)>,
 }
 
 fn sidebar_data(
@@ -285,19 +353,28 @@ fn sidebar_data(
     repo: &str,
     target: &str,
 ) -> Result<Sidebar, cairn_core::CoreError> {
-    let mut open_changes = app.with_store(|s| s.changes_in_repo(repo))?;
-    open_changes.retain(|c| c.state == cairn_core::ChangeState::Open);
+    let all = app.with_store(|s| s.changes_in_repo(repo))?;
+    let numbers = all
+        .iter()
+        .map(|c| (c.id.as_str().to_owned(), (c.number, c.title.clone())))
+        .collect();
+    let mut open_changes: Vec<_> = all
+        .into_iter()
+        .filter(|c| c.state == cairn_core::ChangeState::Open)
+        .collect();
     open_changes.reverse();
     open_changes.truncate(5);
     Ok(Sidebar {
         open_changes,
         queue: app.with_store(|s| s.queue_for(repo, target))?,
         sessions: app.with_store(|s| s.active_sessions())?,
+        numbers,
     })
 }
 
 async fn changes_page(
     State(app): State<AppState>,
+    Palette(theme): Palette,
     viewer: Viewer,
     Path(repo): Path<String>,
 ) -> Response {
@@ -307,7 +384,7 @@ async fn changes_page(
     match app.with_store(|s| s.changes_in_repo(&repo)) {
         Ok(mut changes) => {
             changes.reverse();
-            views::changes(&viewer, &repo, &changes).into_response()
+            views::changes(theme, &viewer, &repo, &changes).into_response()
         }
         Err(err) => oops(err),
     }
@@ -321,6 +398,7 @@ struct ChangeQuery {
 
 async fn change_page(
     State(app): State<AppState>,
+    Palette(theme): Palette,
     viewer: Viewer,
     Path((repo, number)): Path<(String, i64)>,
     Query(query): Query<ChangeQuery>,
@@ -365,6 +443,7 @@ async fn change_page(
     let files = diff::parse(&patch);
 
     views::change(views::ChangePage {
+        theme,
         viewer: &viewer,
         repo: &repo,
         change: &change,
@@ -459,6 +538,7 @@ fn flash(back: &str, message: &str) -> Response {
 
 async fn landing_page(
     State(app): State<AppState>,
+    Palette(theme): Palette,
     viewer: Viewer,
     Path(repo): Path<String>,
 ) -> Response {
@@ -471,7 +551,7 @@ async fn landing_page(
         Ok(data) => data,
         Err(err) => return oops(err),
     };
-    views::landing(&viewer, &repo, &record.default_branch, &data).into_response()
+    views::landing(theme, &viewer, &repo, &record.default_branch, &data).into_response()
 }
 
 pub(crate) struct LandingData {
@@ -484,6 +564,8 @@ pub(crate) struct LandingData {
     pub sessions: Vec<cairn_core::Session>,
     /// Change id → (number, title), for readable references.
     pub numbers: HashMap<String, (i64, String)>,
+    /// The cursor a consumer would resume from right now.
+    pub latest_seq: i64,
 }
 
 fn landing_data(
@@ -557,6 +639,7 @@ fn landing_data(
         live,
         sessions: app.with_store(|s| s.active_sessions())?,
         numbers,
+        latest_seq: latest,
     })
 }
 
@@ -567,6 +650,7 @@ struct LogQuery {
 
 async fn log_page(
     State(app): State<AppState>,
+    Palette(theme): Palette,
     viewer: Viewer,
     Path(repo): Path<String>,
     Query(query): Query<LogQuery>,
@@ -584,7 +668,7 @@ async fn log_page(
         Err(err) => return oops(err),
     };
     match app.with_store(|s| s.events_after(cairn_core::EventSeq(after), 100)) {
-        Ok(events) => views::log(&viewer, &repo, &numbers, after, &events).into_response(),
+        Ok(events) => views::log(theme, &viewer, &repo, &numbers, after, &events).into_response(),
         Err(err) => oops(err),
     }
 }

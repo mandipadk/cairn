@@ -180,6 +180,7 @@ dependencies = [
  "cairn-git",
  "cairn-server",
  "clap",
+ "http",
  "http-body-util",
  "serde_json",
  "tempfile",

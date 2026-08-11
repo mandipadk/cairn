@@ -1,6 +1,8 @@
 //! Projection types: the current state of the graph, derived from the log.
 
-use crate::id::{ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, TokenId, VerdictId};
+use crate::id::{
+    ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, TokenId, VerdictId, VerificationId,
+};
 use serde::{Deserialize, Serialize};
 
 macro_rules! str_enum {
@@ -84,6 +86,8 @@ str_enum!(
         Review => "review",
         /// Land or abandon changes.
         Merge => "merge",
+        /// Re-execute claims and record what was actually observed.
+        Verify => "verify",
         /// Register principals, create repos, manage grants and tokens.
         Admin => "admin",
     }
@@ -243,6 +247,23 @@ pub struct TokenInfo {
     pub principal: PrincipalId,
     pub label: Option<String>,
     pub revoked: bool,
+}
+
+/// An independent re-execution of a claim: someone other than the
+/// claimant ran the recorded command and reported what happened.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Verification {
+    pub id: VerificationId,
+    pub claim: ClaimId,
+    pub change: ChangeId,
+    pub revision: i64,
+    /// Whether the re-run reproduced the claim's result.
+    pub agrees: bool,
+    /// The command the runner actually executed.
+    pub command: String,
+    /// What the runner observed, in its own words.
+    pub observed: String,
+    pub by: PrincipalId,
 }
 
 /// What the graph knows about a change that landed: the judgment

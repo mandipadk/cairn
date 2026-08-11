@@ -1,5 +1,6 @@
 mod hook;
 mod mcp;
+mod verify;
 
 use anyhow::Context;
 use cairn_core::{PrincipalId, PrincipalKind, Store};
@@ -43,6 +44,26 @@ enum Command {
     /// The proc-receive hook endpoint; spawned by git receive-pack.
     #[command(name = "internal-proc-receive", hide = true)]
     InternalProcReceive,
+    /// Re-run a change's claims and record what actually happened.
+    Verify {
+        /// Base URL of the forge.
+        #[arg(long, default_value = "http://127.0.0.1:6160")]
+        server: String,
+        /// API token of a principal holding the verify capability.
+        #[arg(long)]
+        token: String,
+        /// Repository the change belongs to.
+        #[arg(long)]
+        repo: String,
+        /// Change number.
+        change: i64,
+        /// Working directory to run the claims' commands in.
+        #[arg(long, default_value = ".")]
+        workdir: PathBuf,
+        /// Print the commands without running or recording anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Expose a running forge as MCP tools over stdio for an AI agent.
     Mcp {
         /// Base URL of the forge server to proxy to.
@@ -151,6 +172,23 @@ async fn main() -> anyhow::Result<()> {
                 println!("token (shown once, store it safely): {secret}");
             }
         },
+        Command::Verify {
+            server,
+            token,
+            repo,
+            change,
+            workdir,
+            dry_run,
+        } => {
+            verify::run(verify::Runner {
+                server: &server,
+                token: &token,
+                repo: &repo,
+                change,
+                workdir: &workdir,
+                dry_run,
+            })?;
+        }
         Command::InternalProcReceive => {
             hook::run()?;
         }

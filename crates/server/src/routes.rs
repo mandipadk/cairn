@@ -12,9 +12,9 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use cairn_core::{
-    Capability, ChangeId, ChangeSpec, ClaimSpec, CoreError, Disposition, Envelope, EventSeq,
-    GrantId, ObjectFormat, PrincipalId, PrincipalKind, ReviewDomain, SessionId, SessionState,
-    TaskId, TaskState, TokenId,
+    Capability, ChangeId, ChangeSpec, ClaimId, ClaimSpec, CoreError, Disposition, Envelope,
+    EventSeq, GrantId, ObjectFormat, PrincipalId, PrincipalKind, ReviewDomain, SessionId,
+    SessionState, TaskId, TaskState, TokenId,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -663,4 +663,41 @@ pub async fn list_queue(
     };
     let entries = app.with_store(|s| s.queue_for(&repo, &target))?;
     Ok(Json(json!(entries)))
+}
+
+// ---- verification ----
+
+#[derive(Deserialize)]
+pub struct VerifyClaim {
+    pub agrees: bool,
+    pub command: String,
+    pub observed: String,
+}
+
+/// Record an independent re-execution of a claim. Runners call this;
+/// a disputed claim blocks the landing until it is resolved.
+pub async fn verify_claim(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Json(body): Json<VerifyClaim>,
+) -> ApiResult<Json<Value>> {
+    let claim = ClaimId(id);
+    let (verification, env) = app.with_store(|s| {
+        s.verify_claim(&actor.0, &claim, body.agrees, &body.command, &body.observed)
+    })?;
+    app.publish(&env);
+    Ok(committed(Some(verification.0), &env))
+}
+
+pub async fn list_verifications(
+    State(app): State<AppState>,
+    _actor: Actor,
+    Path(id): Path<String>,
+    Query(query): Query<RevisionQuery>,
+) -> ApiResult<Json<Value>> {
+    let change = ChangeId(id);
+    let revision = resolve_revision(&app, &change, query.revision)?;
+    let verifications = app.with_store(|s| s.verifications_on(&change, revision))?;
+    Ok(Json(json!(verifications)))
 }

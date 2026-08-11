@@ -5,7 +5,9 @@
 //! log, in the API's event feed, and in SSE streams, so additive change
 //! is the only kind allowed once an event kind ships.
 
-use crate::id::{ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, TokenId, VerdictId};
+use crate::id::{
+    ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, TokenId, VerdictId, VerificationId,
+};
 use crate::policy::PolicyTrace;
 use crate::types::{
     Capability, ClaimKind, Disposition, ObjectFormat, PrincipalKind, ReviewDomain, SessionState,
@@ -139,6 +141,18 @@ pub enum Event {
         unchecked: Vec<String>,
     },
 
+    /// A runner re-executed a claim and reported what it saw. The
+    /// claim stops being an assertion and becomes a contract.
+    ClaimVerified {
+        verification: VerificationId,
+        claim: ClaimId,
+        change: ChangeId,
+        revision: i64,
+        agrees: bool,
+        command: String,
+        observed: String,
+    },
+
     VerdictGiven {
         verdict: VerdictId,
         change: ChangeId,
@@ -195,6 +209,7 @@ impl Event {
             Event::ChangeOpened { .. } => "change_opened",
             Event::RevisionPushed { .. } => "revision_pushed",
             Event::ClaimAttached { .. } => "claim_attached",
+            Event::ClaimVerified { .. } => "claim_verified",
             Event::VerdictGiven { .. } => "verdict_given",
             Event::ChangeEnqueued { .. } => "change_enqueued",
             Event::ChangeDequeued { .. } => "change_dequeued",

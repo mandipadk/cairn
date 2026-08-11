@@ -10,7 +10,7 @@ use crate::store::Store;
 use crate::types::{
     Capability, Change, ChangeState, Claim, ClaimKind, Disposition, Grant, ObjectFormat, Principal,
     PrincipalKind, Provenance, QueueEntry, Repo, ReviewDomain, Revision, Session, SessionState,
-    Task, TaskState, TokenInfo, Verdict,
+    Task, TaskState, TokenInfo, Verdict, Verification,
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
@@ -316,6 +316,70 @@ pub(crate) mod raw {
                 },
             )
             .collect()
+    }
+
+    pub fn claim(conn: &Connection, id: &str) -> CoreResult<Option<Claim>> {
+        let row = conn
+            .prepare_cached(
+                "SELECT id, change_id, revision, kind, command, passed, summary, unchecked, by
+                 FROM claims WHERE id = ?",
+            )?
+            .query_row(params![id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                ))
+            })
+            .optional()?;
+        row.map(
+            |(id, change_id, revision, kind, command, passed, summary, unchecked, by)| {
+                let at = format!("claim {id}");
+                Ok(Claim {
+                    kind: parsed(&at, &kind, ClaimKind::parse)?,
+                    unchecked: serde_json::from_str(&unchecked).map_err(|e| corrupt(&at, e))?,
+                    id: crate::id::ClaimId(id),
+                    change: ChangeId(change_id),
+                    revision,
+                    command,
+                    passed: passed != 0,
+                    summary,
+                    by: PrincipalId(by),
+                })
+            },
+        )
+        .transpose()
+    }
+
+    pub fn verifications_on(
+        conn: &Connection,
+        change: &str,
+        revision: i64,
+    ) -> CoreResult<Vec<Verification>> {
+        Ok(conn
+            .prepare_cached(
+                "SELECT id, claim_id, change_id, revision, agrees, command, observed, by
+                 FROM verifications WHERE change_id = ? AND revision = ? ORDER BY rowid",
+            )?
+            .query_map(params![change, revision], |row| {
+                Ok(Verification {
+                    id: crate::id::VerificationId(row.get(0)?),
+                    claim: crate::id::ClaimId(row.get(1)?),
+                    change: ChangeId(row.get(2)?),
+                    revision: row.get(3)?,
+                    agrees: row.get::<_, i64>(4)? != 0,
+                    command: row.get(5)?,
+                    observed: row.get(6)?,
+                    by: PrincipalId(row.get(7)?),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?)
     }
 
     pub fn verdicts_on(conn: &Connection, change: &str, revision: i64) -> CoreResult<Vec<Verdict>> {
@@ -658,5 +722,13 @@ impl Store {
 
     pub fn verdicts_on(&self, change: &ChangeId, revision: i64) -> CoreResult<Vec<Verdict>> {
         raw::verdicts_on(&self.conn, change.as_str(), revision)
+    }
+
+    pub fn verifications_on(
+        &self,
+        change: &ChangeId,
+        revision: i64,
+    ) -> CoreResult<Vec<Verification>> {
+        raw::verifications_on(&self.conn, change.as_str(), revision)
     }
 }

@@ -6,7 +6,7 @@ use super::diff::{FileDiff, LineKind};
 use super::{LandingData, Sidebar, Viewer};
 use cairn_core::{
     Change, ChangeState, Claim, Disposition, Envelope, Event, PolicyTrace, Repo, Revision, Task,
-    Verdict,
+    Verdict, Verification,
 };
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 use std::collections::HashMap;
@@ -461,6 +461,7 @@ pub struct ChangePage<'a> {
     pub shown: i64,
     pub files: &'a [FileDiff],
     pub claims: &'a [Claim],
+    pub verifications: &'a [Verification],
     pub verdicts: &'a [Verdict],
     pub trace: &'a PolicyTrace,
     pub queued: bool,
@@ -478,6 +479,7 @@ pub fn change(page: ChangePage) -> Markup {
         shown,
         files,
         claims,
+        verifications,
         verdicts,
         trace,
         queued,
@@ -570,7 +572,7 @@ pub fn change(page: ChangePage) -> Markup {
                         span class="cap" { "Verification" }
                         @if claims.is_empty() { div class="vrow" { span class="s un" { "○" } span { "No claims on r" (shown) } } }
                         @for claim in claims {
-                            (claim_row(claim))
+                            (claim_row(claim, verifications))
                         }
                     }
                     div class="rsec" {
@@ -607,14 +609,31 @@ pub fn change(page: ChangePage) -> Markup {
     )
 }
 
-fn claim_row(claim: &Claim) -> Markup {
+fn claim_row(claim: &Claim, verifications: &[Verification]) -> Markup {
+    let runs: Vec<&Verification> = verifications
+        .iter()
+        .filter(|v| v.claim == claim.id)
+        .collect();
+    let disputed = runs.iter().any(|v| !v.agrees);
     html! {
         div class="vrow" {
-            @if claim.passed { span class="s ok" { "✓" } } @else { span class="s bad" { "✕" } }
+            @if disputed { span class="s bad" { "!" } }
+            @else if claim.passed { span class="s ok" { "✓" } }
+            @else { span class="s bad" { "✕" } }
             div {
                 b { (claim.kind.as_str()) } " · " (claim.summary)
                 @if let Some(command) = &claim.command {
                     div class="cmd" { (command) }
+                }
+                @for run in &runs {
+                    div class={ "run" @if !run.agrees { " disputed" } } {
+                        (run.by)
+                        @if run.agrees { " reproduced this" } @else { " could not reproduce this" }
+                        ": " (run.observed)
+                    }
+                }
+                @if runs.is_empty() && claim.command.is_some() {
+                    div class="run none" { "not re-run by anyone" }
                 }
             }
         }
@@ -901,6 +920,14 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
             "dot idle",
             html! {
                 b { (actor) } " moved a task to " (state.as_str())
+            },
+        ),
+        Event::ClaimVerified { change, agrees, .. } => (
+            if *agrees { "dot ok" } else { "dot bad" },
+            html! {
+                b { (actor) }
+                @if *agrees { " reproduced a claim on " } @else { " could not reproduce a claim on " }
+                (change_num(numbers, change.as_str()))
             },
         ),
         Event::ChangeAbandoned { change, .. } => (

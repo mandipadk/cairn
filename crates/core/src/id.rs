@@ -76,6 +76,9 @@ random_id!(
     /// One review judgment on a revision.
     VerdictId, "v");
 random_id!(
+    /// One independent re-execution of a claim.
+    VerificationId, "vr");
+random_id!(
     /// An API token's public identity (never the secret).
     TokenId, "tok");
 random_id!(

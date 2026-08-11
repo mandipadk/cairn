@@ -128,6 +128,19 @@ CREATE TABLE IF NOT EXISTS merge_queue (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_queue_lane ON merge_queue (repo, target, enqueued_seq);
 
+CREATE TABLE IF NOT EXISTS verifications (
+  id        TEXT PRIMARY KEY,
+  claim_id  TEXT NOT NULL,
+  change_id TEXT NOT NULL,
+  revision  INTEGER NOT NULL,
+  agrees    INTEGER NOT NULL,
+  command   TEXT NOT NULL,
+  observed  TEXT NOT NULL,
+  by        TEXT NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_verifications_claim ON verifications (claim_id);
+CREATE INDEX IF NOT EXISTS idx_verifications_change ON verifications (change_id, revision);
+
 CREATE TABLE IF NOT EXISTS verdicts (
   id        TEXT PRIMARY KEY,
   change_id TEXT NOT NULL,
@@ -416,6 +429,31 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                     *passed as i64,
                     summary,
                     serde_json::to_string(unchecked).expect("string vec serializes"),
+                    actor
+                ],
+            )?;
+        }
+        Event::ClaimVerified {
+            verification,
+            claim,
+            change,
+            revision,
+            agrees,
+            command,
+            observed,
+        } => {
+            tx.execute(
+                "INSERT INTO verifications
+                 (id, claim_id, change_id, revision, agrees, command, observed, by)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    verification.as_str(),
+                    claim.as_str(),
+                    change.as_str(),
+                    revision,
+                    *agrees as i64,
+                    command,
+                    observed,
                     actor
                 ],
             )?;

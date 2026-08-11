@@ -74,6 +74,27 @@ pub(crate) fn evaluate(conn: &Connection, change: &Change) -> CoreResult<PolicyT
         },
     });
 
+    // A claim someone re-ran and could not reproduce is worse than no
+    // claim: it is a contradiction on the record.
+    let verifications = raw::verifications_on(conn, change.id.as_str(), revision)?;
+    let disputed: Vec<_> = verifications.iter().filter(|v| !v.agrees).collect();
+    requirements.push(Requirement {
+        description: "no claim on the latest revision is disputed by a runner".into(),
+        satisfied: disputed.is_empty(),
+        evidence: if disputed.is_empty() {
+            match verifications.len() {
+                0 => "no independent re-runs".into(),
+                n => format!("{n} re-run(s), all reproduced"),
+            }
+        } else {
+            disputed
+                .iter()
+                .map(|v| format!("{} could not reproduce claim {}", v.by, v.claim))
+                .collect::<Vec<_>>()
+                .join(", ")
+        },
+    });
+
     let verdicts = raw::verdicts_on(conn, change.id.as_str(), revision)?;
     let blocks: Vec<_> = verdicts
         .iter()

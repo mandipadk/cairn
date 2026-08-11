@@ -166,6 +166,10 @@ fn dispatch(client: &ApiClient, name: &str, args: &Value) -> Result<(u16, Value)
             &format!("/api/changes/{}/merge", need(args, "change")?),
             args,
         ),
+        "verify_claim" => client.post(
+            &format!("/api/claims/{}/verify", need(args, "claim")?),
+            args,
+        ),
         "blame" => client.get(&format!(
             "/api/repos/{}/blame?path={}",
             need(args, "repo")?,
@@ -342,6 +346,20 @@ fn tool_definitions() -> Vec<Value> {
              naming the unmet requirements.",
             &["change"],
             json!({ "change": s("Change id") }),
+        ),
+        tool(
+            "verify_claim",
+            "Re-run someone else's claim and report what you actually saw. Requires the \
+             verify capability, and you may not verify your own claim. A claim you cannot \
+             reproduce blocks the change from landing until it is resolved — which is the \
+             point: claims are contracts, not assertions.",
+            &["claim", "agrees", "command", "observed"],
+            json!({
+                "claim": s("Claim id to re-run"),
+                "agrees": { "type": "boolean", "description": "Did your run reproduce the claim's result?" },
+                "command": s("The command you actually executed"),
+                "observed": s("What you saw"),
+            }),
         ),
         tool(
             "blame",

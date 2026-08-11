@@ -65,6 +65,11 @@ pub fn router(state: AppState) -> Router {
             "/api/changes/{id}/verdicts",
             post(routes::give_verdict).get(routes::list_verdicts),
         )
+        .route("/api/claims/{id}/verify", post(routes::verify_claim))
+        .route(
+            "/api/changes/{id}/verifications",
+            get(routes::list_verifications),
+        )
         .route("/api/changes/{id}/readiness", get(routes::merge_readiness))
         .route("/api/changes/{id}/merge", post(routes::merge_change))
         .route("/api/changes/{id}/enqueue", post(routes::enqueue_change))

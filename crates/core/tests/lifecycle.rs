@@ -874,3 +874,153 @@ fn reasoning_only_claims_are_not_an_executed_check() {
     let claims = store.claims_on(&change, 1).unwrap();
     assert!(claims.iter().all(|c| c.kind == ClaimKind::Reasoning));
 }
+
+#[test]
+fn a_disputed_claim_blocks_the_merge() {
+    let (mut store, human, scout, arbiter) = seeded();
+    // Runners need the verify capability, like any other authority.
+    store
+        .issue_grant(&human, &arbiter, None, vec![Capability::Verify], None)
+        .unwrap();
+
+    let (change, _, _) = store
+        .open_change(&scout, ChangeSpec::new("forge", "main", "Claims something"))
+        .unwrap();
+    store
+        .push_revision(&scout, &change, OID, None, "work")
+        .unwrap();
+    let (claim, _) = store
+        .attach_claim(
+            &scout,
+            &change,
+            1,
+            ClaimSpec {
+                kind: ClaimKind::Test,
+                command: Some("cargo test".into()),
+                passed: true,
+                summary: "all green".into(),
+                unchecked: vec![],
+            },
+        )
+        .unwrap();
+    store
+        .give_verdict(
+            &human,
+            &change,
+            1,
+            ReviewDomain::Correctness,
+            Disposition::Approve,
+            "ok",
+        )
+        .unwrap();
+    assert!(store.merge_readiness(&change).unwrap().satisfied);
+
+    // Capability first: without it, nobody re-runs anything.
+    let bystander = principal("bystander");
+    store
+        .register_principal(
+            &human,
+            &bystander,
+            PrincipalKind::Agent,
+            "By",
+            Some("m"),
+            None,
+        )
+        .unwrap();
+    assert!(matches!(
+        store
+            .verify_claim(&bystander, &claim, true, "cargo test", "green")
+            .unwrap_err(),
+        CoreError::Forbidden(_)
+    ));
+    // Then independence: a claim cannot vouch for itself, even once its
+    // author holds the capability.
+    store
+        .issue_grant(&human, &scout, None, vec![Capability::Verify], None)
+        .unwrap();
+    assert!(matches!(
+        store
+            .verify_claim(&scout, &claim, true, "cargo test", "green here too")
+            .unwrap_err(),
+        CoreError::Conflict(_)
+    ));
+
+    // A runner that could not reproduce it blocks the landing, and the
+    // policy trace names who disputed what.
+    store
+        .verify_claim(
+            &arbiter,
+            &claim,
+            false,
+            "cargo test",
+            "2 tests failed on a clean tree",
+        )
+        .unwrap();
+    let trace = store.merge_readiness(&change).unwrap();
+    assert!(!trace.satisfied);
+    let disputed = trace
+        .requirements
+        .iter()
+        .find(|r| r.description.contains("disputed"))
+        .expect("the disputed-claim requirement should exist");
+    assert!(!disputed.satisfied);
+    assert!(disputed.evidence.contains("arbiter"));
+    assert!(matches!(
+        store.merge_change(&human, &change).unwrap_err(),
+        CoreError::PolicyUnsatisfied(_)
+    ));
+
+    // Agreement is recorded the same way and leaves the gate open.
+    let (fresh, _, _) = store
+        .open_change(&scout, ChangeSpec::new("forge", "main", "Reproducible"))
+        .unwrap();
+    store
+        .push_revision(&scout, &fresh, OID, None, "work")
+        .unwrap();
+    let (good_claim, _) = store
+        .attach_claim(
+            &scout,
+            &fresh,
+            1,
+            ClaimSpec {
+                kind: ClaimKind::Test,
+                command: Some("cargo test".into()),
+                passed: true,
+                summary: "all green".into(),
+                unchecked: vec![],
+            },
+        )
+        .unwrap();
+    store
+        .give_verdict(
+            &human,
+            &fresh,
+            1,
+            ReviewDomain::Correctness,
+            Disposition::Approve,
+            "ok",
+        )
+        .unwrap();
+    store
+        .verify_claim(
+            &arbiter,
+            &good_claim,
+            true,
+            "cargo test",
+            "reproduced: all green",
+        )
+        .unwrap();
+    let trace = store.merge_readiness(&fresh).unwrap();
+    assert!(trace.satisfied);
+    assert!(
+        trace
+            .requirements
+            .iter()
+            .any(|r| r.evidence.contains("reproduced")),
+        "the trace should show the re-run"
+    );
+    let verifications = store.verifications_on(&fresh, 1).unwrap();
+    assert_eq!(verifications.len(), 1);
+    assert!(verifications[0].agrees);
+    assert_eq!(verifications[0].by, arbiter);
+}

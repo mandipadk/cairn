@@ -266,6 +266,9 @@ a.srow:hover .t { text-decoration: underline; }
 .vrow b { color: var(--ink); font-weight: 500; }
 .vrow .cmd { font-family: var(--mono); font-size: 10.5px; color: var(--ink3); margin-top: 1px; overflow-wrap: anywhere; }
 .vrow q { quotes: none; font-style: normal; display: block; margin-top: 2px; }
+.vrow .run { font-size: 11.5px; color: var(--ink3); margin-top: 3px; }
+.vrow .run.disputed { color: var(--bad); }
+.vrow .run.none { font-style: italic; }
 .who-line { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
 .who-line .nm { font-weight: 600; color: var(--ink); }
 .who-line .disp { font-weight: 600; }

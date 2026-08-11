@@ -72,8 +72,16 @@ listed. The same view is available to agents as an API endpoint and an
 MCP tool, so an agent can ask what is known about code before changing
 it.
 
-Not yet implemented: claim re-verification by trusted runners,
-speculative queue batching, and path leases with conflict forecasting.
+Claims are contracts rather than assertions: a runner holding the
+verify capability can re-execute a claim's recorded command and record
+what it actually observed. Verification must be independent — a claim's
+author cannot verify it — and a claim a runner cannot reproduce blocks
+the change from landing until the dispute is resolved. `cairn verify`
+is such a runner: it re-runs a change's claims in whatever environment
+you point it at and reports honestly.
+
+Not yet implemented: speculative queue batching and path leases with
+conflict forecasting.
 
 ## Running
 

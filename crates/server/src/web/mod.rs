@@ -472,9 +472,10 @@ async fn change_page(
         .r
         .filter(|r| (1..=change.latest_revision).contains(r))
         .unwrap_or(change.latest_revision);
-    let (claims, verdicts, trace) = match app.with_store(|s| {
+    let (claims, verifications, verdicts, trace) = match app.with_store(|s| {
         Ok::<_, cairn_core::CoreError>((
             s.claims_on(&change.id, shown)?,
+            s.verifications_on(&change.id, shown)?,
             s.verdicts_on(&change.id, shown)?,
             s.merge_readiness(&change.id)?,
         ))
@@ -508,6 +509,7 @@ async fn change_page(
         shown,
         files: &files,
         claims: &claims,
+        verifications: &verifications,
         verdicts: &verdicts,
         trace: &trace,
         queued: queued.is_some(),

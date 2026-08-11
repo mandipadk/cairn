@@ -9,7 +9,7 @@
 use crate::error::{CoreError, CoreResult};
 use crate::event::{Envelope, Event};
 use crate::id::{
-    ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, TokenId, VerdictId,
+    ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, TokenId, VerdictId, VerificationId,
     random_token_secret, validate_slug,
 };
 use crate::policy::{self, PolicyTrace};
@@ -502,6 +502,52 @@ impl Store {
         )?;
         tx.commit()?;
         Ok((verdict, env))
+    }
+
+    /// Record an independent re-execution of a claim. The runner must
+    /// hold the verify capability and must not be the claimant: a
+    /// claim re-checked by its own author proves nothing.
+    pub fn verify_claim(
+        &mut self,
+        actor: &PrincipalId,
+        claim: &ClaimId,
+        agrees: bool,
+        command: &str,
+        observed: &str,
+    ) -> CoreResult<(VerificationId, Envelope)> {
+        let tx = self.conn.transaction()?;
+        require(!command.trim().is_empty(), || {
+            "a verification must say what it ran".into()
+        })?;
+        require(!observed.trim().is_empty(), || {
+            "a verification must say what it saw".into()
+        })?;
+        let current = raw::claim(&tx, claim.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("claim {claim}")))?;
+        let change = raw::change(&tx, current.change.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("change {}", current.change)))?;
+        authorize(&tx, actor, Capability::Verify, Some(&change.repo))?;
+        if current.by == *actor {
+            return Err(CoreError::Conflict(format!(
+                "{actor} made claim {claim}; verification must be independent"
+            )));
+        }
+        let verification = VerificationId::generate();
+        let env = append(
+            &tx,
+            actor,
+            Event::ClaimVerified {
+                verification: verification.clone(),
+                claim: claim.clone(),
+                change: current.change.clone(),
+                revision: current.revision,
+                agrees,
+                command: command.to_owned(),
+                observed: observed.to_owned(),
+            },
+        )?;
+        tx.commit()?;
+        Ok((verification, env))
     }
 
     /// Dry-run the merge policy: what would block a merge right now?

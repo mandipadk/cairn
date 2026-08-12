@@ -112,7 +112,10 @@ tip automatically: a successful carry adds a revision exactly as a push
 would, and one that conflicts is recorded with the files that collided
 and left for a person. The author's own revisions are never rewritten.
 
-Not yet implemented: speculative queue batching.
+Each branch is its own landing queue and they run at the same time,
+since two lanes never advance the same ref. Within a lane, order stays
+strict — that is what keeps every landing a plain consequence of the
+one before it.
 
 ## Running
 

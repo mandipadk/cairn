@@ -166,10 +166,15 @@ fn list_new_commits(new_oid: &str, target: &str) -> Result<Vec<String>, String> 
         .map_err(|e| format!("running git rev-parse: {e}"))?
         .status
         .success();
-    let mut args = vec!["rev-list", "--reverse", new_oid];
+    // Against an existing branch, "new" means not already on it.
+    // Against a branch that does not exist yet, it means not already
+    // anywhere — otherwise opening a change on a fresh branch would
+    // re-propose every commit the repo has ever landed.
+    let mut args = vec!["rev-list", "--reverse", new_oid, "--not"];
     if target_exists {
-        args.push("--not");
         args.push(&target_ref);
+    } else {
+        args.push("--branches");
     }
     let output = std::process::Command::new("git")
         .args(&args)

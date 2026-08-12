@@ -11,8 +11,19 @@
 //! files. Merges recorded by the queue carry `merged_as` when the
 //! landed commit differs from the reviewed revision.
 //!
-//! Sequential by design: one train, no speculation — v1 favors an
-//! outcome you can always explain over throughput tricks.
+//! Each branch is its own train and they run at the same time, since
+//! two lanes never touch the same ref. Within a lane, order is strict:
+//! that is what makes every landing explainable.
+//!
+//! There is deliberately no speculation inside a lane. Speculating —
+//! rebasing several queued changes against a projected tip before the
+//! ones ahead have landed — exists to avoid repeating attempts that
+//! cost minutes, and here an attempt costs tens of milliseconds: a
+//! three-way merge in memory plus a policy evaluation. It would buy
+//! nothing and cost the property that every landing is a plain
+//! consequence of the one before it. That trade changes the day a
+//! policy requires the *rebased* result to be verified by a runner,
+//! because then each attempt costs a test run; revisit it then.
 
 use crate::state::AppState;
 use cairn_core::{Event, QueueEntry};
@@ -67,16 +78,29 @@ async fn process_lanes(state: &AppState) {
         if heads.is_empty() {
             return;
         }
-        let mut progressed = false;
+        // One head per lane, and lanes are disjoint by construction —
+        // they advance different refs — so they run together. The git
+        // work happens outside the store lock, which is where the time
+        // actually goes.
+        let mut lanes = tokio::task::JoinSet::new();
         for head in heads {
-            match land(state, &head).await {
-                Ok(true) => progressed = true,
-                Ok(false) => {}
-                Err(err) => {
-                    // Transient (e.g. git hiccup): stay queued, retry on
-                    // the next tick rather than losing the entry.
+            let state = state.clone();
+            lanes.spawn(async move {
+                let outcome = land(&state, &head).await;
+                (head, outcome)
+            });
+        }
+        let mut progressed = false;
+        while let Some(finished) = lanes.join_next().await {
+            match finished {
+                Ok((_, Ok(true))) => progressed = true,
+                Ok((_, Ok(false))) => {}
+                Ok((head, Err(err))) => {
+                    // Transient (e.g. a git hiccup): the entry stays
+                    // queued and is retried, rather than being lost.
                     tracing::warn!(error = %err, change = %head.change, "queue: landing attempt failed; will retry");
                 }
+                Err(err) => tracing::warn!(error = %err, "queue: a lane panicked"),
             }
         }
         if !progressed {
@@ -87,7 +111,10 @@ async fn process_lanes(state: &AppState) {
 
 /// Try to land one lane head. Ok(true) when the lane moved (merged or
 /// dequeued), Ok(false) when it should be left for a retry.
-async fn land(state: &AppState, entry: &QueueEntry) -> Result<bool, Box<dyn std::error::Error>> {
+async fn land(
+    state: &AppState,
+    entry: &QueueEntry,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     let Some(git) = state.git() else {
         // No git hosting: nothing to advance; the queue is inert.
         return Ok(false);

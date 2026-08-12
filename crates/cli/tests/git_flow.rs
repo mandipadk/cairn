@@ -685,3 +685,81 @@ async fn landing_a_parent_carries_its_children_forward() {
         "the carried revision should descend from the new tip"
     );
 }
+
+/// Two branches are two trains: work queued on different targets lands
+/// in the same pass rather than waiting in line behind each other.
+#[tokio::test(flavor = "multi_thread")]
+async fn separate_branches_land_in_parallel() {
+    let forge = boot().await;
+    let (app, addr) = (&forge.app, forge.addr);
+
+    git(
+        &forge.work,
+        &["clone", &format!("http://scout:x@{addr}/git/demo"), "wc"],
+    );
+    let wc = forge.work.join("wc");
+    commit_file(&wc, "root.txt", "root\n", "Root\n\nChange-Id: Iroot");
+    git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
+    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let root = changes[0]["id"].as_str().unwrap().to_owned();
+    approve_and_enqueue(app, &root).await;
+    wait_for(app, "the root change to land", async |app: &Router| {
+        let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+        changes[0]["state"] == "merged"
+    })
+    .await;
+
+    // One change for main, one for a second branch, queued together.
+    git(&wc, &["fetch", "-q", "origin", "main"]);
+    git(&wc, &["reset", "-q", "--hard", "FETCH_HEAD"]);
+    commit_file(&wc, "on-main.txt", "main\n", "On main\n\nChange-Id: Imain");
+    git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
+    git(&wc, &["reset", "-q", "--hard", "FETCH_HEAD"]);
+    commit_file(&wc, "on-dev.txt", "dev\n", "On dev\n\nChange-Id: Idev");
+    git(&wc, &["push", "origin", "HEAD:refs/for/release"]);
+
+    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let of = |key: &str| -> String {
+        changes
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["external_key"] == key)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let (on_main, on_release) = (of("Imain"), of("Idev"));
+    assert_eq!(
+        changes
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["external_key"] == "Idev")
+            .unwrap()["target"],
+        "release"
+    );
+
+    approve_and_enqueue(app, &on_main).await;
+    approve_and_enqueue(app, &on_release).await;
+
+    wait_for(app, "both lanes to land", async |app: &Router| {
+        let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+        changes
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| ["Imain", "Idev"].contains(&c["external_key"].as_str().unwrap_or("")))
+            .all(|c| c["state"] == "merged")
+    })
+    .await;
+
+    // Each landed on its own branch, and neither queue is left holding
+    // anything.
+    let refs = git(&wc, &["ls-remote", "origin"]);
+    assert!(refs.contains("refs/heads/main"));
+    assert!(refs.contains("refs/heads/release"));
+    let (_, queue) = api(app, "GET", "/api/repos/demo/queue", "ada", None).await;
+    assert!(queue.as_array().unwrap().is_empty());
+}

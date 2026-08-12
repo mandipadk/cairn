@@ -161,7 +161,13 @@ a.srow:hover .t { text-decoration: underline; }
 .readme ul, .readme ol { margin: 6px 0 6px 20px; color: var(--ink2); }
 .readme li { margin: 2px 0; }
 .readme code { font-size: 12px; background: var(--raise); padding: 1px 5px; border-radius: 4px; }
-.readme pre { background: var(--raise); padding: 12px 14px; border-radius: 6px; overflow-x: auto; font-size: 12px; margin: 10px 0; }
+/* Prose reads at 76ch; code wants room, so it gets its own measure
+   and wraps rather than scrolling — this is documentation, not a diff. */
+.readme pre {
+  background: var(--raise); padding: 12px 14px; border-radius: 6px;
+  font-size: 12px; margin: 10px 0; max-width: 108ch;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
 .readme pre code { background: none; padding: 0; }
 .empty { padding: 40px 22px; color: var(--ink3); }
 
@@ -172,7 +178,7 @@ a.srow:hover .t { text-decoration: underline; }
   border-bottom: 1px solid var(--hair);
 }
 .file-bar .sep { color: var(--ink3); }
-.code { font-family: var(--mono); font-size: 12.5px; line-height: 1.65; padding: 12px 0 32px; overflow-x: auto; }
+.source { font-family: var(--mono); font-size: 12.5px; line-height: 1.65; padding: 12px 0 32px; overflow-x: auto; }
 .cline { display: grid; grid-template-columns: 56px 1fr; min-width: max-content; }
 .cline:hover { background: var(--hover); }
 .cline .no {
@@ -187,7 +193,7 @@ a.srow:hover .t { text-decoration: underline; }
 /* blame: attribution as judgment */
 .file-bar .right-link { margin-left: auto; color: var(--ink2); }
 .file-bar .warn { color: var(--bad); }
-.code.blame .cline { grid-template-columns: 52px 56px 1fr; }
+.source.blame .cline { grid-template-columns: 52px 56px 1fr; }
 .blame .who { text-align: right; padding-right: 14px; font-size: 11px; color: var(--ink2); }
 .blame .who a:hover { color: var(--ink); text-decoration: underline; }
 .blame .cline.run { border-top: 1px solid var(--hair); }

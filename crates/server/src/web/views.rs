@@ -400,7 +400,7 @@ pub fn file(
             @if binary {
                 p class="empty" { "Binary file — nothing to show." }
             } @else {
-                div class="code" {
+                div class="source" {
                     @for (index, line) in lines.iter().enumerate() {
                         div class="cline" {
                             span class="no" { (index + 1) }
@@ -1037,7 +1037,7 @@ pub fn blame(theme: Theme, viewer: &Viewer, repo: &str, path: &str, rows: &[Blam
                 }
                 a class="right-link link" href={ "/" (repo) "/tree/" (path) } { "Source" }
             }
-            div class="code blame" {
+            div class="source blame" {
                 @for (index, row) in rows.iter().enumerate() {
                     // Attribution is labelled once per run of lines from
                     // the same change, the way a reader scans it.

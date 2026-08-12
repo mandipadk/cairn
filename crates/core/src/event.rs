@@ -191,6 +191,14 @@ pub enum Event {
         /// is always explainable after the fact from the log alone.
         trace: PolicyTrace,
     },
+    /// The forge tried to carry an open child of a merged change onto
+    /// the new tip and could not: the stack needs a person.
+    RebaseFailed {
+        change: ChangeId,
+        onto: String,
+        files: Vec<String>,
+    },
+
     ChangeAbandoned {
         change: ChangeId,
         reason: String,
@@ -222,6 +230,7 @@ impl Event {
             Event::ChangeEnqueued { .. } => "change_enqueued",
             Event::ChangeDequeued { .. } => "change_dequeued",
             Event::ChangeMerged { .. } => "change_merged",
+            Event::RebaseFailed { .. } => "rebase_failed",
             Event::ChangeAbandoned { .. } => "change_abandoned",
         }
     }

@@ -552,6 +552,51 @@ impl Store {
         Ok((overlaps, env))
     }
 
+    /// Record that the forge carried a change onto a new base by
+    /// itself. The author's revisions are never rewritten; this adds
+    /// one, exactly as a push would.
+    pub fn record_rebase(
+        &mut self,
+        actor: &PrincipalId,
+        change: &ChangeId,
+        commit_oid: &str,
+        onto: &str,
+    ) -> CoreResult<(i64, Envelope)> {
+        self.push_revision(
+            actor,
+            change,
+            commit_oid,
+            None,
+            &format!("rebased onto {onto} by the forge"),
+        )
+    }
+
+    /// Record that it could not, and why. A fact about an attempt: it
+    /// changes nothing, and asks a person for something.
+    pub fn record_rebase_failure(
+        &mut self,
+        actor: &PrincipalId,
+        change: &ChangeId,
+        onto: &str,
+        files: Vec<String>,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        let current = raw::change(&tx, change.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
+        authorize(&tx, actor, Capability::Merge, Some(&current.repo))?;
+        let env = append(
+            &tx,
+            actor,
+            Event::RebaseFailed {
+                change: change.clone(),
+                onto: onto.to_owned(),
+                files,
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
     /// Record an independent re-execution of a claim. The runner must
     /// hold the verify capability and must not be the claimant: a
     /// claim re-checked by its own author proves nothing.

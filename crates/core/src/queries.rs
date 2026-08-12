@@ -249,6 +249,19 @@ pub(crate) mod raw {
         .transpose()
     }
 
+    /// Open changes stacked directly on this one.
+    pub fn open_children(conn: &Connection, parent: &str) -> CoreResult<Vec<Change>> {
+        conn.prepare_cached(&format!(
+            "SELECT {CHANGE_COLS} FROM changes
+             WHERE parent_change = ? AND state = 'open' ORDER BY number"
+        ))?
+        .query_map(params![parent], change_from_row)?
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(finish_change)
+        .collect()
+    }
+
     pub fn changes_in_repo(conn: &Connection, repo: &str) -> CoreResult<Vec<Change>> {
         conn.prepare_cached(&format!(
             "SELECT {CHANGE_COLS} FROM changes WHERE repo = ? ORDER BY number"
@@ -770,6 +783,10 @@ impl Store {
 
     pub fn queue_entry(&self, change: &ChangeId) -> CoreResult<Option<QueueEntry>> {
         raw::queue_entry(&self.conn, change.as_str())
+    }
+
+    pub fn open_children(&self, parent: &ChangeId) -> CoreResult<Vec<Change>> {
+        raw::open_children(&self.conn, parent.as_str())
     }
 
     pub fn change_by_landed_oid(&self, repo: &str, oid: &str) -> CoreResult<Option<Change>> {

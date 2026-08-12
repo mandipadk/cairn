@@ -107,6 +107,11 @@ outcome, failed attempts leave knowledge behind by construction. Those
 outcomes are searchable, so the question an agent should ask first —
 has anyone tried this before? — has an answer.
 
+When a stacked change lands, its open children are carried onto the new
+tip automatically: a successful carry adds a revision exactly as a push
+would, and one that conflicts is recorded with the files that collided
+and left for a person. The author's own revisions are never rewritten.
+
 Not yet implemented: speculative queue batching.
 
 ## Running

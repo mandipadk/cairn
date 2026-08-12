@@ -164,6 +164,8 @@ async fn land(state: &AppState, entry: &QueueEntry) -> Result<bool, Box<dyn std:
     };
     state.publish(&envelope);
 
+    // Children of a landed change are now stale by definition. Carry
+    // them forward so a stack does not rot while it waits.
     if let Err(err) = git
         .store
         .advance_ref(&entry.repo, &entry.target, &landed, tip.as_deref())
@@ -172,8 +174,71 @@ async fn land(state: &AppState, entry: &QueueEntry) -> Result<bool, Box<dyn std:
         // The graph recorded the merge but the ref did not move; loud,
         // and safe to retry by hand. Same wrinkle as direct merges.
         tracing::error!(error = %err, change = %entry.change, "queue: merge recorded but ref advance failed");
+        return Ok(true);
     }
+    carry_children(state, entry, &landed).await;
     Ok(true)
+}
+
+/// Rebase every open child of a just-landed change onto the new tip.
+/// Success adds a revision, exactly as a push would; failure records
+/// what collided and leaves the change for a person. The author's own
+/// revisions are never rewritten.
+async fn carry_children(state: &AppState, entry: &QueueEntry, tip: &str) {
+    let Some(git) = state.git() else { return };
+    let children = match state.with_store(|s| s.open_children(&entry.change)) {
+        Ok(children) => children,
+        Err(err) => {
+            tracing::warn!(error = %err, "queue: reading stacked children failed");
+            return;
+        }
+    };
+    for child in children {
+        let Ok(revisions) = state.with_store(|s| s.revisions(&child.id)) else {
+            continue;
+        };
+        let Some(revision) = revisions.last() else {
+            continue;
+        };
+        match git
+            .store
+            .rebase_onto(&entry.repo, tip, &revision.commit_oid)
+            .await
+        {
+            // Already on top of the new tip: nothing to carry.
+            Ok(RebaseOutcome::FastForward) => {}
+            Ok(RebaseOutcome::Rebased(oid)) => {
+                // Recorded on the child's owner's authority: it is
+                // still their change, moved to new ground.
+                match state
+                    .with_store(|s| s.record_rebase(&child.owner, &child.id, &oid, &entry.target))
+                {
+                    Ok((_, envelope)) => {
+                        state.publish(&envelope);
+                        // A revision the forge created needs its ref
+                        // just as much as one that was pushed.
+                        crate::git_http::reconcile_change_refs(state, &entry.repo).await;
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, change = %child.id, "queue: recording a carried rebase failed")
+                    }
+                }
+            }
+            Ok(RebaseOutcome::Conflicts(files)) => {
+                match state.with_store(|s| {
+                    s.record_rebase_failure(&entry.enqueued_by, &child.id, &entry.target, files)
+                }) {
+                    Ok(envelope) => state.publish(&envelope),
+                    Err(err) => {
+                        tracing::warn!(error = %err, change = %child.id, "queue: recording a rebase conflict failed")
+                    }
+                }
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, change = %child.id, "queue: carrying a child failed")
+            }
+        }
+    }
 }
 
 async fn dequeue(state: &AppState, entry: &QueueEntry, reason: &str) {

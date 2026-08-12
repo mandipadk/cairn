@@ -542,3 +542,146 @@ async fn merge_queue_lands_trains_and_reports_conflicts() {
         "reason should name the file: {reason}"
     );
 }
+
+/// When a stack parent lands, its open children are carried onto the
+/// new tip by the forge rather than left to rot.
+#[tokio::test(flavor = "multi_thread")]
+async fn landing_a_parent_carries_its_children_forward() {
+    let forge = boot().await;
+    let (app, addr) = (&forge.app, forge.addr);
+
+    git(
+        &forge.work,
+        &["clone", &format!("http://scout:x@{addr}/git/demo"), "wc"],
+    );
+    let wc = forge.work.join("wc");
+
+    // Give main a tip to build on.
+    commit_file(
+        &wc,
+        "initial.txt",
+        "start\n",
+        "Initial\n\nChange-Id: Iinit00",
+    );
+    git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
+    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let initial = changes[0]["id"].as_str().unwrap().to_owned();
+    approve_and_enqueue(app, &initial).await;
+    wait_for(app, "the initial change to land", async |app: &Router| {
+        let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+        changes[0]["state"] == "merged"
+    })
+    .await;
+    git(&wc, &["fetch", "-q", "origin", "main"]);
+    git(&wc, &["reset", "-q", "--hard", "FETCH_HEAD"]);
+
+    // A two-change stack on that tip.
+    commit_file(&wc, "base.txt", "base\n", "Base\n\nChange-Id: Istack01");
+    commit_file(&wc, "top.txt", "top\n", "Top\n\nChange-Id: Istack02");
+    git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
+    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let by_key = |key: &str| -> String {
+        changes
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["external_key"] == key)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let parent = by_key("Istack01");
+    let child = by_key("Istack02");
+    let child_number = changes
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["external_key"] == "Istack02")
+        .unwrap()["number"]
+        .as_i64()
+        .unwrap();
+
+    // Something else lands first, so the target moves out from under
+    // the stack and a plain fast-forward is no longer possible.
+    git(&wc, &["checkout", "-q", "-b", "side", "FETCH_HEAD"]);
+    commit_file(&wc, "side.txt", "side\n", "Side\n\nChange-Id: Iside03");
+    git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
+    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let side = changes
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["external_key"] == "Iside03")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    approve_and_enqueue(app, &side).await;
+    wait_for(app, "the side change to land", async |app: &Router| {
+        let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+        changes
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["external_key"] == "Iside03" && c["state"] == "merged")
+    })
+    .await;
+
+    // Land the parent; the child should be carried onto the new tip
+    // without its author lifting a finger.
+    approve_and_enqueue(app, &parent).await;
+    wait_for(
+        app,
+        "the child to be carried forward",
+        async |app: &Router| {
+            let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+            changes.as_array().unwrap().iter().any(|c| {
+                c["id"] == child.as_str() && c["latest_revision"].as_i64().unwrap_or(0) >= 2
+            })
+        },
+    )
+    .await;
+
+    // The carry is a new revision, recorded and explained, and the
+    // change is still open and still its author's.
+    let (_, revisions) = api(
+        app,
+        "GET",
+        &format!("/api/changes/{child}/revisions"),
+        "ada",
+        None,
+    )
+    .await;
+    let carried = revisions.as_array().unwrap().last().unwrap();
+    assert!(
+        carried["message"]
+            .as_str()
+            .unwrap()
+            .contains("rebased onto main"),
+        "the added revision should say who moved it: {carried}"
+    );
+    let (_, change) = api(app, "GET", &format!("/api/changes/{child}"), "ada", None).await;
+    assert_eq!(change["state"], "open");
+    assert_eq!(change["owner"], "scout");
+
+    // And the carried revision really does descend from the new tip.
+    git(
+        &wc,
+        &[
+            "fetch",
+            "-q",
+            "origin",
+            &format!("refs/changes/{child_number}/2"),
+        ],
+    );
+    let carried_oid = git(&wc, &["rev-parse", "FETCH_HEAD"]).trim().to_owned();
+    git(&wc, &["fetch", "-q", "origin", "main"]);
+    let tip = git(&wc, &["rev-parse", "FETCH_HEAD"]).trim().to_owned();
+    assert!(
+        git_raw(&wc, &["merge-base", "--is-ancestor", &tip, &carried_oid])
+            .status
+            .success(),
+        "the carried revision should descend from the new tip"
+    );
+}

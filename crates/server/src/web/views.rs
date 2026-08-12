@@ -1019,6 +1019,14 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
                 (change_num(numbers, change.as_str()))
             },
         ),
+        Event::RebaseFailed { change, files, .. } => (
+            "dot bad",
+            html! {
+                b { (change_num(numbers, change.as_str())) }
+                " could not be carried onto the new base — conflicts in "
+                (files.join(", "))
+            },
+        ),
         Event::ChangeAbandoned { change, .. } => (
             "dot bad",
             html! {

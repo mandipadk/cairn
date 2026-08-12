@@ -545,6 +545,9 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                 params![change.as_str()],
             )?;
         }
+        // A failed rebase changes nothing about the graph's state; it
+        // is a fact about an attempt, and lives only in the log.
+        Event::RebaseFailed { .. } => {}
         Event::ChangeAbandoned { change, .. } => {
             tx.execute(
                 "UPDATE changes SET state = 'abandoned' WHERE id = ?",

@@ -265,7 +265,7 @@ pub async fn receive_pack(
 /// by a failed push heals on the next one. proc-receive cannot create
 /// these refs itself — ref updates are forbidden while pushed objects
 /// sit in quarantine.
-async fn reconcile_change_refs(app: &AppState, repo: &str) {
+pub(crate) async fn reconcile_change_refs(app: &AppState, repo: &str) {
     let Some(git) = app.git() else { return };
     let wanted = match app.with_store(|s| s.revision_refs(repo)) {
         Ok(wanted) => wanted,

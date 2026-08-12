@@ -214,6 +214,41 @@ pub async fn approve_and_merge(app: &Router, change_id: &str) -> Value {
     merged
 }
 
+/// Make a change ready and hand it to the landing train, which is the
+/// path that rebases when the target has moved.
+pub async fn approve_and_enqueue(app: &Router, change_id: &str) {
+    let (status, _) = api(
+        app,
+        "POST",
+        &format!("/api/changes/{change_id}/claims"),
+        "scout",
+        Some(json!({ "kind": "test", "passed": true, "summary": "verified" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = api(
+        app,
+        "POST",
+        &format!("/api/changes/{change_id}/verdicts"),
+        "ada",
+        Some(json!({
+            "domain": "correctness", "disposition": "approve",
+            "rationale": "Reviewed and correct."
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = api(
+        app,
+        "POST",
+        &format!("/api/changes/{change_id}/enqueue"),
+        "ada",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "enqueue failed: {body}");
+}
+
 pub fn commit_file(wc: &Path, file: &str, contents: &str, message: &str) {
     std::fs::write(wc.join(file), contents).unwrap();
     git(wc, &["add", "."]);

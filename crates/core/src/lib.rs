@@ -32,6 +32,7 @@ mod commands;
 mod error;
 mod event;
 mod id;
+mod leases;
 mod policy;
 mod queries;
 mod store;
@@ -43,10 +44,11 @@ pub use event::{Envelope, Event, EventSeq};
 pub use id::{
     ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, TokenId, VerdictId, VerificationId,
 };
+pub use leases::{Overlap, covers, patterns_overlap};
 pub use policy::{PolicyTrace, Requirement};
 pub use store::Store;
 pub use types::{
     Capability, Change, ChangeSpec, ChangeState, Claim, ClaimKind, ClaimSpec, Disposition, Grant,
-    ObjectFormat, Principal, PrincipalKind, Provenance, QueueEntry, Repo, ReviewDomain, Revision,
-    Session, SessionState, Task, TaskState, TokenInfo, Verdict, Verification,
+    Lease, ObjectFormat, Principal, PrincipalKind, Provenance, QueueEntry, Repo, ReviewDomain,
+    Revision, Session, SessionState, Task, TaskState, TokenInfo, Verdict, Verification,
 };

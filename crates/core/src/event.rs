@@ -96,6 +96,13 @@ pub enum Event {
         session: SessionId,
         task: TaskId,
     },
+    /// A session declared which paths it expects to touch.
+    PathsDeclared {
+        session: SessionId,
+        repo: String,
+        paths: Vec<String>,
+    },
+
     SessionEnded {
         session: SessionId,
         state: SessionState,
@@ -205,6 +212,7 @@ impl Event {
             Event::TaskClaimed { .. } => "task_claimed",
             Event::TaskStateChanged { .. } => "task_state_changed",
             Event::SessionOpened { .. } => "session_opened",
+            Event::PathsDeclared { .. } => "paths_declared",
             Event::SessionEnded { .. } => "session_ended",
             Event::ChangeOpened { .. } => "change_opened",
             Event::RevisionPushed { .. } => "revision_pushed",

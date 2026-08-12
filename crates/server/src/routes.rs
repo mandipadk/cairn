@@ -712,3 +712,60 @@ pub async fn attention(
     let items = app.with_store(|s| s.attention_for(&repo))?;
     Ok(Json(json!(items)))
 }
+
+// ---- path leases ----
+
+#[derive(Deserialize)]
+pub struct DeclarePaths {
+    pub repo: String,
+    pub paths: Vec<String>,
+}
+
+/// Declare the paths a session expects to touch, and learn who else is
+/// already there. Overlaps are reported, never refused.
+pub async fn declare_paths(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Json(body): Json<DeclarePaths>,
+) -> ApiResult<Json<Value>> {
+    let session = SessionId(id);
+    let (overlaps, env) =
+        app.with_store(|s| s.declare_paths(&actor.0, &session, &body.repo, body.paths))?;
+    app.publish(&env);
+    let mut response = committed(None, &env);
+    response.0["overlaps"] = json!(overlaps);
+    Ok(response)
+}
+
+#[derive(Deserialize)]
+pub struct PathsQuery {
+    /// Comma-separated paths or prefixes.
+    pub paths: String,
+}
+
+/// Who is already working where, before you start.
+pub async fn path_conflicts(
+    State(app): State<AppState>,
+    _actor: Actor,
+    Path(repo): Path<String>,
+    Query(query): Query<PathsQuery>,
+) -> ApiResult<Json<Value>> {
+    let paths: Vec<String> = query
+        .paths
+        .split(',')
+        .map(|p| p.trim().to_owned())
+        .filter(|p| !p.is_empty())
+        .collect();
+    let overlaps = app.with_store(|s| s.path_conflicts(&repo, &paths))?;
+    Ok(Json(json!({ "paths": paths, "overlaps": overlaps })))
+}
+
+pub async fn list_leases(
+    State(app): State<AppState>,
+    _actor: Actor,
+    Path(repo): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let leases = app.with_store(|s| s.live_leases(&repo))?;
+    Ok(Json(json!(leases)))
+}

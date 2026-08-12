@@ -345,6 +345,8 @@ pub(crate) struct Sidebar {
     pub open_changes: Vec<cairn_core::Change>,
     pub queue: Vec<cairn_core::QueueEntry>,
     pub sessions: Vec<cairn_core::Session>,
+    /// What each live session declared it is working on.
+    pub leases: Vec<cairn_core::Lease>,
     /// Change id → (number, title), so queued entries read as changes.
     pub numbers: HashMap<String, (i64, String)>,
 }
@@ -369,6 +371,7 @@ fn sidebar_data(
         open_changes,
         queue: app.with_store(|s| s.queue_for(repo, target))?,
         sessions: app.with_store(|s| s.active_sessions())?,
+        leases: app.with_store(|s| s.live_leases(repo))?,
         numbers,
     })
 }

@@ -1238,3 +1238,130 @@ fn sampling_draws_agent_only_work_deterministically() {
         );
     }
 }
+
+/// Give an agent a claimed task and an open session to work in.
+fn session_for(
+    store: &mut Store,
+    human: &PrincipalId,
+    agent: &PrincipalId,
+    title: &str,
+) -> cairn_core::SessionId {
+    let (task, _) = store
+        .create_task(human, Some("forge"), title, "spec", None)
+        .unwrap();
+    store.claim_task(agent, &task).unwrap();
+    store.open_session(agent, &task).unwrap().0
+}
+
+#[test]
+fn leases_surface_collisions_before_the_work_is_spent() {
+    let (mut store, human, scout, arbiter) = seeded();
+    store
+        .issue_grant(&human, &arbiter, None, vec![Capability::Push], None)
+        .unwrap();
+    let scout_session = session_for(&mut store, &human, &scout, "Rework the parser");
+    let arbiter_session = session_for(&mut store, &human, &arbiter, "Tune the parser cache");
+
+    // First in declares freely: nobody else is there yet.
+    let (overlaps, _) = store
+        .declare_paths(
+            &scout,
+            &scout_session,
+            "forge",
+            vec!["crates/core/src/parser.rs".into(), "docs/".into()],
+        )
+        .unwrap();
+    assert!(overlaps.is_empty());
+
+    // Second in learns immediately, and is told exactly where.
+    let (overlaps, _) = store
+        .declare_paths(
+            &arbiter,
+            &arbiter_session,
+            "forge",
+            vec!["crates/core/".into(), "README.md".into()],
+        )
+        .unwrap();
+    assert_eq!(overlaps.len(), 1);
+    assert_eq!(overlaps[0].holder, scout);
+    assert_eq!(overlaps[0].paths, ["crates/core/src/parser.rs"]);
+    assert!(
+        !overlaps[0].already_landed,
+        "scout has pushed nothing yet, so this is intent against intent"
+    );
+
+    // Once the other side has produced code, the warning gets louder.
+    let (change, _, _) = store
+        .open_change(&scout, ChangeSpec::new("forge", "main", "Parser rework"))
+        .unwrap();
+    store
+        .push_revision(&scout, &change, OID, Some(&scout_session), "parser")
+        .unwrap();
+    // Asking about that path without excluding anyone finds both
+    // sessions, with work already in flight reported first.
+    let conflicts = store
+        .path_conflicts("forge", &["crates/core/src/parser.rs".to_owned()])
+        .unwrap();
+    assert_eq!(conflicts.len(), 2);
+    assert_eq!(conflicts[0].holder, scout);
+    assert!(
+        conflicts[0].already_landed,
+        "a session that has pushed means a rebase is coming, not merely possible"
+    );
+    assert_eq!(conflicts[1].holder, arbiter);
+    assert!(
+        !conflicts[1].already_landed,
+        "arbiter has only declared intent"
+    );
+
+    // Narrowing scope releases ground rather than accumulating it.
+    let (overlaps, _) = store
+        .declare_paths(
+            &arbiter,
+            &arbiter_session,
+            "forge",
+            vec!["README.md".into()],
+        )
+        .unwrap();
+    assert!(overlaps.is_empty());
+    assert!(
+        store
+            .path_conflicts("forge", &["crates/core/".to_owned()])
+            .unwrap()
+            .iter()
+            .all(|o| o.holder != arbiter),
+        "the released path should no longer be held"
+    );
+
+    // A lease outlives neither its session nor its author's authority.
+    store
+        .end_session(&scout, &scout_session, SessionState::Completed, "done")
+        .unwrap();
+    assert!(
+        store
+            .path_conflicts("forge", &["crates/core/src/parser.rs".to_owned()])
+            .unwrap()
+            .is_empty(),
+        "ending a session must release its lease"
+    );
+    assert!(matches!(
+        store
+            .declare_paths(&scout, &scout_session, "forge", vec!["src/".into()])
+            .unwrap_err(),
+        CoreError::Conflict(_)
+    ));
+
+    // Leases belong to the session that holds them.
+    assert!(matches!(
+        store
+            .declare_paths(&scout, &arbiter_session, "forge", vec!["src/".into()])
+            .unwrap_err(),
+        CoreError::Conflict(_)
+    ));
+    assert!(matches!(
+        store
+            .declare_paths(&arbiter, &arbiter_session, "forge", vec![])
+            .unwrap_err(),
+        CoreError::Invalid(_)
+    ));
+}

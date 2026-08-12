@@ -305,6 +305,15 @@ impl Provenance {
     }
 }
 
+/// A session's declared intent over paths, live while the session is.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Lease {
+    pub session: SessionId,
+    pub repo: String,
+    pub holder: PrincipalId,
+    pub paths: Vec<String>,
+}
+
 /// One change waiting in a branch's landing queue.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueEntry {

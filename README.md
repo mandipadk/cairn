@@ -90,8 +90,15 @@ draws a fixed share of changes no human ever looked at, deterministically
 by change id, so a share of agent-only work reaches a person whether or
 not anything about it looks wrong.
 
-Not yet implemented: speculative queue batching and path leases with
-conflict forecasting.
+A session can declare which paths it expects to touch, and is told who
+else is already there — including whether they have pushed code, which
+means a rebase is coming rather than merely possible. Nothing is
+refused: the forge makes the collision visible while it is still cheap
+and the agent decides what to do. Declarations are replaced rather than
+accumulated, so narrowing scope releases ground, and a lease lives
+exactly as long as the session behind it.
+
+Not yet implemented: speculative queue batching.
 
 ## Running
 

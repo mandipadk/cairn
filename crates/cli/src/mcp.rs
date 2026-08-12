@@ -167,6 +167,15 @@ fn dispatch(client: &ApiClient, name: &str, args: &Value) -> Result<(u16, Value)
             args,
         ),
         "attention" => client.get(&format!("/api/repos/{}/attention", need(args, "repo")?)),
+        "declare_paths" => client.post(
+            &format!("/api/sessions/{}/paths", need(args, "session")?),
+            args,
+        ),
+        "who_is_working_on" => client.get(&format!(
+            "/api/repos/{}/conflicts?paths={}",
+            need(args, "repo")?,
+            need(args, "paths")?
+        )),
         "verify_claim" => client.post(
             &format!("/api/claims/{}/verify", need(args, "claim")?),
             args,
@@ -347,6 +356,32 @@ fn tool_definitions() -> Vec<Value> {
              naming the unmet requirements.",
             &["change"],
             json!({ "change": s("Change id") }),
+        ),
+        tool(
+            "declare_paths",
+            "Say which paths your session expects to change, before you start changing \
+             them. The forge answers with anyone else already working there — including \
+             whether they have already pushed code, which means a rebase is coming rather \
+             than merely possible. Nothing is refused; you decide whether to narrow your \
+             scope, wait, or continue knowing. Re-declaring replaces your previous \
+             declaration, so narrowing releases ground you no longer need.",
+            &["session", "repo", "paths"],
+            json!({
+                "session": s("Your active session id"),
+                "repo": s("Repo name"),
+                "paths": { "type": "array", "items": { "type": "string" },
+                           "description": "Paths or prefixes, e.g. crates/core/ or src/main.rs" },
+            }),
+        ),
+        tool(
+            "who_is_working_on",
+            "Who has declared intent over these paths right now. Ask before claiming work \
+             so two agents do not spend a session each on the same files.",
+            &["repo", "paths"],
+            json!({
+                "repo": s("Repo name"),
+                "paths": s("Comma-separated paths or prefixes"),
+            }),
         ),
         tool(
             "attention",

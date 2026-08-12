@@ -12,6 +12,7 @@ use crate::id::{
     ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, TokenId, VerdictId, VerificationId,
     random_token_secret, validate_slug,
 };
+use crate::leases::{self, Overlap};
 use crate::policy::{self, PolicyTrace};
 use crate::queries::raw;
 use crate::store::{Store, append};
@@ -502,6 +503,53 @@ impl Store {
         )?;
         tx.commit()?;
         Ok((verdict, env))
+    }
+
+    /// Declare which paths a session expects to touch, and learn who
+    /// else is already there. Overlaps are reported, never refused:
+    /// the forge makes the collision visible while it is still cheap,
+    /// and the agent decides what to do about it.
+    pub fn declare_paths(
+        &mut self,
+        actor: &PrincipalId,
+        session: &SessionId,
+        repo: &str,
+        paths: Vec<String>,
+    ) -> CoreResult<(Vec<Overlap>, Envelope)> {
+        let tx = self.conn.transaction()?;
+        require(!paths.is_empty(), || {
+            "declare at least one path, or do not declare".into()
+        })?;
+        require(paths.iter().all(|p| !p.trim().is_empty()), || {
+            "a declared path must not be empty".into()
+        })?;
+        raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
+        let current = raw::session(&tx, session.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("session {session}")))?;
+        authorize(&tx, actor, Capability::Push, Some(repo))?;
+        if current.agent != *actor {
+            return Err(CoreError::Conflict(format!(
+                "session {session} belongs to {}",
+                current.agent
+            )));
+        }
+        if current.state != SessionState::Active {
+            return Err(CoreError::Conflict(format!(
+                "session {session} has ended; its lease is gone"
+            )));
+        }
+        let overlaps = leases::conflicts(&tx, repo, &paths, Some(session))?;
+        let env = append(
+            &tx,
+            actor,
+            Event::PathsDeclared {
+                session: session.clone(),
+                repo: repo.to_owned(),
+                paths,
+            },
+        )?;
+        tx.commit()?;
+        Ok((overlaps, env))
     }
 
     /// Record an independent re-execution of a claim. The runner must

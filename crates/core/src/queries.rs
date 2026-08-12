@@ -8,9 +8,9 @@ use crate::error::{CoreError, CoreResult};
 use crate::id::{ChangeId, PrincipalId, SessionId, TaskId};
 use crate::store::Store;
 use crate::types::{
-    Capability, Change, ChangeState, Claim, ClaimKind, Disposition, Grant, ObjectFormat, Principal,
-    PrincipalKind, Provenance, QueueEntry, Repo, ReviewDomain, Revision, Session, SessionState,
-    Task, TaskState, TokenInfo, Verdict, Verification,
+    Capability, Change, ChangeState, Claim, ClaimKind, Disposition, Grant, Lease, ObjectFormat,
+    Principal, PrincipalKind, Provenance, QueueEntry, Repo, ReviewDomain, Revision, Session,
+    SessionState, Task, TaskState, TokenInfo, Verdict, Verification,
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
@@ -606,6 +606,46 @@ pub(crate) mod raw {
             .collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// Leases held by sessions that are still running.
+    pub fn live_leases(conn: &Connection, repo: &str) -> CoreResult<Vec<Lease>> {
+        let rows = conn
+            .prepare_cached(
+                "SELECT l.session, l.repo, l.holder, l.paths FROM leases l
+                 JOIN sessions s ON s.id = l.session
+                 WHERE l.repo = ? AND s.state = 'active' ORDER BY l.rowid",
+            )?
+            .query_map(params![repo], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(session, repo, holder, paths)| {
+                Ok(Lease {
+                    paths: serde_json::from_str(&paths)
+                        .map_err(|e| corrupt(&format!("lease {session}"), e))?,
+                    session: SessionId(session),
+                    repo,
+                    holder: PrincipalId(holder),
+                })
+            })
+            .collect()
+    }
+
+    /// Has this session already produced a revision? Work in flight
+    /// weighs more than declared intent.
+    pub fn session_has_revision(conn: &Connection, session: &str) -> CoreResult<bool> {
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM revisions WHERE session = ?)",
+            params![session],
+            |row| row.get::<_, i64>(0),
+        )? != 0)
+    }
+
     pub fn principal_count(conn: &Connection) -> CoreResult<i64> {
         Ok(conn.query_row("SELECT COUNT(*) FROM principals", [], |r| r.get(0))?)
     }
@@ -680,6 +720,15 @@ impl Store {
     /// The judgment behind a landed commit: the change, what was
     /// claimed about it, and who judged it. The join that turns
     /// attribution from "who wrote this" into "what do we know".
+    /// Who else has declared intent over these paths right now.
+    pub fn path_conflicts(&self, repo: &str, paths: &[String]) -> CoreResult<Vec<crate::Overlap>> {
+        crate::leases::conflicts(&self.conn, repo, paths, None)
+    }
+
+    pub fn live_leases(&self, repo: &str) -> CoreResult<Vec<Lease>> {
+        raw::live_leases(&self.conn, repo)
+    }
+
     /// What a human should look at in this repo, and why. Ranked by
     /// an explainable evaluation, not by recency.
     pub fn attention_for(&self, repo: &str) -> CoreResult<Vec<crate::AttentionItem>> {

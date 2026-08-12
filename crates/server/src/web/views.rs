@@ -320,10 +320,18 @@ pub fn repository(
                         }
                         @if sidebar.sessions.is_empty() { p class="none" { "No active sessions." } }
                         @for session in &sidebar.sessions {
+                            @let held = sidebar
+                                .leases
+                                .iter()
+                                .find(|l| l.session == session.id);
                             div class="srow" {
                                 span class="dot ok" {}
                                 span class="t" { (session.agent) }
-                                span class="age" { "working" }
+                                @if let Some(lease) = held {
+                                    span class="age" { (lease.paths.join(", ")) }
+                                } @else {
+                                    span class="age" { "working" }
+                                }
                             }
                         }
                     }
@@ -912,6 +920,12 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
         ),
         Event::TaskClaimed { .. } => ("dot idle", html! { b { (actor) } " claimed a task" }),
         Event::SessionOpened { .. } => ("dot idle", html! { b { (actor) } " started a session" }),
+        Event::PathsDeclared { paths, .. } => (
+            "dot idle",
+            html! {
+                b { (actor) } " is working on " (paths.join(", "))
+            },
+        ),
         Event::SessionEnded { state, .. } => (
             "dot idle",
             html! {

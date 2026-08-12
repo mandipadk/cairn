@@ -77,6 +77,14 @@ CREATE TABLE IF NOT EXISTS sessions (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_sessions_task ON sessions (task);
 
+CREATE TABLE IF NOT EXISTS leases (
+  session TEXT PRIMARY KEY,
+  repo    TEXT NOT NULL,
+  holder  TEXT NOT NULL,
+  paths   TEXT NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_leases_repo ON leases (repo);
+
 CREATE TABLE IF NOT EXISTS changes (
   id              TEXT PRIMARY KEY,
   repo            TEXT NOT NULL,
@@ -348,6 +356,24 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                 params![session.as_str(), task.as_str(), actor],
             )?;
         }
+        Event::PathsDeclared {
+            session,
+            repo,
+            paths,
+        } => {
+            // Re-declaring replaces: an agent that narrows its scope
+            // should release the ground it no longer needs.
+            tx.execute(
+                "INSERT INTO leases (session, repo, holder, paths) VALUES (?, ?, ?, ?)
+                 ON CONFLICT(session) DO UPDATE SET repo = excluded.repo, paths = excluded.paths",
+                params![
+                    session.as_str(),
+                    repo,
+                    actor,
+                    serde_json::to_string(paths).expect("string vec serializes")
+                ],
+            )?;
+        }
         Event::SessionEnded {
             session,
             state,
@@ -356,6 +382,11 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             tx.execute(
                 "UPDATE sessions SET state = ?, outcome = ? WHERE id = ?",
                 params![state.as_str(), outcome, session.as_str()],
+            )?;
+            // A lease lives exactly as long as the work behind it.
+            tx.execute(
+                "DELETE FROM leases WHERE session = ?",
+                params![session.as_str()],
             )?;
         }
         Event::ChangeOpened {

@@ -12,9 +12,18 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::Duration;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
+
+/// Plumbing commands answer in milliseconds; anything that takes a
+/// minute has hung, and holding the connection open helps nobody.
+const PLUMBING_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Serving a pack legitimately takes a while on a large repository,
+/// so the wire protocol gets its own, looser bound.
+const TRANSFER_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Debug, Error)]
 pub enum GitError {
@@ -26,6 +35,9 @@ pub enum GitError {
 
     #[error("git {args}: {stderr}")]
     CommandFailed { args: String, stderr: String },
+
+    #[error("git {args} did not finish within {seconds}s")]
+    TimedOut { args: String, seconds: u64 },
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -148,7 +160,13 @@ impl GitStore {
         if let Some(dir) = current_dir {
             command.current_dir(dir);
         }
-        let output = command.args(args).stdin(Stdio::null()).output().await?;
+        command.args(args).stdin(Stdio::null()).kill_on_drop(true);
+        let output = tokio::time::timeout(PLUMBING_TIMEOUT, command.output())
+            .await
+            .map_err(|_| GitError::TimedOut {
+                args: args.join(" "),
+                seconds: PLUMBING_TIMEOUT.as_secs(),
+            })??;
         if !output.status.success() {
             return Err(GitError::CommandFailed {
                 args: args.join(" "),
@@ -216,11 +234,17 @@ impl GitStore {
             .arg(&path)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
         if let Some(version) = git_protocol {
             command.env("GIT_PROTOCOL", version);
         }
-        let output = command.output().await?;
+        let output = tokio::time::timeout(TRANSFER_TIMEOUT, command.output())
+            .await
+            .map_err(|_| GitError::TimedOut {
+                args: format!("{} --advertise-refs", service.subcommand()),
+                seconds: TRANSFER_TIMEOUT.as_secs(),
+            })??;
         if !output.status.success() {
             return Err(GitError::CommandFailed {
                 args: format!("{} --advertise-refs", service.subcommand()),
@@ -258,6 +282,7 @@ impl GitStore {
         if let Some(version) = git_protocol {
             command.env("GIT_PROTOCOL", version);
         }
+        command.kill_on_drop(true);
         let mut child = command.spawn()?;
         let mut stdin = child.stdin.take().expect("stdin piped");
         // Feed the request concurrently with reading the response so a
@@ -266,7 +291,12 @@ impl GitStore {
             let _ = stdin.write_all(&input).await;
             let _ = stdin.shutdown().await;
         });
-        let output = child.wait_with_output().await?;
+        let output = tokio::time::timeout(TRANSFER_TIMEOUT, child.wait_with_output())
+            .await
+            .map_err(|_| GitError::TimedOut {
+                args: format!("{} --stateless-rpc", service.subcommand()),
+                seconds: TRANSFER_TIMEOUT.as_secs(),
+            })??;
         if !output.status.success() {
             return Err(GitError::CommandFailed {
                 args: format!("{} --stateless-rpc", service.subcommand()),

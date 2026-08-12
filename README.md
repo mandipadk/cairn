@@ -117,6 +117,21 @@ since two lanes never advance the same ref. Within a lane, order stays
 strict — that is what keeps every landing a plain consequence of the
 one before it.
 
+## Exposure
+
+Before putting a forge somewhere strangers can reach it: serve it over
+HTTPS and pass `--secure-cookies`, keep `--dev` off, and note what is
+and is not defended. Responses carry a strict content policy, frame and
+sniffing protections, and HSTS. Sign-in attempts are rate limited per
+source address. Every free-text field a caller controls is bounded, so
+the log cannot be inflated by a stranger. Git subprocesses have
+timeouts, so a hung transfer cannot hold a connection indefinitely.
+
+What is not here yet: request-rate limiting beyond sign-in, quotas on
+repository or push size, and any protection against a principal that
+holds legitimate capabilities and abuses them. Grants are the tool for
+that, and they are only as narrow as whoever issues them.
+
 ## Running
 
 ```sh

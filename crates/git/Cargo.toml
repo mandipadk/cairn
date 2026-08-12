@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 thiserror = "2.0.20"
-tokio = { version = "1.53.1", features = ["process", "io-util", "fs", "rt"] }
+tokio = { version = "1.53.1", features = ["process", "io-util", "fs", "rt", "time"] }
 
 [lints]
 workspace = true

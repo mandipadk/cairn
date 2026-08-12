@@ -14,6 +14,7 @@
 mod auth;
 mod error;
 mod git_http;
+mod guard;
 mod queue;
 mod routes;
 mod sse;
@@ -106,5 +107,6 @@ pub fn router(state: AppState) -> Router {
                 .layer(axum::extract::DefaultBodyLimit::max(GIT_BODY_LIMIT)),
         )
         .merge(web::routes())
+        .layer(axum::middleware::from_fn(guard::security_headers))
         .with_state(state)
 }

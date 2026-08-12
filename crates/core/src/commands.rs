@@ -63,6 +63,19 @@ fn authorize(
     )))
 }
 
+/// Free text a caller controls is bounded, because an append-only log
+/// keeps whatever it is given forever. The limits are generous enough
+/// that no honest use meets them.
+const MAX_TITLE: usize = 300;
+const MAX_TEXT: usize = 8_000;
+const MAX_ITEMS: usize = 64;
+
+fn bounded(what: &str, value: &str, limit: usize) -> CoreResult<()> {
+    require(value.len() <= limit, || {
+        format!("{what} is longer than {limit} bytes")
+    })
+}
+
 fn require(condition: bool, invalid: impl FnOnce() -> String) -> CoreResult<()> {
     if condition {
         Ok(())
@@ -102,6 +115,13 @@ impl Store {
         require(!display.trim().is_empty(), || {
             "display name must not be empty".into()
         })?;
+        bounded("display name", display, MAX_TITLE)?;
+        if let Some(model) = model {
+            bounded("model", model, MAX_TITLE)?;
+        }
+        if let Some(harness) = harness {
+            bounded("harness", harness, MAX_TITLE)?;
+        }
         if raw::principal(&tx, id.as_str())?.is_some() {
             return Err(CoreError::Conflict(format!(
                 "principal {id} already exists"
@@ -174,9 +194,11 @@ impl Store {
         require(!title.trim().is_empty(), || {
             "task title must not be empty".into()
         })?;
+        bounded("task title", title, MAX_TITLE)?;
         require(!spec.trim().is_empty(), || {
             "task spec must not be empty: the spec is the durable intent".into()
         })?;
+        bounded("task spec", spec, MAX_TEXT)?;
         if let Some(repo) = repo {
             raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
         }
@@ -288,6 +310,7 @@ impl Store {
         require(!outcome.trim().is_empty(), || {
             "session outcome must not be empty: record what happened for the next reader".into()
         })?;
+        bounded("session outcome", outcome, MAX_TEXT)?;
         let current = raw::session(&tx, session.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("session {session}")))?;
         let task = raw::task(&tx, current.task.as_str())?
@@ -332,6 +355,7 @@ impl Store {
         require(!spec.title.trim().is_empty(), || {
             "change title must not be empty".into()
         })?;
+        bounded("change title", &spec.title, MAX_TITLE)?;
         if let Some(task) = &spec.task {
             raw::task(&tx, task.as_str())?
                 .ok_or_else(|| CoreError::NotFound(format!("task {task}")))?;
@@ -411,6 +435,7 @@ impl Store {
                 )));
             }
         }
+        bounded("revision message", message, MAX_TEXT)?;
         let revision = current.latest_revision + 1;
         let env = append(
             &tx,
@@ -438,6 +463,16 @@ impl Store {
         require(!spec.summary.trim().is_empty(), || {
             "claim summary must not be empty".into()
         })?;
+        bounded("claim summary", &spec.summary, MAX_TITLE)?;
+        if let Some(command) = &spec.command {
+            bounded("claim command", command, MAX_TEXT)?;
+        }
+        require(spec.unchecked.len() <= MAX_ITEMS, || {
+            format!("a claim may declare at most {MAX_ITEMS} gaps")
+        })?;
+        for gap in &spec.unchecked {
+            bounded("a declared gap", gap, MAX_TITLE)?;
+        }
         let current = raw::change(&tx, change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
         authorize(&tx, actor, Capability::Push, Some(&current.repo))?;
@@ -476,6 +511,7 @@ impl Store {
         require(!rationale.trim().is_empty(), || {
             "verdict rationale must not be empty: judgment without reasons doesn't compose".into()
         })?;
+        bounded("verdict rationale", rationale, MAX_TEXT)?;
         let current = raw::change(&tx, change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
         authorize(&tx, actor, Capability::Review, Some(&current.repo))?;
@@ -523,6 +559,12 @@ impl Store {
         require(paths.iter().all(|p| !p.trim().is_empty()), || {
             "a declared path must not be empty".into()
         })?;
+        require(paths.len() <= MAX_ITEMS, || {
+            format!("declare at most {MAX_ITEMS} paths; use a prefix instead")
+        })?;
+        for path in &paths {
+            bounded("a declared path", path, MAX_TITLE)?;
+        }
         raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
         let current = raw::session(&tx, session.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("session {session}")))?;
@@ -615,6 +657,8 @@ impl Store {
         require(!observed.trim().is_empty(), || {
             "a verification must say what it saw".into()
         })?;
+        bounded("verification command", command, MAX_TEXT)?;
+        bounded("what the verification saw", observed, MAX_TEXT)?;
         let current = raw::claim(&tx, claim.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("claim {claim}")))?;
         let change = raw::change(&tx, current.change.as_str())?
@@ -762,6 +806,7 @@ impl Store {
         require(!reason.trim().is_empty(), || {
             "dequeue reason must not be empty".into()
         })?;
+        bounded("dequeue reason", reason, MAX_TEXT)?;
         let entry = raw::queue_entry(&tx, change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {change} is not queued")))?;
         let current = raw::change(&tx, change.as_str())?
@@ -793,6 +838,7 @@ impl Store {
         require(!reason.trim().is_empty(), || {
             "abandon reason must not be empty".into()
         })?;
+        bounded("abandon reason", reason, MAX_TEXT)?;
         let current = raw::change(&tx, change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
         authorize(&tx, actor, Capability::Push, Some(&current.repo))?;

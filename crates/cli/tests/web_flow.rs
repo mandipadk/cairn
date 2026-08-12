@@ -291,6 +291,29 @@ async fn web_ui_full_journey() {
         "each line links to its change"
     );
 
+    // Every response carries the headers that keep a browser from
+    // doing anything clever with what the forge renders.
+    let response = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .build()
+        .new_agent()
+        .get(&format!("http://{}/login", forge.addr))
+        .call()
+        .expect("login page");
+    let headers = response.headers();
+    assert_eq!(headers.get("x-content-type-options").unwrap(), "nosniff");
+    assert_eq!(headers.get("x-frame-options").unwrap(), "DENY");
+    assert!(
+        headers
+            .get("content-security-policy")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("default-src 'none'"),
+        "the pages run no script, and the policy should say so"
+    );
+
     // Sign out kills the cookie path.
     let (status, _) = ada.post_form("/logout", &[]);
     assert_eq!(status, 303);

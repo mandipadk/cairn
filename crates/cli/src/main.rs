@@ -34,6 +34,10 @@ enum Command {
         /// Local development only.
         #[arg(long)]
         dev: bool,
+        /// The forge is reached over HTTPS, so mark session cookies
+        /// Secure. Set this on any deployment that is not localhost.
+        #[arg(long)]
+        secure_cookies: bool,
     },
     /// Offline administration against the forge database. Having file
     /// access to the database is the root authority.
@@ -116,6 +120,7 @@ async fn main() -> anyhow::Result<()> {
             listen,
             repos,
             dev,
+            secure_cookies,
         } => {
             let store = Store::open(&db)
                 .with_context(|| format!("opening forge database at {}", db.display()))?;
@@ -134,14 +139,27 @@ async fn main() -> anyhow::Result<()> {
                 tracing::warn!("dev identity enabled: the x-cairn-principal header is trusted");
                 state = state.with_dev_identity();
             }
+            if secure_cookies {
+                state = state.with_secure_cookies();
+            } else if !listen.ip().is_loopback() {
+                tracing::warn!(
+                    "serving on a non-loopback address without --secure-cookies: \
+                     session cookies will not be marked Secure"
+                );
+            }
             cairn_server::spawn_queue_processor(state.clone());
             let app = router(state);
             tracing::info!(%listen, db = %db.display(), repos = %repos.display(), "cairn serving");
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async {
-                    let _ = tokio::signal::ctrl_c().await;
-                })
-                .await?;
+            // Connect info is what lets the sign-in limiter tell one
+            // caller from another.
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = tokio::signal::ctrl_c().await;
+            })
+            .await?;
         }
         Command::Admin { command } => match command {
             AdminCommand::Bootstrap {

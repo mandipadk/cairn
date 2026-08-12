@@ -160,11 +160,21 @@ struct LoginForm {
     principal: String,
 }
 
-async fn login_submit(State(app): State<AppState>, Form(form): Form<LoginForm>) -> Response {
+async fn login_submit(
+    State(app): State<AppState>,
+    crate::guard::ClientIp(client): crate::guard::ClientIp,
+    Form(form): Form<LoginForm>,
+) -> Response {
+    // Guessing a token should not be worth trying.
+    if let Some(peer) = client
+        && !app.login_limiter.accept(peer)
+    {
+        return crate::guard::too_many_attempts();
+    }
     let token = form.token.trim();
     if !token.is_empty() {
         return match app.with_store(|s| s.principal_for_token(token)) {
-            Ok(Some(_)) => signed_in(TOKEN_COOKIE, token),
+            Ok(Some(_)) => signed_in(&app, TOKEN_COOKIE, token),
             Ok(None) => {
                 Redirect::to("/login?error=That+token+is+unknown+or+revoked").into_response()
             }
@@ -173,13 +183,14 @@ async fn login_submit(State(app): State<AppState>, Form(form): Form<LoginForm>) 
     }
     let name = form.principal.trim();
     if app.dev_identity() && PrincipalId::new(name).is_some() {
-        return signed_in(DEV_COOKIE, name);
+        return signed_in(&app, DEV_COOKIE, name);
     }
     Redirect::to("/login?error=Paste+an+API+token+to+sign+in").into_response()
 }
 
-fn signed_in(name: &str, value: &str) -> Response {
-    let cookie = format!("{name}={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000");
+fn signed_in(app: &AppState, name: &str, value: &str) -> Response {
+    let secure = if app.secure_cookies() { "; Secure" } else { "" };
+    let cookie = format!("{name}={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000{secure}");
     ([(header::SET_COOKIE, cookie)], Redirect::to("/")).into_response()
 }
 

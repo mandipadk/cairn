@@ -53,6 +53,9 @@ impl From<cairn_git::GitError> for ApiError {
             G::InvalidRepoName(_) => (StatusCode::BAD_REQUEST, "invalid"),
             G::RepoMissing(_) => (StatusCode::NOT_FOUND, "not_found"),
             G::CommandFailed { .. } | G::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
+            // A hung git process is the server's problem, but the
+            // caller is owed a status they can retry on.
+            G::TimedOut { .. } => (StatusCode::GATEWAY_TIMEOUT, "timeout"),
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {
             tracing::error!(error = %err, "git operation failed");

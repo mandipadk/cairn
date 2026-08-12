@@ -856,3 +856,34 @@ pub async fn set_policy(
     app.publish(&env);
     Ok(committed(Some(repo), &env))
 }
+
+// ---- mirror ----
+
+#[derive(Deserialize)]
+pub struct MirrorBody {
+    /// Absent stops mirroring.
+    pub mirror: Option<cairn_core::Mirror>,
+}
+
+/// Where a repository copies its landed branches. The credential that
+/// authorises the push is the operator's and lives with the server, so
+/// nothing secret passes through here or comes back.
+pub async fn set_mirror(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(repo): Path<String>,
+    Json(body): Json<MirrorBody>,
+) -> ApiResult<Json<Value>> {
+    let env = app.with_store(|s| s.set_mirror(&actor.0, &repo, body.mirror))?;
+    app.publish(&env);
+    Ok(committed(Some(repo), &env))
+}
+
+pub async fn get_mirror(
+    State(app): State<AppState>,
+    _actor: Actor,
+    Path(repo): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let record = found(app.with_store(|s| s.repo(&repo))?, "repo")?;
+    Ok(Json(json!(record.mirror)))
+}

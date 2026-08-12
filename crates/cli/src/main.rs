@@ -38,6 +38,10 @@ enum Command {
         /// Secure. Set this on any deployment that is not localhost.
         #[arg(long)]
         secure_cookies: bool,
+        /// Credential used to authenticate mirror pushes, e.g. a
+        /// GitHub token. Read from CAIRN_MIRROR_TOKEN when unset.
+        #[arg(long)]
+        mirror_token: Option<String>,
     },
     /// Offline administration against the forge database. Having file
     /// access to the database is the root authority.
@@ -121,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
             repos,
             dev,
             secure_cookies,
+            mirror_token,
         } => {
             let store = Store::open(&db)
                 .with_context(|| format!("opening forge database at {}", db.display()))?;
@@ -138,6 +143,9 @@ async fn main() -> anyhow::Result<()> {
             if dev {
                 tracing::warn!("dev identity enabled: the x-cairn-principal header is trusted");
                 state = state.with_dev_identity();
+            }
+            if let Some(token) = mirror_token.or_else(|| std::env::var("CAIRN_MIRROR_TOKEN").ok()) {
+                state = state.with_mirror_credential(token);
             }
             if secure_cookies {
                 state = state.with_secure_cookies();

@@ -204,7 +204,58 @@ async fn land(
         return Ok(true);
     }
     carry_children(state, entry, &landed).await;
+    mirror_branch(state, &entry.repo, &entry.target, &landed).await;
     Ok(true)
+}
+
+/// Copy a landed branch outward, if the repository mirrors. The
+/// attempt is recorded either way: a mirror that has been quietly
+/// failing is exactly the thing nobody notices until they need it.
+async fn mirror_branch(state: &AppState, repo: &str, branch: &str, landed: &str) {
+    let Some(git) = state.git() else { return };
+    let Ok(Some(record)) = state.with_store(|s| s.repo(repo)) else {
+        return;
+    };
+    let Some(mirror) = record.mirror.filter(|m| m.enabled) else {
+        return;
+    };
+    let outcome = git
+        .store
+        .push_to_mirror(repo, &mirror.url, branch, git.mirror_credential.as_deref())
+        .await;
+    let (ok, detail) = match &outcome {
+        Ok(()) => (true, None),
+        Err(err) => {
+            tracing::warn!(error = %err, repo, branch, "mirror push failed");
+            (false, Some(err.to_string()))
+        }
+    };
+    // Recorded as the forge itself: nobody's grant authorised this,
+    // the repository's configuration did.
+    match state.with_store(|s| {
+        s.record_mirror_push(
+            &record_actor(s),
+            repo,
+            branch,
+            landed,
+            ok,
+            detail.as_deref(),
+        )
+    }) {
+        Ok(envelope) => state.publish(&envelope),
+        Err(err) => tracing::warn!(error = %err, "queue: recording the mirror push failed"),
+    }
+}
+
+/// Mirror pushes are the forge's own act, so they are attributed to
+/// whoever configured the repository — the first admin-capable human,
+/// falling back to the queue entry's enqueuer.
+fn record_actor(store: &cairn_core::Store) -> cairn_core::PrincipalId {
+    store
+        .events_after(cairn_core::EventSeq(0), 1)
+        .ok()
+        .and_then(|events| events.first().map(|e| e.actor.clone()))
+        .unwrap_or_else(|| cairn_core::PrincipalId("cairn".to_owned()))
 }
 
 /// Rebase every open child of a just-landed change onto the new tip.

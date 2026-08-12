@@ -17,8 +17,8 @@ use crate::policy::{self, PolicyTrace};
 use crate::queries::raw;
 use crate::store::{Store, append};
 use crate::types::{
-    Capability, ChangeSpec, ChangeState, ClaimSpec, Disposition, ObjectFormat, Policy, Principal,
-    PrincipalKind, ReviewDomain, SessionState, TaskState,
+    Capability, ChangeSpec, ChangeState, ClaimSpec, Disposition, Mirror, ObjectFormat, Policy,
+    Principal, PrincipalKind, ReviewDomain, SessionState, TaskState,
 };
 use rusqlite::Transaction;
 use sha2::{Digest, Sha256};
@@ -201,6 +201,73 @@ impl Store {
             Event::PolicySet {
                 repo: repo.to_owned(),
                 policy,
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
+    /// Point a repository's landed branches at somewhere else, or
+    /// stop. The URL is stored without credentials — the secret that
+    /// authorises the push is the operator's, kept outside the graph.
+    pub fn set_mirror(
+        &mut self,
+        actor: &PrincipalId,
+        repo: &str,
+        mirror: Option<Mirror>,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        authorize(&tx, actor, Capability::Admin, Some(repo))?;
+        raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
+        if let Some(mirror) = &mirror {
+            bounded("mirror url", &mirror.url, MAX_TITLE)?;
+            // https and ssh reach a hosted forge; file reaches another
+            // disk, which is a legitimate place to keep a copy.
+            require(
+                ["https://", "ssh://", "file://"]
+                    .iter()
+                    .any(|scheme| mirror.url.starts_with(scheme)),
+                || "a mirror url must be https://, ssh://, or file://".into(),
+            )?;
+            require(!mirror.url.contains('@'), || {
+                "keep credentials out of the mirror url: pass a token when serving".into()
+            })?;
+        }
+        let env = append(
+            &tx,
+            actor,
+            Event::MirrorSet {
+                repo: repo.to_owned(),
+                mirror,
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
+    /// Record what happened when a landed branch was copied outward.
+    /// Kept whether it worked or not: a mirror that has been quietly
+    /// failing for a week is exactly what nobody notices.
+    pub fn record_mirror_push(
+        &mut self,
+        actor: &PrincipalId,
+        repo: &str,
+        branch: &str,
+        commit_oid: &str,
+        ok: bool,
+        detail: Option<&str>,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        ensure_actor(&tx, actor)?;
+        let env = append(
+            &tx,
+            actor,
+            Event::MirrorPushed {
+                repo: repo.to_owned(),
+                branch: branch.to_owned(),
+                commit_oid: commit_oid.to_owned(),
+                ok,
+                detail: detail.map(|d| d.chars().take(MAX_TITLE).collect()),
             },
         )?;
         tx.commit()?;

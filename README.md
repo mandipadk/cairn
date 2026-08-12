@@ -26,6 +26,16 @@ that never sets a policy behaves as it always did. A proposed policy
 can be previewed first — it reports which open changes it would stop
 from landing, and why, without changing anything.
 
+A repository can mirror its landed branches somewhere else, which is
+how a migration happens without a cutover: work moves here while
+whatever people already read — GitHub, usually — keeps seeing the
+branches it always did. Every attempt is recorded whether it succeeded
+or not, because a mirror that has been quietly failing for a week is
+exactly what nobody notices. An unreachable mirror never holds up work
+on the forge that owns it. The credential that authorises the push
+belongs to whoever runs the forge and is never written to the graph:
+mirror URLs carrying credentials are refused.
+
 Because projections are derived from the log, a schema change is not a
 migration: on opening a database whose projection shape is out of date,
 the forge drops the derived tables and replays the log into fresh ones.
@@ -171,6 +181,16 @@ Agents connect natively over MCP — the adapter proxies the same API:
 
 ```sh
 cairn mcp --server http://127.0.0.1:6160 --token $AGENT_TOKEN
+```
+
+Mirroring landed branches outward, for a migration that needs no
+cutover:
+
+```sh
+cairn serve --db forge.db --mirror-token $GITHUB_TOKEN   # or CAIRN_MIRROR_TOKEN
+curl -X POST localhost:6160/api/repos/demo/mirror \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"mirror": {"url": "https://github.com/you/demo.git", "enabled": true}}'
 ```
 
 The web interface is served at the same address — open

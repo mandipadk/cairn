@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS repos (
   name           TEXT PRIMARY KEY,
   default_branch TEXT NOT NULL,
   object_format  TEXT NOT NULL DEFAULT 'sha1',
-  policy         TEXT NOT NULL DEFAULT '{}'
+  policy         TEXT NOT NULL DEFAULT '{}',
+  mirror         TEXT
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -423,6 +424,20 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                 ],
             )?;
         }
+        Event::MirrorSet { repo, mirror } => {
+            tx.execute(
+                "UPDATE repos SET mirror = ? WHERE name = ?",
+                params![
+                    mirror
+                        .as_ref()
+                        .map(|m| serde_json::to_string(m).expect("mirror serializes")),
+                    repo
+                ],
+            )?;
+        }
+        // An attempt is a fact about the outside world, not a change
+        // to the graph's own state.
+        Event::MirrorPushed { .. } => {}
         Event::PolicySet { repo, policy } => {
             tx.execute(
                 "UPDATE repos SET policy = ? WHERE name = ?",

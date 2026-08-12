@@ -81,6 +81,10 @@ pub fn router(state: AppState) -> Router {
             "/api/repos/{name}/policy",
             get(routes::get_policy).post(routes::set_policy),
         )
+        .route(
+            "/api/repos/{name}/mirror",
+            get(routes::get_mirror).post(routes::set_mirror),
+        )
         .route("/api/repos/{name}/leases", get(routes::list_leases))
         .route("/api/repos/{name}/conflicts", get(routes::path_conflicts))
         .route("/api/sessions/{id}/paths", post(routes::declare_paths))

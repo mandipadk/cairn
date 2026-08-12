@@ -45,6 +45,16 @@ pub enum GitError {
 
 pub type GitResult<T> = Result<T, GitError>;
 
+/// Remotes sometimes quote the URL back at you. Whatever we pass on
+/// must not carry a secret with it.
+fn redact(message: &str, credential: Option<&str>) -> String {
+    let cleaned = match credential {
+        Some(secret) if !secret.is_empty() => message.replace(secret, "***"),
+        _ => message.to_owned(),
+    };
+    cleaned.trim().chars().take(400).collect()
+}
+
 /// How a queued change can land on a moved (or unmoved) target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RebaseOutcome {
@@ -502,6 +512,53 @@ impl GitStore {
             )
             .await?;
         Ok(String::from_utf8_lossy(&stdout).into_owned())
+    }
+
+    /// Copy a branch to an outside remote. The credential is supplied
+    /// per call and never stored: it belongs to whoever runs the forge,
+    /// not to the graph.
+    pub async fn push_to_mirror(
+        &self,
+        name: &str,
+        url: &str,
+        branch: &str,
+        credential: Option<&str>,
+    ) -> GitResult<()> {
+        let path = self.existing_repo_path(name)?;
+        // Credentials go in the URL only for the lifetime of this
+        // process, and never touch a config file or the log.
+        let target = match credential {
+            Some(secret) if url.starts_with("https://") => {
+                url.replacen("https://", &format!("https://{secret}@"), 1)
+            }
+            _ => url.to_owned(),
+        };
+        let mut command = Command::new("git");
+        command
+            .current_dir(&path)
+            .args([
+                "push",
+                "--porcelain",
+                &target,
+                &format!("refs/heads/{branch}:refs/heads/{branch}"),
+            ])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
+        let output = tokio::time::timeout(TRANSFER_TIMEOUT, command.output())
+            .await
+            .map_err(|_| GitError::TimedOut {
+                args: "push (mirror)".into(),
+                seconds: TRANSFER_TIMEOUT.as_secs(),
+            })??;
+        if !output.status.success() {
+            // Never echo the target back: it may carry the secret.
+            return Err(GitError::CommandFailed {
+                args: format!("push {branch} to the mirror"),
+                stderr: redact(&String::from_utf8_lossy(&output.stderr), credential),
+            });
+        }
+        Ok(())
     }
 
     /// Current tip of a branch, or None if the branch doesn't exist yet.

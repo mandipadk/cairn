@@ -115,6 +115,8 @@ pub struct Repo {
     pub default_branch: String,
     pub object_format: ObjectFormat,
     pub policy: Policy,
+    /// Set when landed branches are copied somewhere else.
+    pub mirror: Option<Mirror>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -347,6 +349,16 @@ impl Default for Policy {
             required_domains: Vec::new(),
         }
     }
+}
+
+/// Where a repository's landed branches are copied, so somewhere else
+/// can keep reading them while the work moves here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Mirror {
+    /// Push URL, without credentials.
+    pub url: String,
+    /// Whether pushes are currently attempted.
+    pub enabled: bool,
 }
 
 /// What one attempt learned, kept so the next one does not re-walk it.

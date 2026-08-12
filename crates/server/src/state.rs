@@ -14,6 +14,10 @@ const PUSH_TOKEN_TTL: Duration = Duration::from_secs(600);
 pub(crate) struct GitContext {
     pub(crate) store: Arc<GitStore>,
     pub(crate) base_url: String,
+    /// The secret that authorises mirror pushes, supplied by whoever
+    /// runs the forge. It is never written to the graph and never
+    /// returned by any endpoint.
+    pub(crate) mirror_credential: Option<String>,
 }
 
 /// Shared server state: the store behind a mutex, and a broadcast bus
@@ -106,7 +110,20 @@ impl AppState {
         self.git = Some(Arc::new(GitContext {
             store: Arc::new(git),
             base_url: base_url.into(),
+            mirror_credential: None,
         }));
+        self
+    }
+
+    /// Supply the credential mirror pushes authenticate with.
+    pub fn with_mirror_credential(mut self, credential: impl Into<String>) -> Self {
+        if let Some(git) = self.git.take() {
+            self.git = Some(Arc::new(GitContext {
+                store: Arc::clone(&git.store),
+                base_url: git.base_url.clone(),
+                mirror_credential: Some(credential.into()),
+            }));
+        }
         self
     }
 

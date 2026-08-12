@@ -10,7 +10,7 @@ use crate::id::{
 };
 use crate::policy::PolicyTrace;
 use crate::types::{
-    Capability, ClaimKind, Disposition, ObjectFormat, Policy, PrincipalKind, ReviewDomain,
+    Capability, ClaimKind, Disposition, Mirror, ObjectFormat, Policy, PrincipalKind, ReviewDomain,
     SessionState, TaskState,
 };
 use serde::{Deserialize, Serialize};
@@ -80,6 +80,21 @@ pub enum Event {
     PolicySet {
         repo: String,
         policy: Policy,
+    },
+
+    /// A repository started, stopped, or changed where it mirrors.
+    MirrorSet {
+        repo: String,
+        mirror: Option<Mirror>,
+    },
+    /// One attempt at copying a landed branch outward.
+    MirrorPushed {
+        repo: String,
+        branch: String,
+        commit_oid: String,
+        ok: bool,
+        /// What the remote said, when it refused.
+        detail: Option<String>,
     },
 
     TaskCreated {
@@ -223,6 +238,8 @@ impl Event {
             Event::GrantRevoked { .. } => "grant_revoked",
             Event::RepoCreated { .. } => "repo_created",
             Event::PolicySet { .. } => "policy_set",
+            Event::MirrorSet { .. } => "mirror_set",
+            Event::MirrorPushed { .. } => "mirror_pushed",
             Event::TaskCreated { .. } => "task_created",
             Event::TaskClaimed { .. } => "task_claimed",
             Event::TaskStateChanged { .. } => "task_state_changed",

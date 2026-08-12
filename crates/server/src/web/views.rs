@@ -1005,6 +1005,29 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
                 b { (actor) } " set the policy for " (repo)
             },
         ),
+        Event::MirrorSet { repo, mirror } => (
+            "dot idle",
+            html! {
+                b { (actor) }
+                @match mirror {
+                    Some(mirror) => { " mirrors " (repo) " to " (mirror.url) }
+                    None => { " stopped mirroring " (repo) }
+                }
+            },
+        ),
+        Event::MirrorPushed {
+            branch, ok, detail, ..
+        } => (
+            if *ok { "dot ok" } else { "dot bad" },
+            html! {
+                @if *ok {
+                    "mirrored " b { (branch) } " outward"
+                } @else {
+                    b { "mirror push failed" } " for " (branch)
+                    @if let Some(detail) = detail { " — " (detail) }
+                }
+            },
+        ),
         Event::PrincipalRegistered { principal, .. } => (
             "dot idle",
             html! {

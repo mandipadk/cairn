@@ -8,7 +8,7 @@ use crate::error::{CoreError, CoreResult};
 use crate::id::{ChangeId, PrincipalId, SessionId, TaskId};
 use crate::store::Store;
 use crate::types::{
-    Capability, Change, ChangeState, Claim, ClaimKind, Disposition, Grant, Lease, Lesson,
+    Capability, Change, ChangeState, Claim, ClaimKind, Disposition, Grant, Lease, Lesson, Mirror,
     ObjectFormat, Policy, Principal, PrincipalKind, Provenance, QueueEntry, Repo, ReviewDomain,
     Revision, Session, SessionState, Task, TaskState, TokenInfo, Verdict, Verification,
 };
@@ -57,7 +57,8 @@ pub(crate) mod raw {
     pub fn repos(conn: &Connection) -> CoreResult<Vec<Repo>> {
         let rows = conn
             .prepare_cached(
-                "SELECT name, default_branch, object_format, policy FROM repos ORDER BY name",
+                "SELECT name, default_branch, object_format, policy, mirror
+                 FROM repos ORDER BY name",
             )?
             .query_map([], |row| {
                 Ok((
@@ -65,19 +66,29 @@ pub(crate) mod raw {
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
-            .map(|(name, default_branch, format, policy)| {
+            .map(|(name, default_branch, format, policy, mirror)| {
                 Ok(Repo {
                     object_format: parsed(&format!("repo {name}"), &format, ObjectFormat::parse)?,
                     policy: read_policy(&name, &policy)?,
+                    mirror: read_mirror(&name, mirror.as_deref())?,
                     name,
                     default_branch,
                 })
             })
             .collect()
+    }
+
+    fn read_mirror(name: &str, stored: Option<&str>) -> CoreResult<Option<Mirror>> {
+        stored
+            .map(|raw| {
+                serde_json::from_str(raw).map_err(|e| corrupt(&format!("repo {name} mirror"), e))
+            })
+            .transpose()
     }
 
     /// A repo written before policies existed, or one that never set
@@ -91,7 +102,8 @@ pub(crate) mod raw {
 
     pub fn repo(conn: &Connection, name: &str) -> CoreResult<Option<Repo>> {
         conn.prepare_cached(
-            "SELECT name, default_branch, object_format, policy FROM repos WHERE name = ?",
+            "SELECT name, default_branch, object_format, policy, mirror
+             FROM repos WHERE name = ?",
         )?
         .query_row(params![name], |row| {
             Ok((
@@ -99,13 +111,15 @@ pub(crate) mod raw {
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
             ))
         })
         .optional()?
-        .map(|(name, default_branch, format, policy)| {
+        .map(|(name, default_branch, format, policy, mirror)| {
             Ok(Repo {
                 object_format: parsed(&format!("repo {name}"), &format, ObjectFormat::parse)?,
                 policy: read_policy(&name, &policy)?,
+                mirror: read_mirror(&name, mirror.as_deref())?,
                 name,
                 default_branch,
             })

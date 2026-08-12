@@ -701,3 +701,14 @@ pub async fn list_verifications(
     let verifications = app.with_store(|s| s.verifications_on(&change, revision))?;
     Ok(Json(json!(verifications)))
 }
+
+/// What a human should look at in this repo, ranked, with the signals
+/// and the evidence behind each ranking.
+pub async fn attention(
+    State(app): State<AppState>,
+    _actor: Actor,
+    Path(repo): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let items = app.with_store(|s| s.attention_for(&repo))?;
+    Ok(Json(json!(items)))
+}

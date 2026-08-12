@@ -27,6 +27,7 @@
 //! [`Event`]: event::Event
 //! [`EventSeq`]: event::EventSeq
 
+mod attention;
 mod commands;
 mod error;
 mod event;
@@ -36,6 +37,7 @@ mod queries;
 mod store;
 mod types;
 
+pub use attention::{AttentionItem, Signal, SignalKind};
 pub use error::{CoreError, CoreResult};
 pub use event::{Envelope, Event, EventSeq};
 pub use id::{

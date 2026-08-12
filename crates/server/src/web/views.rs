@@ -695,14 +695,21 @@ pub fn landing(
                     div class="need" {
                         div class="sechead" { b { "Needs you" } span { (data.needs_you.len()) } }
                         @if data.needs_you.is_empty() {
-                            div class="trow sec3" { span {} span { "Nothing is waiting on a human." } span {} span {} }
+                            div class="trow sec3" { span {} span { "Nothing is waiting on a human." } span {} }
                         }
-                        @for (change, reason) in &data.needs_you {
-                            a class="trow" href={ "/" (repo) "/changes/" (change.number) } {
-                                span class="sec3" { "#" (change.number) }
-                                span style="font-weight: 500;" { (change.title) }
-                                span class="sec2" { (reason) }
-                                span {}
+                        @for item in &data.needs_you {
+                            a class="trow" href={ "/" (repo) "/changes/" (item.change.number) }
+                              title=(attention_evidence(item)) {
+                                span class="sec3" { "#" (item.change.number) }
+                                span style="font-weight: 500;" { (item.change.title) }
+                                span class="reasons" {
+                                    @for (index, signal) in item.signals.iter().enumerate() {
+                                        @if index > 0 { span class="sec3" { " · " } }
+                                        span class={ @if index == 0 { "lead" } @else { "sec3" } } {
+                                            (signal.description)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -763,6 +770,15 @@ fn change_ref(numbers: &Refs, id: &str) -> Markup {
         Some((number, title)) => html! { "#" (number) " " (title) },
         None => html! { code { (short(id)) } },
     }
+}
+
+/// Everything behind a ranking, for the reader who wants the facts.
+fn attention_evidence(item: &cairn_core::AttentionItem) -> String {
+    item.signals
+        .iter()
+        .map(|s| format!("{}: {}", s.description, s.evidence))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A compact reference for narrow columns: number and title, elided

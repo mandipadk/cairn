@@ -613,8 +613,8 @@ async fn landing_page(
 }
 
 pub(crate) struct LandingData {
-    /// (change, reason) — open changes that need a human, with why.
-    pub needs_you: Vec<(cairn_core::Change, String)>,
+    /// What a human should look at, ranked and explained.
+    pub needs_you: Vec<cairn_core::AttentionItem>,
     pub queue: Vec<cairn_core::QueueEntry>,
     /// Recent merged/dequeued outcomes, newest first.
     pub outcomes: Vec<cairn_core::Envelope>,
@@ -636,42 +636,8 @@ fn landing_data(
         .iter()
         .map(|c| (c.id.as_str().to_owned(), (c.number, c.title.clone())))
         .collect();
-    let mut needs_you = Vec::new();
-    for change in changes.iter().rev() {
-        if change.state != cairn_core::ChangeState::Open || change.latest_revision == 0 {
-            continue;
-        }
-        let verdicts = app.with_store(|s| s.verdicts_on(&change.id, change.latest_revision))?;
-        let claims = app.with_store(|s| s.claims_on(&change.id, change.latest_revision))?;
-        let blocks: Vec<_> = verdicts
-            .iter()
-            .filter(|v| v.disposition == cairn_core::Disposition::Block)
-            .collect();
-        let approves = verdicts
-            .iter()
-            .filter(|v| v.disposition == cairn_core::Disposition::Approve)
-            .count();
-        let executed = claims
-            .iter()
-            .any(|c| c.kind != cairn_core::ClaimKind::Reasoning && c.passed);
-        let reason = if !blocks.is_empty() && approves > 0 {
-            format!(
-                "{} approve, {} block — reviewers disagree",
-                approves,
-                blocks.len()
-            )
-        } else if !blocks.is_empty() {
-            format!("blocked by {}", blocks[0].by)
-        } else if !claims.is_empty() && !executed {
-            "no executed check — reasoning only".to_owned()
-        } else {
-            continue;
-        };
-        needs_you.push((change.clone(), reason));
-        if needs_you.len() == 8 {
-            break;
-        }
-    }
+    let mut needs_you = app.with_store(|s| s.attention_for(repo))?;
+    needs_you.truncate(8);
 
     let latest = app.with_store(|s| s.latest_seq())?.0;
     let events =

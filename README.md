@@ -80,6 +80,16 @@ the change from landing until the dispute is resolved. `cairn verify`
 is such a runner: it re-runs a change's claims in whatever environment
 you point it at and reports honestly.
 
+Deciding what deserves a human's attention gets the same treatment as
+deciding what may land: an explainable evaluation over the graph rather
+than a feed sorted by recency. Open changes are ranked by what judgment
+is worth on them — reviewers disagreeing, a disputed claim, work resting
+on argument alone, claims nobody re-ran, declared gaps — and each
+ranking carries its signals and their evidence. A sampling policy also
+draws a fixed share of changes no human ever looked at, deterministically
+by change id, so a share of agent-only work reaches a person whether or
+not anything about it looks wrong.
+
 Not yet implemented: speculative queue batching and path leases with
 conflict forecasting.
 

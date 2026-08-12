@@ -680,6 +680,12 @@ impl Store {
     /// The judgment behind a landed commit: the change, what was
     /// claimed about it, and who judged it. The join that turns
     /// attribution from "who wrote this" into "what do we know".
+    /// What a human should look at in this repo, and why. Ranked by
+    /// an explainable evaluation, not by recency.
+    pub fn attention_for(&self, repo: &str) -> CoreResult<Vec<crate::AttentionItem>> {
+        crate::attention::evaluate(&self.conn, repo)
+    }
+
     pub fn provenance_of(&self, repo: &str, oid: &str) -> CoreResult<Option<Provenance>> {
         let Some(change) = raw::change_by_landed_oid(&self.conn, repo, oid)? else {
             return Ok(None);

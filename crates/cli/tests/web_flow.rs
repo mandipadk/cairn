@@ -188,6 +188,14 @@ async fn web_ui_full_journey() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
+    // While it is open, the landing page ranks it by the attention
+    // engine and says what the ranking is made of.
+    let (_, body, _) = ada.get("/demo/landing");
+    assert!(
+        body.contains("nobody re-ran") && body.contains("declared gap"),
+        "needs-you should explain itself with signals"
+    );
+
     // Ready — enqueue from the page, and the train lands it.
     let (_, body, _) = ada.get("/demo/changes/1");
     assert!(body.contains("Ready"));
@@ -247,6 +255,11 @@ async fn web_ui_full_journey() {
         "a file should link to its change"
     );
     assert!(body.contains(r#"class="cline""#), "lines are numbered rows");
+
+    // Once it lands there is genuinely nothing for a human to do here.
+    let (status, body, _) = ada.get("/demo/landing");
+    assert_eq!(status, 200);
+    assert!(body.contains("Nothing is waiting on a human."));
 
     // Blame answers what was known, not just who typed: the line's
     // change, and the gap its claim declared.

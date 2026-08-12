@@ -75,6 +75,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/changes/{id}/enqueue", post(routes::enqueue_change))
         .route("/api/changes/{id}/dequeue", post(routes::dequeue_change))
         .route("/api/repos/{name}/queue", get(routes::list_queue))
+        .route("/api/repos/{name}/attention", get(routes::attention))
         .route("/api/changes/{id}/abandon", post(routes::abandon_change))
         .route(
             "/api/principals/{id}/tokens",

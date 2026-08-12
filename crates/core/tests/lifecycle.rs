@@ -1024,3 +1024,217 @@ fn a_disputed_claim_blocks_the_merge() {
     assert!(verifications[0].agrees);
     assert_eq!(verifications[0].by, arbiter);
 }
+
+/// A helper that opens a change with one revision and a claim.
+fn change_with_claim(
+    store: &mut Store,
+    owner: &PrincipalId,
+    title: &str,
+    spec: ClaimSpec,
+) -> cairn_core::ChangeId {
+    let (change, _, _) = store
+        .open_change(owner, ChangeSpec::new("forge", "main", title))
+        .unwrap();
+    store
+        .push_revision(owner, &change, OID, None, "work")
+        .unwrap();
+    store.attach_claim(owner, &change, 1, spec).unwrap();
+    change
+}
+
+fn passing_with_command() -> ClaimSpec {
+    ClaimSpec {
+        kind: ClaimKind::Test,
+        command: Some("cargo test".into()),
+        passed: true,
+        summary: "green".into(),
+        unchecked: vec![],
+    }
+}
+
+#[test]
+fn attention_ranks_by_what_judgment_is_worth() {
+    let (mut store, human, scout, arbiter) = seeded();
+    store
+        .issue_grant(&human, &arbiter, None, vec![Capability::Verify], None)
+        .unwrap();
+
+    // Quietly fine: verified, approved, nothing to say about it.
+    let settled = change_with_claim(&mut store, &scout, "Settled", passing_with_command());
+    let settled_claim = store.claims_on(&settled, 1).unwrap()[0].id.clone();
+    store
+        .verify_claim(&arbiter, &settled_claim, true, "cargo test", "green")
+        .unwrap();
+    store
+        .give_verdict(
+            &human,
+            &settled,
+            1,
+            ReviewDomain::Correctness,
+            Disposition::Approve,
+            "ok",
+        )
+        .unwrap();
+
+    // Reasoning only.
+    let argued = change_with_claim(
+        &mut store,
+        &scout,
+        "Argued",
+        ClaimSpec {
+            kind: ClaimKind::Reasoning,
+            command: None,
+            passed: true,
+            summary: "obviously safe".into(),
+            unchecked: vec!["everything an execution would cover".into()],
+        },
+    );
+
+    // Reviewers disagree — the heaviest signal there is.
+    let contested = change_with_claim(&mut store, &scout, "Contested", passing_with_command());
+    store
+        .give_verdict(
+            &arbiter,
+            &contested,
+            1,
+            ReviewDomain::Correctness,
+            Disposition::Approve,
+            "fine",
+        )
+        .unwrap();
+    store
+        .give_verdict(
+            &human,
+            &contested,
+            1,
+            ReviewDomain::Security,
+            Disposition::Block,
+            "unsafe",
+        )
+        .unwrap();
+
+    // A runner could not reproduce the claim.
+    let disputed = change_with_claim(&mut store, &scout, "Disputed", passing_with_command());
+    let disputed_claim = store.claims_on(&disputed, 1).unwrap()[0].id.clone();
+    store
+        .verify_claim(&arbiter, &disputed_claim, false, "cargo test", "2 failures")
+        .unwrap();
+
+    let ranked = store.attention_for("forge").unwrap();
+    let order: Vec<&str> = ranked.iter().map(|i| i.change.title.as_str()).collect();
+    assert_eq!(
+        order[0], "Contested",
+        "disagreement outranks everything: {order:?}"
+    );
+    assert_eq!(
+        order[1], "Disputed",
+        "a disputed claim comes next: {order:?}"
+    );
+    assert!(
+        !order.contains(&"Settled"),
+        "a verified, approved change should not ask for attention: {order:?}"
+    );
+    assert!(order.contains(&"Argued"));
+
+    // Every ranked item explains itself in a person's words, with
+    // evidence in graph terms behind it.
+    let top = &ranked[0];
+    assert!(top.headline().contains("disagree"));
+    assert!(top.score >= cairn_core::SignalKind::ReviewersDisagree.weight());
+    let signal = &top.signals[0];
+    assert_eq!(signal.kind, cairn_core::SignalKind::ReviewersDisagree);
+    assert!(signal.evidence.contains("arbiter"));
+    assert!(signal.evidence.contains("block"));
+
+    // The reasoning-only change names both of its problems.
+    let argued_item = ranked
+        .iter()
+        .find(|i| i.change.id == argued)
+        .expect("argued change should be ranked");
+    let kinds: Vec<_> = argued_item.signals.iter().map(|s| s.kind).collect();
+    assert!(kinds.contains(&cairn_core::SignalKind::NoExecutedCheck));
+    assert!(kinds.contains(&cairn_core::SignalKind::DeclaredGap));
+}
+
+#[test]
+fn sampling_draws_agent_only_work_deterministically() {
+    let (mut store, human, scout, arbiter) = seeded();
+
+    // Enough agent-judged changes to see the sampling rate bite.
+    let mut drawn = 0;
+    let mut total = 0;
+    for index in 0..60 {
+        let change = change_with_claim(
+            &mut store,
+            &scout,
+            &format!("Routine {index}"),
+            passing_with_command(),
+        );
+        store
+            .give_verdict(
+                &arbiter,
+                &change,
+                1,
+                ReviewDomain::Correctness,
+                Disposition::Approve,
+                "ok",
+            )
+            .unwrap();
+        total += 1;
+        let ranked = store.attention_for("forge").unwrap();
+        let item = ranked.iter().find(|i| i.change.id == change);
+        if item.is_some_and(|i| {
+            i.signals
+                .iter()
+                .any(|s| s.kind == cairn_core::SignalKind::SpotCheck)
+        }) {
+            drawn += 1;
+        }
+    }
+    assert!(
+        (1..=total / 3).contains(&drawn),
+        "sampling should draw a minority of {total} changes, drew {drawn}"
+    );
+
+    // The draw is a property of the change, not of when you asked.
+    let first = store.attention_for("forge").unwrap();
+    let second = store.attention_for("forge").unwrap();
+    let ids = |items: &[cairn_core::AttentionItem]| -> Vec<String> {
+        items
+            .iter()
+            .filter(|i| {
+                i.signals
+                    .iter()
+                    .any(|s| s.kind == cairn_core::SignalKind::SpotCheck)
+            })
+            .map(|i| i.change.id.as_str().to_owned())
+            .collect()
+    };
+    assert_eq!(ids(&first), ids(&second), "sampling must be reproducible");
+
+    // A human judgment retires the sample: it has had its look.
+    if let Some(sampled) = first.iter().find(|i| {
+        i.signals
+            .iter()
+            .any(|s| s.kind == cairn_core::SignalKind::SpotCheck)
+    }) {
+        store
+            .give_verdict(
+                &human,
+                &sampled.change.id,
+                1,
+                ReviewDomain::Design,
+                Disposition::Approve,
+                "looked",
+            )
+            .unwrap();
+        let after = store.attention_for("forge").unwrap();
+        assert!(
+            !after.iter().any(|i| i.change.id == sampled.change.id
+                && i.signals
+                    .iter()
+                    .any(|s| s.kind == cairn_core::SignalKind::SpotCheck)),
+            "a change a human judged should stop being sampled"
+        );
+    }
+}

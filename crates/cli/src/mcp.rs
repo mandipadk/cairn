@@ -166,6 +166,7 @@ fn dispatch(client: &ApiClient, name: &str, args: &Value) -> Result<(u16, Value)
             &format!("/api/changes/{}/merge", need(args, "change")?),
             args,
         ),
+        "attention" => client.get(&format!("/api/repos/{}/attention", need(args, "repo")?)),
         "verify_claim" => client.post(
             &format!("/api/claims/{}/verify", need(args, "claim")?),
             args,
@@ -346,6 +347,16 @@ fn tool_definitions() -> Vec<Value> {
              naming the unmet requirements.",
             &["change"],
             json!({ "change": s("Change id") }),
+        ),
+        tool(
+            "attention",
+            "What in this repo is worth a human's judgment right now, ranked, with the \
+             signals behind each ranking: reviewers disagreeing, a disputed claim, work \
+             resting on argument alone, claims nobody re-ran, declared gaps, and changes \
+             the sampling policy drew for a look. Use it to decide what to escalate to a \
+             person rather than guessing, and to see where your own work sits.",
+            &["repo"],
+            json!({ "repo": s("Repo name") }),
         ),
         tool(
             "verify_claim",

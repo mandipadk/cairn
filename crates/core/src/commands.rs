@@ -17,7 +17,7 @@ use crate::policy::{self, PolicyTrace};
 use crate::queries::raw;
 use crate::store::{Store, append};
 use crate::types::{
-    Capability, ChangeSpec, ChangeState, ClaimSpec, Disposition, ObjectFormat, Principal,
+    Capability, ChangeSpec, ChangeState, ClaimSpec, Disposition, ObjectFormat, Policy, Principal,
     PrincipalKind, ReviewDomain, SessionState, TaskState,
 };
 use rusqlite::Transaction;
@@ -175,6 +175,32 @@ impl Store {
                 repo: name.to_owned(),
                 default_branch: default_branch.to_owned(),
                 object_format,
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
+    /// Set the rules a repository requires. Admin authority, because
+    /// a policy decides what everyone else's work must satisfy.
+    pub fn set_policy(
+        &mut self,
+        actor: &PrincipalId,
+        repo: &str,
+        policy: Policy,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        authorize(&tx, actor, Capability::Admin, Some(repo))?;
+        raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
+        require(policy.required_domains.len() <= MAX_ITEMS, || {
+            format!("at most {MAX_ITEMS} required domains")
+        })?;
+        let env = append(
+            &tx,
+            actor,
+            Event::PolicySet {
+                repo: repo.to_owned(),
+                policy,
             },
         )?;
         tx.commit()?;

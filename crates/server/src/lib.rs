@@ -77,6 +77,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/changes/{id}/dequeue", post(routes::dequeue_change))
         .route("/api/repos/{name}/queue", get(routes::list_queue))
         .route("/api/repos/{name}/attention", get(routes::attention))
+        .route(
+            "/api/repos/{name}/policy",
+            get(routes::get_policy).post(routes::set_policy),
+        )
         .route("/api/repos/{name}/leases", get(routes::list_leases))
         .route("/api/repos/{name}/conflicts", get(routes::path_conflicts))
         .route("/api/sessions/{id}/paths", post(routes::declare_paths))

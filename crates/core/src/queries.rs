@@ -9,8 +9,8 @@ use crate::id::{ChangeId, PrincipalId, SessionId, TaskId};
 use crate::store::Store;
 use crate::types::{
     Capability, Change, ChangeState, Claim, ClaimKind, Disposition, Grant, Lease, Lesson,
-    ObjectFormat, Principal, PrincipalKind, Provenance, QueueEntry, Repo, ReviewDomain, Revision,
-    Session, SessionState, Task, TaskState, TokenInfo, Verdict, Verification,
+    ObjectFormat, Policy, Principal, PrincipalKind, Provenance, QueueEntry, Repo, ReviewDomain,
+    Revision, Session, SessionState, Task, TaskState, TokenInfo, Verdict, Verification,
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
@@ -56,19 +56,23 @@ pub(crate) mod raw {
 
     pub fn repos(conn: &Connection) -> CoreResult<Vec<Repo>> {
         let rows = conn
-            .prepare_cached("SELECT name, default_branch, object_format FROM repos ORDER BY name")?
+            .prepare_cached(
+                "SELECT name, default_branch, object_format, policy FROM repos ORDER BY name",
+            )?
             .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
-            .map(|(name, default_branch, format)| {
+            .map(|(name, default_branch, format, policy)| {
                 Ok(Repo {
                     object_format: parsed(&format!("repo {name}"), &format, ObjectFormat::parse)?,
+                    policy: read_policy(&name, &policy)?,
                     name,
                     default_branch,
                 })
@@ -76,24 +80,37 @@ pub(crate) mod raw {
             .collect()
     }
 
+    /// A repo written before policies existed, or one that never set
+    /// one, gets the defaults — the rules the forge shipped with.
+    fn read_policy(name: &str, stored: &str) -> CoreResult<Policy> {
+        if stored.trim().is_empty() || stored.trim() == "{}" {
+            return Ok(Policy::default());
+        }
+        serde_json::from_str(stored).map_err(|e| corrupt(&format!("repo {name} policy"), e))
+    }
+
     pub fn repo(conn: &Connection, name: &str) -> CoreResult<Option<Repo>> {
-        conn.prepare_cached("SELECT name, default_branch, object_format FROM repos WHERE name = ?")?
-            .query_row(params![name], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
+        conn.prepare_cached(
+            "SELECT name, default_branch, object_format, policy FROM repos WHERE name = ?",
+        )?
+        .query_row(params![name], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .optional()?
+        .map(|(name, default_branch, format, policy)| {
+            Ok(Repo {
+                object_format: parsed(&format!("repo {name}"), &format, ObjectFormat::parse)?,
+                policy: read_policy(&name, &policy)?,
+                name,
+                default_branch,
             })
-            .optional()?
-            .map(|(name, default_branch, format)| {
-                Ok(Repo {
-                    object_format: parsed(&format!("repo {name}"), &format, ObjectFormat::parse)?,
-                    name,
-                    default_branch,
-                })
-            })
-            .transpose()
+        })
+        .transpose()
     }
 
     fn task_from_row(row: &Row) -> rusqlite::Result<(Task, String)> {
@@ -815,6 +832,24 @@ impl Store {
         limit: usize,
     ) -> CoreResult<Vec<Lesson>> {
         raw::lessons(&self.conn, repo, query, failures_only, limit.min(200))
+    }
+
+    /// What a proposed policy would mean for the changes already
+    /// open: the answer to "if we tighten this, what stops landing?"
+    pub fn policy_preview(
+        &self,
+        repo: &str,
+        policy: &Policy,
+    ) -> CoreResult<Vec<(Change, crate::PolicyTrace)>> {
+        let mut previewed = Vec::new();
+        for change in raw::changes_in_repo(&self.conn, repo)? {
+            if change.state != ChangeState::Open || change.latest_revision == 0 {
+                continue;
+            }
+            let trace = crate::policy::evaluate_against(&self.conn, &change, policy)?;
+            previewed.push((change, trace));
+        }
+        Ok(previewed)
     }
 
     /// What a human should look at in this repo, and why. Ranked by

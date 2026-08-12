@@ -167,6 +167,7 @@ fn dispatch(client: &ApiClient, name: &str, args: &Value) -> Result<(u16, Value)
             args,
         ),
         "attention" => client.get(&format!("/api/repos/{}/attention", need(args, "repo")?)),
+        "policy" => client.get(&format!("/api/repos/{}/policy", need(args, "repo")?)),
         "lessons" => {
             let mut path = format!(
                 "/api/lessons?limit={}",
@@ -372,6 +373,16 @@ fn tool_definitions() -> Vec<Value> {
              naming the unmet requirements.",
             &["change"],
             json!({ "change": s("Change id") }),
+        ),
+        tool(
+            "policy",
+            "The rules this repository requires before anything lands on it: whether an \
+             executed check is needed, who counts as an independent approver, whether a \
+             runner must have reproduced a claim, and which review domains must sign off. \
+             Read it before you plan your verification, so you produce what will actually \
+             be required rather than what usually is.",
+            &["repo"],
+            json!({ "repo": s("Repo name") }),
         ),
         tool(
             "lessons",

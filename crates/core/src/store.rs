@@ -9,10 +9,16 @@
 use crate::error::{CoreError, CoreResult};
 use crate::event::{Envelope, Event, EventSeq};
 use crate::id::PrincipalId;
+use crate::types::Policy;
 use rusqlite::{Connection, Transaction, params};
 use std::path::Path;
 
-const SCHEMA: &str = "
+/// Bump whenever a projection table changes shape. The log is never
+/// touched; projections are rebuilt from it.
+const SCHEMA_VERSION: i64 = 1;
+
+/// The log itself, which outlives every schema.
+const EVENT_SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS events (
   seq     INTEGER PRIMARY KEY AUTOINCREMENT,
   ts      TEXT NOT NULL,
@@ -21,6 +27,11 @@ CREATE TABLE IF NOT EXISTS events (
   payload TEXT NOT NULL
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_events_kind ON events (kind, seq);
+";
+
+/// Everything derived. Dropping and replaying these is always safe:
+/// the log is the truth and this is only its current shape.
+const PROJECTION_SCHEMA: &str = "
 
 CREATE TABLE IF NOT EXISTS principals (
   id      TEXT PRIMARY KEY,
@@ -53,7 +64,8 @@ CREATE INDEX IF NOT EXISTS idx_grants_grantee ON grants (grantee, revoked);
 CREATE TABLE IF NOT EXISTS repos (
   name           TEXT PRIMARY KEY,
   default_branch TEXT NOT NULL,
-  object_format  TEXT NOT NULL DEFAULT 'sha1'
+  object_format  TEXT NOT NULL DEFAULT 'sha1',
+  policy         TEXT NOT NULL DEFAULT '{}'
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -161,6 +173,23 @@ CREATE TABLE IF NOT EXISTS verdicts (
 CREATE INDEX IF NOT EXISTS idx_verdicts_change ON verdicts (change_id, revision);
 ";
 
+/// The reverse, for a rebuild.
+const DROP_PROJECTIONS: &str = "
+DROP TABLE IF EXISTS principals;
+DROP TABLE IF EXISTS tokens;
+DROP TABLE IF EXISTS grants;
+DROP TABLE IF EXISTS repos;
+DROP TABLE IF EXISTS tasks;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS leases;
+DROP TABLE IF EXISTS changes;
+DROP TABLE IF EXISTS revisions;
+DROP TABLE IF EXISTS claims;
+DROP TABLE IF EXISTS merge_queue;
+DROP TABLE IF EXISTS verifications;
+DROP TABLE IF EXISTS verdicts;
+";
+
 pub struct Store {
     pub(crate) conn: Connection,
 }
@@ -178,10 +207,22 @@ impl Store {
         Self::init(Connection::open_in_memory()?)
     }
 
-    fn init(conn: Connection) -> CoreResult<Self> {
+    fn init(mut conn: Connection) -> CoreResult<Self> {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        conn.execute_batch(SCHEMA)?;
+        conn.execute_batch(EVENT_SCHEMA)?;
+
+        // Projections are derived, so a schema change is not a
+        // migration problem: drop them and replay the log. This is the
+        // event-sourced design paying for itself — there is no
+        // hand-written ALTER to get wrong, and the rebuilt state is
+        // exactly "the log, applied", the same invariant that holds
+        // at runtime.
+        let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if version != SCHEMA_VERSION {
+            rebuild_projections(&mut conn)?;
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
         Ok(Store { conn })
     }
 
@@ -241,6 +282,64 @@ pub(crate) fn append(tx: &Transaction, actor: &PrincipalId, event: Event) -> Cor
     };
     apply(tx, &envelope)?;
     Ok(envelope)
+}
+
+/// Rebuild every projection by replaying the log into it.
+fn rebuild_projections(conn: &mut Connection) -> CoreResult<()> {
+    let tx = conn.transaction()?;
+    tx.execute_batch(DROP_PROJECTIONS)?;
+    tx.execute_batch(PROJECTION_SCHEMA)?;
+
+    let mut replayed = 0u64;
+    let mut cursor = 0i64;
+    loop {
+        let batch = {
+            let mut stmt = tx.prepare(
+                "SELECT seq, ts, actor, payload FROM events
+                 WHERE seq > ? ORDER BY seq LIMIT 1000",
+            )?;
+            let rows = stmt.query_map(params![cursor], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        if batch.is_empty() {
+            break;
+        }
+        for (seq, ts, actor, payload) in batch {
+            let event: Event = serde_json::from_str(&payload).map_err(|e| CoreError::Corrupt {
+                at: format!("event seq {seq}"),
+                reason: e.to_string(),
+            })?;
+            apply(
+                &tx,
+                &Envelope {
+                    seq: EventSeq(seq),
+                    ts,
+                    actor: PrincipalId(actor),
+                    event,
+                },
+            )?;
+            cursor = seq;
+            replayed += 1;
+        }
+    }
+    tx.commit()?;
+    if replayed > 0 {
+        tracing_replay(replayed);
+    }
+    Ok(())
+}
+
+/// Rebuilding is rare and worth a line in the log of whoever is
+/// watching, but the core does not depend on a logging framework.
+fn tracing_replay(events: u64) {
+    eprintln!("cairn: projections rebuilt by replaying {events} events");
 }
 
 /// The single projector: the only code that writes projection tables.
@@ -314,8 +413,23 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             object_format,
         } => {
             tx.execute(
-                "INSERT INTO repos (name, default_branch, object_format) VALUES (?, ?, ?)",
-                params![repo, default_branch, object_format.as_str()],
+                "INSERT INTO repos (name, default_branch, object_format, policy)
+                 VALUES (?, ?, ?, ?)",
+                params![
+                    repo,
+                    default_branch,
+                    object_format.as_str(),
+                    serde_json::to_string(&Policy::default()).expect("policy serializes")
+                ],
+            )?;
+        }
+        Event::PolicySet { repo, policy } => {
+            tx.execute(
+                "UPDATE repos SET policy = ? WHERE name = ?",
+                params![
+                    serde_json::to_string(policy).expect("policy serializes"),
+                    repo
+                ],
             )?;
         }
         Event::TaskCreated {

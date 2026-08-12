@@ -1,17 +1,21 @@
 //! Merge policy: the law that decides when a change may land.
 //!
 //! Nothing merges on ambient authority. A merge is the outcome of an
-//! evaluation over the graph — claims, verdicts, and the principals
-//! behind them — and the full [`PolicyTrace`] is embedded in the
-//! `ChangeMerged` event, so every merge is explainable from the log
-//! alone, forever.
+//! evaluation over the graph — claims, verdicts, verifications, and
+//! the principals behind them — and the full [`PolicyTrace`] is
+//! embedded in the `ChangeMerged` event, so every merge is explainable
+//! from the log alone, forever.
 //!
-//! This is the fixed default policy; per-repo configurable policy is a
-//! planned layer on the same trace shape.
+//! What is required is the repository's own choice, recorded as an
+//! event like anything else. The defaults are the rules the forge
+//! shipped with, so a repo that never sets a policy behaves exactly as
+//! it always did — and the shape of the answer is identical either
+//! way: a list of requirements, each satisfied or not, each carrying
+//! the evidence it was judged on.
 
 use crate::error::CoreResult;
 use crate::queries::raw;
-use crate::types::{Change, ClaimKind, Disposition, PrincipalKind};
+use crate::types::{Change, ClaimKind, Disposition, Independence, Policy, PrincipalKind};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
@@ -41,8 +45,19 @@ impl PolicyTrace {
     }
 }
 
-/// Evaluate the default policy for a change at its latest revision.
+/// Evaluate a change against its repository's policy.
 pub(crate) fn evaluate(conn: &Connection, change: &Change) -> CoreResult<PolicyTrace> {
+    let policy = raw::repo(conn, &change.repo)?
+        .map(|repo| repo.policy)
+        .unwrap_or_default();
+    evaluate_against(conn, change, &policy)
+}
+
+pub(crate) fn evaluate_against(
+    conn: &Connection,
+    change: &Change,
+    policy: &Policy,
+) -> CoreResult<PolicyTrace> {
     let mut requirements = Vec::new();
     let revision = change.latest_revision;
 
@@ -53,26 +68,28 @@ pub(crate) fn evaluate(conn: &Connection, change: &Change) -> CoreResult<PolicyT
     });
 
     let claims = raw::claims_on(conn, change.id.as_str(), revision)?;
-    let passing_tests: Vec<_> = claims
-        .iter()
-        .filter(|c| c.kind == ClaimKind::Test && c.passed)
-        .collect();
-    requirements.push(Requirement {
-        description: "latest revision carries a passing test claim".into(),
-        satisfied: !passing_tests.is_empty(),
-        evidence: if passing_tests.is_empty() {
-            format!(
-                "{} claim(s) on revision {revision}, none a passing test",
-                claims.len()
-            )
-        } else {
-            passing_tests
-                .iter()
-                .map(|c| c.id.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        },
-    });
+    if policy.require_executed_check {
+        let executed: Vec<_> = claims
+            .iter()
+            .filter(|c| c.kind != ClaimKind::Reasoning && c.passed)
+            .collect();
+        requirements.push(Requirement {
+            description: "latest revision carries a passing test claim".into(),
+            satisfied: !executed.is_empty(),
+            evidence: if executed.is_empty() {
+                format!(
+                    "{} claim(s) on revision {revision}, none an executed check",
+                    claims.len()
+                )
+            } else {
+                executed
+                    .iter()
+                    .map(|c| c.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
+        });
+    }
 
     // A claim someone re-ran and could not reproduce is worse than no
     // claim: it is a contradiction on the record.
@@ -95,6 +112,23 @@ pub(crate) fn evaluate(conn: &Connection, change: &Change) -> CoreResult<PolicyT
         },
     });
 
+    if policy.require_runner_verification {
+        let reproduced: Vec<_> = verifications.iter().filter(|v| v.agrees).collect();
+        requirements.push(Requirement {
+            description: "a runner reproduced a claim on the latest revision".into(),
+            satisfied: !reproduced.is_empty(),
+            evidence: if reproduced.is_empty() {
+                "nobody has re-run anything on this revision".into()
+            } else {
+                reproduced
+                    .iter()
+                    .map(|v| format!("{} reproduced {}", v.by, v.claim))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
+        });
+    }
+
     let verdicts = raw::verdicts_on(conn, change.id.as_str(), revision)?;
     let blocks: Vec<_> = verdicts
         .iter()
@@ -114,11 +148,29 @@ pub(crate) fn evaluate(conn: &Connection, change: &Change) -> CoreResult<PolicyT
         },
     });
 
-    // Independent approval: one human, or two agents of distinct models.
-    // "Distinct models" is the point — two instances of the same model
-    // are one reviewer with extra steps.
-    let mut human_approvals = Vec::new();
-    let mut agent_models = Vec::new();
+    for domain in &policy.required_domains {
+        let covered: Vec<_> = verdicts
+            .iter()
+            .filter(|v| v.domain == *domain && v.disposition == Disposition::Approve)
+            .collect();
+        requirements.push(Requirement {
+            description: format!("approved for {}", domain.as_str()),
+            satisfied: !covered.is_empty(),
+            evidence: if covered.is_empty() {
+                format!("no {} approval on revision {revision}", domain.as_str())
+            } else {
+                covered
+                    .iter()
+                    .map(|v| v.by.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
+        });
+    }
+
+    // Independence: whose judgment counts as somebody else's.
+    let mut humans = Vec::new();
+    let mut agent_models: Vec<(String, String)> = Vec::new();
     for verdict in &verdicts {
         if verdict.disposition != Disposition::Approve || verdict.by == change.owner {
             continue;
@@ -127,7 +179,7 @@ pub(crate) fn evaluate(conn: &Connection, change: &Change) -> CoreResult<PolicyT
             continue;
         };
         match principal.kind {
-            PrincipalKind::Human => human_approvals.push(verdict.by.as_str().to_owned()),
+            PrincipalKind::Human => humans.push(verdict.by.as_str().to_owned()),
             PrincipalKind::Agent => {
                 let model = principal.model.unwrap_or_else(|| principal.id.0.clone());
                 if !agent_models.iter().any(|(m, _)| *m == model) {
@@ -136,15 +188,28 @@ pub(crate) fn evaluate(conn: &Connection, change: &Change) -> CoreResult<PolicyT
             }
         }
     }
-    let independent = !human_approvals.is_empty() || agent_models.len() >= 2;
-    requirements.push(Requirement {
-        description:
+    let (description, satisfied) = match policy.independence {
+        Independence::None => ("no independent approval required".to_owned(), true),
+        Independence::Anyone => (
+            "approved by anyone other than the owner".to_owned(),
+            !humans.is_empty() || !agent_models.is_empty(),
+        ),
+        Independence::HumanOnly => (
+            "approved by a human other than the owner".to_owned(),
+            !humans.is_empty(),
+        ),
+        Independence::HumanOrTwoModels => (
             "approved independently of the owner: one human, or two agents of distinct models"
-                .into(),
-        satisfied: independent,
+                .to_owned(),
+            !humans.is_empty() || agent_models.len() >= 2,
+        ),
+    };
+    requirements.push(Requirement {
+        description,
+        satisfied,
         evidence: format!(
             "human approvals: [{}]; agent approvals by model: [{}]",
-            human_approvals.join(", "),
+            humans.join(", "),
             agent_models
                 .iter()
                 .map(|(model, who)| format!("{who} ({model})"))

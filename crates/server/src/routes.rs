@@ -797,3 +797,62 @@ pub async fn lessons(
     })?;
     Ok(Json(json!(found)))
 }
+
+// ---- policy ----
+
+#[derive(Deserialize)]
+pub struct PolicyBody {
+    #[serde(flatten)]
+    pub policy: cairn_core::Policy,
+    /// Report what this policy would do to the open changes, and
+    /// change nothing.
+    #[serde(default)]
+    pub preview: bool,
+}
+
+/// Read or set the rules a repository requires. Setting is admin
+/// authority; previewing asks what a proposed policy would cost
+/// without committing to it.
+pub async fn get_policy(
+    State(app): State<AppState>,
+    _actor: Actor,
+    Path(repo): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let record = found(app.with_store(|s| s.repo(&repo))?, "repo")?;
+    Ok(Json(json!(record.policy)))
+}
+
+pub async fn set_policy(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(repo): Path<String>,
+    Json(body): Json<PolicyBody>,
+) -> ApiResult<Json<Value>> {
+    if body.preview {
+        let previewed = app.with_store(|s| s.policy_preview(&repo, &body.policy))?;
+        let would_block: Vec<Value> = previewed
+            .iter()
+            .filter(|(_, trace)| !trace.satisfied)
+            .map(|(change, trace)| {
+                json!({
+                    "change": change.number,
+                    "title": change.title,
+                    "unmet": trace
+                        .requirements
+                        .iter()
+                        .filter(|r| !r.satisfied)
+                        .map(|r| r.description.clone())
+                        .collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        return Ok(Json(json!({
+            "preview": true,
+            "open_changes": previewed.len(),
+            "would_block": would_block,
+        })));
+    }
+    let env = app.with_store(|s| s.set_policy(&actor.0, &repo, body.policy))?;
+    app.publish(&env);
+    Ok(committed(Some(repo), &env))
+}

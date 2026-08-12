@@ -114,6 +114,7 @@ pub struct Repo {
     pub name: String,
     pub default_branch: String,
     pub object_format: ObjectFormat,
+    pub policy: Policy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -302,6 +303,49 @@ impl Provenance {
             .iter()
             .filter(|v| v.disposition == Disposition::Approve)
             .collect()
+    }
+}
+
+str_enum!(
+    /// How much independence a landing requires. Every option is a
+    /// position on the same question: whose judgment counts as
+    /// somebody else's.
+    Independence {
+        /// Anyone but the owner, human or agent.
+        Anyone => "anyone",
+        /// One human, or two agents of distinct models. The default.
+        HumanOrTwoModels => "human_or_two_models",
+        /// A human, and only a human.
+        HumanOnly => "human_only",
+        /// Nothing. Suitable for a scratch repo, and nowhere else.
+        None => "none",
+    }
+);
+
+/// What a repository requires before anything lands on it.
+///
+/// The defaults are the rules the forge shipped with, so a repo that
+/// never says anything behaves exactly as it always did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Policy {
+    /// A passing, executed check must exist on the landing revision.
+    pub require_executed_check: bool,
+    /// Who must approve, besides the owner.
+    pub independence: Independence,
+    /// A runner must have reproduced at least one claim.
+    pub require_runner_verification: bool,
+    /// Reviewers may be required to cover particular domains.
+    pub required_domains: Vec<ReviewDomain>,
+}
+
+impl Default for Policy {
+    fn default() -> Self {
+        Policy {
+            require_executed_check: true,
+            independence: Independence::HumanOrTwoModels,
+            require_runner_verification: false,
+            required_domains: Vec::new(),
+        }
     }
 }
 

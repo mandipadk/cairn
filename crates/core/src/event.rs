@@ -10,8 +10,8 @@ use crate::id::{
 };
 use crate::policy::PolicyTrace;
 use crate::types::{
-    Capability, ClaimKind, Disposition, ObjectFormat, PrincipalKind, ReviewDomain, SessionState,
-    TaskState,
+    Capability, ClaimKind, Disposition, ObjectFormat, Policy, PrincipalKind, ReviewDomain,
+    SessionState, TaskState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -74,6 +74,12 @@ pub enum Event {
         default_branch: String,
         #[serde(default)]
         object_format: ObjectFormat,
+    },
+
+    /// A repository set the rules everything on it must meet.
+    PolicySet {
+        repo: String,
+        policy: Policy,
     },
 
     TaskCreated {
@@ -216,6 +222,7 @@ impl Event {
             Event::GrantIssued { .. } => "grant_issued",
             Event::GrantRevoked { .. } => "grant_revoked",
             Event::RepoCreated { .. } => "repo_created",
+            Event::PolicySet { .. } => "policy_set",
             Event::TaskCreated { .. } => "task_created",
             Event::TaskClaimed { .. } => "task_claimed",
             Event::TaskStateChanged { .. } => "task_state_changed",

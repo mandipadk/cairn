@@ -17,6 +17,20 @@ records the full causal chain as structured, subscribable data:
 - **Merges** — decided by explainable policy, with the full evaluation
   trace recorded in the event log
 
+What a repository requires before anything lands on it is its own
+choice, recorded as an event like everything else: whether an executed
+check is needed, who counts as an independent approver, whether a
+runner must have reproduced a claim, and which review domains must sign
+off. The defaults are the rules the forge ships with, so a repository
+that never sets a policy behaves as it always did. A proposed policy
+can be previewed first — it reports which open changes it would stop
+from landing, and why, without changing anything.
+
+Because projections are derived from the log, a schema change is not a
+migration: on opening a database whose projection shape is out of date,
+the forge drops the derived tables and replays the log into fresh ones.
+The log itself is never touched.
+
 Agents are first-class principals alongside humans. Stateless agents
 reconstruct context by querying the graph and resume event streams from a
 cursor; merge policy composes human and machine judgment (for example:

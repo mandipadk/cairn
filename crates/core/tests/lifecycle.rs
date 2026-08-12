@@ -1431,3 +1431,222 @@ fn lessons_keep_what_attempts_learned() {
             .all(|l| l.session != running)
     );
 }
+
+#[test]
+fn a_repo_chooses_the_rules_its_work_must_meet() {
+    let (mut store, human, scout, arbiter) = seeded();
+    store
+        .issue_grant(&human, &arbiter, None, vec![Capability::Verify], None)
+        .unwrap();
+
+    // A repo that never says anything keeps the shipped defaults.
+    let repo = store.repo("forge").unwrap().unwrap();
+    assert_eq!(repo.policy, cairn_core::Policy::default());
+
+    let change = change_with_claim(&mut store, &scout, "Ordinary work", passing_with_command());
+    store
+        .give_verdict(
+            &human,
+            &change,
+            1,
+            ReviewDomain::Correctness,
+            Disposition::Approve,
+            "ok",
+        )
+        .unwrap();
+    assert!(store.merge_readiness(&change).unwrap().satisfied);
+
+    // Tightening: a runner must have reproduced something, and
+    // security must have signed off.
+    let strict = cairn_core::Policy {
+        require_runner_verification: true,
+        required_domains: vec![ReviewDomain::Security],
+        ..cairn_core::Policy::default()
+    };
+
+    // Before committing to it, ask what it would cost.
+    let preview = store.policy_preview("forge", &strict).unwrap();
+    assert_eq!(preview.len(), 1);
+    let (previewed, trace) = &preview[0];
+    assert_eq!(previewed.id, change);
+    assert!(
+        !trace.satisfied,
+        "the preview should show what would stop landing"
+    );
+    // Previewing changes nothing.
+    assert!(store.merge_readiness(&change).unwrap().satisfied);
+
+    // Only admins set policy.
+    assert!(matches!(
+        store
+            .set_policy(&scout, "forge", strict.clone())
+            .unwrap_err(),
+        CoreError::Forbidden(_)
+    ));
+    store.set_policy(&human, "forge", strict).unwrap();
+    assert_eq!(
+        store.repo("forge").unwrap().unwrap().policy.independence,
+        cairn_core::Independence::HumanOrTwoModels
+    );
+
+    // Now the same change is short two requirements, each named.
+    let trace = store.merge_readiness(&change).unwrap();
+    assert!(!trace.satisfied);
+    let unmet: Vec<&str> = trace
+        .requirements
+        .iter()
+        .filter(|r| !r.satisfied)
+        .map(|r| r.description.as_str())
+        .collect();
+    assert!(unmet.iter().any(|d| d.contains("runner reproduced")));
+    assert!(unmet.iter().any(|d| d.contains("approved for security")));
+
+    // Satisfy them and it lands again.
+    let claim = store.claims_on(&change, 1).unwrap()[0].id.clone();
+    store
+        .verify_claim(&arbiter, &claim, true, "cargo test", "reproduced")
+        .unwrap();
+    store
+        .give_verdict(
+            &human,
+            &change,
+            1,
+            ReviewDomain::Security,
+            Disposition::Approve,
+            "safe",
+        )
+        .unwrap();
+    assert!(store.merge_readiness(&change).unwrap().satisfied);
+
+    // Loosening is equally possible, and equally recorded.
+    store
+        .set_policy(
+            &human,
+            "forge",
+            cairn_core::Policy {
+                require_executed_check: false,
+                independence: cairn_core::Independence::None,
+                require_runner_verification: false,
+                required_domains: vec![],
+            },
+        )
+        .unwrap();
+    let bare = store
+        .open_change(&scout, ChangeSpec::new("forge", "main", "Nothing claimed"))
+        .unwrap()
+        .0;
+    store
+        .push_revision(&scout, &bare, OID, None, "bare")
+        .unwrap();
+    assert!(
+        store.merge_readiness(&bare).unwrap().satisfied,
+        "a repo may choose to require nothing, and the trace says so"
+    );
+
+    // The choice is in the log like everything else.
+    let kinds: Vec<&str> = store
+        .events_after(EventSeq(0), 200)
+        .unwrap()
+        .iter()
+        .map(|e| e.event.kind())
+        .filter(|k| *k == "policy_set")
+        .collect();
+    assert_eq!(kinds.len(), 2);
+}
+
+#[test]
+fn projections_rebuild_themselves_from_the_log() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let path = file.path().to_owned();
+
+    // Build a forge with something of every shape in it.
+    {
+        let mut store = Store::open(&path).unwrap();
+        let human = principal("ada");
+        let scout = principal("scout");
+        store
+            .register_principal(&human, &human, PrincipalKind::Human, "Ada", None, None)
+            .unwrap();
+        store
+            .register_principal(
+                &human,
+                &scout,
+                PrincipalKind::Agent,
+                "Scout",
+                Some("m"),
+                None,
+            )
+            .unwrap();
+        store
+            .create_repo(&human, "forge", "main", ObjectFormat::Sha1)
+            .unwrap();
+        store
+            .issue_grant(&human, &scout, None, vec![Capability::Push], None)
+            .unwrap();
+        store
+            .set_policy(
+                &human,
+                "forge",
+                cairn_core::Policy {
+                    independence: cairn_core::Independence::HumanOnly,
+                    ..cairn_core::Policy::default()
+                },
+            )
+            .unwrap();
+        let (change, _, _) = store
+            .open_change(&scout, ChangeSpec::new("forge", "main", "Something"))
+            .unwrap();
+        store
+            .push_revision(&scout, &change, OID, None, "work")
+            .unwrap();
+        store
+            .attach_claim(&scout, &change, 1, passing_tests())
+            .unwrap();
+        store
+            .give_verdict(
+                &human,
+                &change,
+                1,
+                ReviewDomain::Correctness,
+                Disposition::Approve,
+                "ok",
+            )
+            .unwrap();
+        store.merge_change(&human, &change).unwrap();
+    }
+
+    // Simulate a release that changed a projection's shape: mangle the
+    // derived tables and mark the schema stale.
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch("DROP TABLE changes; DELETE FROM repos;")
+            .unwrap();
+        conn.pragma_update(None, "user_version", 0i64).unwrap();
+    }
+
+    // Opening rebuilds everything from the log, and the state that
+    // comes back is the state that was there.
+    let store = Store::open(&path).unwrap();
+    let repo = store.repo("forge").unwrap().expect("the repo returns");
+    assert_eq!(repo.default_branch, "main");
+    assert_eq!(
+        repo.policy.independence,
+        cairn_core::Independence::HumanOnly,
+        "a policy set by an event must survive the rebuild"
+    );
+    let changes = store.changes_in_repo("forge").unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].state, cairn_core::ChangeState::Merged);
+    assert_eq!(changes[0].latest_revision, 1);
+    assert_eq!(
+        changes[0].landed_oid.as_deref(),
+        Some(OID),
+        "derived columns are derived again, not lost"
+    );
+    assert_eq!(store.claims_on(&changes[0].id, 1).unwrap().len(), 1);
+    assert_eq!(store.verdicts_on(&changes[0].id, 1).unwrap().len(), 1);
+    assert_eq!(store.grants_of(&principal("scout")).unwrap().len(), 1);
+
+    // And the log itself was never touched.
+    assert_eq!(store.events_after(EventSeq(0), 100).unwrap().len(), 10);
+}

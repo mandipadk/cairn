@@ -999,6 +999,12 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
         ),
         Event::GrantRevoked { .. } => ("dot idle", html! { b { (actor) } " revoked a grant" }),
         Event::RepoCreated { repo, .. } => ("dot idle", html! { b { (actor) } " created " (repo) }),
+        Event::PolicySet { repo, .. } => (
+            "dot idle",
+            html! {
+                b { (actor) } " set the policy for " (repo)
+            },
+        ),
         Event::PrincipalRegistered { principal, .. } => (
             "dot idle",
             html! {

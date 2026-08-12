@@ -261,6 +261,22 @@ async fn web_ui_full_journey() {
     assert_eq!(status, 200);
     assert!(body.contains("Nothing is waiting on a human."));
 
+    // The brief counts what happened; the lessons page keeps what
+    // attempts learned, and both are searchable from the page.
+    let (status, body, _) = ada.get("/demo/lessons");
+    assert_eq!(status, 200);
+    assert!(body.contains("Has anyone tried this before?"));
+    let (_, body, _) = ada.get("/demo/landing");
+    assert!(
+        body.contains("counted from the log"),
+        "the brief should say where its numbers come from"
+    );
+    assert!(body.contains("The train landed") || body.contains("Nothing has landed"));
+
+    // A change nobody argues about shows no disagreement section.
+    let (_, body, _) = ada.get("/demo/changes/1");
+    assert!(!body.contains("Reviewers disagree"));
+
     // Blame answers what was known, not just who typed: the line's
     // change, and the gap its claim declared.
     let (status, body, _) = ada.get("/demo/blame/greeting.txt");

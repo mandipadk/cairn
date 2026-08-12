@@ -167,6 +167,22 @@ fn dispatch(client: &ApiClient, name: &str, args: &Value) -> Result<(u16, Value)
             args,
         ),
         "attention" => client.get(&format!("/api/repos/{}/attention", need(args, "repo")?)),
+        "lessons" => {
+            let mut path = format!(
+                "/api/lessons?limit={}",
+                args.get("limit").and_then(Value::as_i64).unwrap_or(20)
+            );
+            if let Some(repo) = args.get("repo").and_then(Value::as_str) {
+                path.push_str(&format!("&repo={repo}"));
+            }
+            if let Some(q) = args.get("query").and_then(Value::as_str) {
+                path.push_str(&format!("&q={q}"));
+            }
+            if args.get("failures_only").and_then(Value::as_bool) == Some(true) {
+                path.push_str("&failures_only=true");
+            }
+            client.get(&path)
+        }
         "declare_paths" => client.post(
             &format!("/api/sessions/{}/paths", need(args, "session")?),
             args,
@@ -356,6 +372,20 @@ fn tool_definitions() -> Vec<Value> {
              naming the unmet requirements.",
             &["change"],
             json!({ "change": s("Change id") }),
+        ),
+        tool(
+            "lessons",
+            "Has anyone tried this before? Search what earlier sessions recorded on their \
+             way out — especially the ones that failed, where the outcome says what did \
+             not work and why. Ask before starting work that resembles something already \
+             attempted; the corpus exists because every session must record an outcome.",
+            &[],
+            json!({
+                "query": s("Words to look for in outcomes and task titles"),
+                "repo": s("Limit to one repo (optional)"),
+                "failures_only": { "type": "boolean", "description": "Only failed attempts" },
+                "limit": { "type": "integer", "description": "Max results (default 20)" },
+            }),
         ),
         tool(
             "declare_paths",

@@ -198,3 +198,91 @@ async fn declared_paths_warn_before_the_tokens_are_spent() {
         .collect();
     assert_eq!(held, ["arbiter"]);
 }
+
+/// Opposing verdicts put both positions in front of the human who has
+/// to break the tie.
+#[tokio::test(flavor = "multi_thread")]
+async fn conflicting_verdicts_are_shown_side_by_side() {
+    let forge = boot().await;
+    let app = &forge.app;
+    let addr = forge.addr;
+
+    git(
+        &forge.work,
+        &["clone", &format!("http://scout:x@{addr}/git/demo"), "wc"],
+    );
+    let wc = forge.work.join("wc");
+    commit_file(
+        &wc,
+        "risky.rs",
+        "fn risky() {}\n",
+        "Risky\n\nChange-Id: Irisky",
+    );
+    git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
+    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let change = changes[0]["id"].as_str().unwrap().to_owned();
+
+    // Both sides review here, so both need the capability to.
+    for grantee in ["scout", "arbiter"] {
+        let (status, _) = api(
+            app,
+            "POST",
+            "/api/grants",
+            "ada",
+            Some(json!({ "grantee": grantee, "actions": ["review"] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    // One reviewer for, one against, on the same revision.
+    for (who, disposition, domain, why) in [
+        (
+            "scout",
+            "approve",
+            "correctness",
+            "Logic is sound on every path I traced.",
+        ),
+        (
+            "arbiter",
+            "block",
+            "security",
+            "Unbounded input reaches the parser here.",
+        ),
+    ] {
+        let (status, _) = api(
+            app,
+            "POST",
+            &format!("/api/changes/{change}/verdicts"),
+            who,
+            Some(json!({ "domain": domain, "disposition": disposition, "rationale": why })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    let page = fetch_page(addr, "demo/changes/1").await;
+    assert!(page.contains("Reviewers disagree"));
+    assert!(page.contains("In favour") && page.contains("Against"));
+    assert!(page.contains("Logic is sound on every path I traced."));
+    assert!(page.contains("Unbounded input reaches the parser here."));
+
+    // And the attention engine leads with it.
+    let (_, ranked) = api(app, "GET", "/api/repos/demo/attention", "ada", None).await;
+    assert_eq!(ranked[0]["signals"][0]["kind"], "reviewers_disagree");
+}
+
+/// Fetch a rendered page as a signed-in human.
+async fn fetch_page(addr: std::net::SocketAddr, path: &str) -> String {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .build()
+        .into();
+    let mut response = agent
+        .get(format!("http://{addr}/{path}"))
+        .header("cookie", "cairn_dev=ada")
+        .call()
+        .expect("page request");
+    response.body_mut().read_to_string().unwrap_or_default()
+}

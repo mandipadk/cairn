@@ -49,6 +49,7 @@ pub use policy::{PolicyTrace, Requirement};
 pub use store::Store;
 pub use types::{
     Capability, Change, ChangeSpec, ChangeState, Claim, ClaimKind, ClaimSpec, Disposition, Grant,
-    Lease, ObjectFormat, Principal, PrincipalKind, Provenance, QueueEntry, Repo, ReviewDomain,
-    Revision, Session, SessionState, Task, TaskState, TokenInfo, Verdict, Verification,
+    Lease, Lesson, ObjectFormat, Principal, PrincipalKind, Provenance, QueueEntry, Repo,
+    ReviewDomain, Revision, Session, SessionState, Task, TaskState, TokenInfo, Verdict,
+    Verification,
 };

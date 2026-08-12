@@ -769,3 +769,31 @@ pub async fn list_leases(
     let leases = app.with_store(|s| s.live_leases(&repo))?;
     Ok(Json(json!(leases)))
 }
+
+#[derive(Deserialize)]
+pub struct LessonQuery {
+    pub repo: Option<String>,
+    pub q: Option<String>,
+    #[serde(default)]
+    pub failures_only: bool,
+    pub limit: Option<usize>,
+}
+
+/// What earlier attempts learned, searchable. Every ending session is
+/// required to record an outcome, so this corpus is a by-product of
+/// the protocol rather than something anyone has to maintain.
+pub async fn lessons(
+    State(app): State<AppState>,
+    _actor: Actor,
+    Query(query): Query<LessonQuery>,
+) -> ApiResult<Json<Value>> {
+    let found = app.with_store(|s| {
+        s.lessons(
+            query.repo.as_deref(),
+            query.q.as_deref().filter(|q| !q.trim().is_empty()),
+            query.failures_only,
+            query.limit.unwrap_or(50),
+        )
+    })?;
+    Ok(Json(json!(found)))
+}

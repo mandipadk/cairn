@@ -305,6 +305,19 @@ impl Provenance {
     }
 }
 
+/// What one attempt learned, kept so the next one does not re-walk it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Lesson {
+    pub session: SessionId,
+    pub agent: PrincipalId,
+    pub state: SessionState,
+    /// The intent the attempt was serving.
+    pub task: TaskId,
+    pub task_title: String,
+    /// What the agent recorded on its way out.
+    pub outcome: String,
+}
+
 /// A session's declared intent over paths, live while the session is.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Lease {

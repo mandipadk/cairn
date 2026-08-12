@@ -1365,3 +1365,69 @@ fn leases_surface_collisions_before_the_work_is_spent() {
         CoreError::Invalid(_)
     ));
 }
+
+#[test]
+fn lessons_keep_what_attempts_learned() {
+    let (mut store, human, scout, arbiter) = seeded();
+    let failed = session_for(&mut store, &human, &scout, "Migrate the event log");
+    store
+        .end_session(
+            &scout,
+            &failed,
+            SessionState::Failed,
+            "The migration needs a lock-order note before anyone retries: writers take \
+             the projection lock first, readers the opposite.",
+        )
+        .unwrap();
+    let done = session_for(&mut store, &human, &arbiter, "Tidy the parser");
+    store
+        .end_session(&arbiter, &done, SessionState::Completed, "Landed cleanly.")
+        .unwrap();
+
+    // Everything ended is remembered; failures can be asked for alone.
+    assert_eq!(
+        store.lessons(Some("forge"), None, false, 50).unwrap().len(),
+        2
+    );
+    let failures = store.lessons(Some("forge"), None, true, 50).unwrap();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].agent, scout);
+    assert_eq!(failures[0].task_title, "Migrate the event log");
+
+    // The question an agent should ask: has anyone tried this before?
+    let hits = store.lessons(None, Some("lock-order"), false, 50).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].outcome.contains("lock-order"));
+    // Task titles are searchable too, not just outcomes.
+    assert_eq!(
+        store
+            .lessons(None, Some("parser"), false, 50)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        store
+            .lessons(None, Some("nothing like this"), false, 50)
+            .unwrap()
+            .is_empty()
+    );
+
+    // A search term full of wildcards matches literally, not greedily.
+    assert!(
+        store
+            .lessons(None, Some("%"), false, 50)
+            .unwrap()
+            .is_empty()
+    );
+
+    // A running session has nothing to teach yet.
+    let running = session_for(&mut store, &human, &scout, "Still going");
+    assert!(
+        store
+            .lessons(Some("forge"), None, false, 50)
+            .unwrap()
+            .iter()
+            .all(|l| l.session != running)
+    );
+}

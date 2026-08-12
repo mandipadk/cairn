@@ -46,6 +46,7 @@ pub fn routes() -> Router<AppState> {
         .route("/{repo}/changes/{number}/enqueue", post(submit_enqueue))
         .route("/{repo}/landing", get(landing_page))
         .route("/{repo}/log", get(log_page))
+        .route("/{repo}/lessons", get(lessons_page))
 }
 
 async fn stylesheet() -> impl IntoResponse {
@@ -627,6 +628,19 @@ pub(crate) struct LandingData {
     pub numbers: HashMap<String, (i64, String)>,
     /// The cursor a consumer would resume from right now.
     pub latest_seq: i64,
+    /// A grounded summary of the window the page is showing.
+    pub brief: Brief,
+}
+
+/// What happened lately, counted from the log rather than narrated.
+/// Every number here is the size of a set the reader can go and look
+/// at, which is what keeps it honest.
+pub(crate) struct Brief {
+    pub since: i64,
+    pub landed: usize,
+    pub dequeued: Vec<(String, String)>,
+    pub failed_sessions: Vec<cairn_core::Lesson>,
+    pub disputed: usize,
 }
 
 fn landing_data(
@@ -659,7 +673,40 @@ fn landing_data(
         .collect();
     let live: Vec<_> = events.iter().rev().take(9).cloned().collect();
 
+    // Everything the brief says is a count of events in this window,
+    // so a reader can always go and check it.
+    let window_start = (latest - 200).max(0);
+    let mut landed = 0;
+    let mut dequeued = Vec::new();
+    let mut disputed = 0;
+    for envelope in &events {
+        match &envelope.event {
+            cairn_core::Event::ChangeMerged { change, .. } => {
+                if numbers.contains_key(change.as_str()) {
+                    landed += 1;
+                }
+            }
+            cairn_core::Event::ChangeDequeued { change, reason } => {
+                if let Some((number, title)) = numbers.get(change.as_str()) {
+                    dequeued.push((format!("#{number} {title}"), reason.clone()));
+                }
+            }
+            cairn_core::Event::ClaimVerified { agrees: false, .. } => disputed += 1,
+            _ => {}
+        }
+    }
+    let failed_sessions = app
+        .with_store(|s| s.lessons(Some(repo), None, true, 3))
+        .unwrap_or_default();
+
     Ok(LandingData {
+        brief: Brief {
+            since: window_start,
+            landed,
+            dequeued,
+            failed_sessions,
+            disputed,
+        },
         needs_you,
         queue: app.with_store(|s| s.queue_for(repo, target))?,
         outcomes,
@@ -668,6 +715,28 @@ fn landing_data(
         numbers,
         latest_seq: latest,
     })
+}
+
+#[derive(Deserialize)]
+struct LessonQuery {
+    q: Option<String>,
+}
+
+async fn lessons_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    viewer: Viewer,
+    Path(repo): Path<String>,
+    Query(query): Query<LessonQuery>,
+) -> Response {
+    if let Ok(None) | Err(_) = app.with_store(|s| s.repo(&repo)) {
+        return not_found();
+    }
+    let search = query.q.as_deref().filter(|q| !q.trim().is_empty());
+    match app.with_store(|s| s.lessons(Some(&repo), search, false, 100)) {
+        Ok(lessons) => views::lessons(theme, &viewer, &repo, search, &lessons).into_response(),
+        Err(err) => oops(err),
+    }
 }
 
 #[derive(Deserialize)]

@@ -8,9 +8,9 @@ use crate::error::{CoreError, CoreResult};
 use crate::id::{ChangeId, PrincipalId, SessionId, TaskId};
 use crate::store::Store;
 use crate::types::{
-    Capability, Change, ChangeState, Claim, ClaimKind, Disposition, Grant, Lease, ObjectFormat,
-    Principal, PrincipalKind, Provenance, QueueEntry, Repo, ReviewDomain, Revision, Session,
-    SessionState, Task, TaskState, TokenInfo, Verdict, Verification,
+    Capability, Change, ChangeState, Claim, ClaimKind, Disposition, Grant, Lease, Lesson,
+    ObjectFormat, Principal, PrincipalKind, Provenance, QueueEntry, Repo, ReviewDomain, Revision,
+    Session, SessionState, Task, TaskState, TokenInfo, Verdict, Verification,
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
@@ -646,6 +646,65 @@ pub(crate) mod raw {
         )? != 0)
     }
 
+    /// Finished sessions and what they recorded, newest first. The
+    /// protocol already forces an outcome on every ending session, so
+    /// this corpus costs nothing to keep and answers the question an
+    /// agent should ask first: has anyone tried this before?
+    pub fn lessons(
+        conn: &Connection,
+        repo: Option<&str>,
+        query: Option<&str>,
+        failures_only: bool,
+        limit: usize,
+    ) -> CoreResult<Vec<Lesson>> {
+        // LIKE with an escaped pattern: callers search prose, not SQL.
+        let needle = query.map(|q| {
+            format!(
+                "%{}%",
+                q.replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_")
+            )
+        });
+        let rows = conn
+            .prepare_cached(
+                "SELECT s.id, s.agent, s.state, s.task, t.title, s.outcome
+                 FROM sessions s JOIN tasks t ON t.id = s.task
+                 WHERE s.state != 'active' AND s.outcome IS NOT NULL
+                   AND (?1 IS NULL OR t.repo = ?1)
+                   AND (?2 = 0 OR s.state = 'failed')
+                   AND (?3 IS NULL OR s.outcome LIKE ?3 ESCAPE '\\'
+                        OR t.title LIKE ?3 ESCAPE '\\')
+                 ORDER BY s.rowid DESC LIMIT ?4",
+            )?
+            .query_map(
+                params![repo, failures_only as i64, needle, limit as i64],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(session, agent, state, task, task_title, outcome)| {
+                Ok(Lesson {
+                    state: parsed(&format!("session {session}"), &state, SessionState::parse)?,
+                    session: SessionId(session),
+                    agent: PrincipalId(agent),
+                    task: TaskId(task),
+                    task_title,
+                    outcome,
+                })
+            })
+            .collect()
+    }
+
     pub fn principal_count(conn: &Connection) -> CoreResult<i64> {
         Ok(conn.query_row("SELECT COUNT(*) FROM principals", [], |r| r.get(0))?)
     }
@@ -727,6 +786,18 @@ impl Store {
 
     pub fn live_leases(&self, repo: &str) -> CoreResult<Vec<Lease>> {
         raw::live_leases(&self.conn, repo)
+    }
+
+    /// What earlier attempts learned. `query` searches the outcome text
+    /// and the task title.
+    pub fn lessons(
+        &self,
+        repo: Option<&str>,
+        query: Option<&str>,
+        failures_only: bool,
+        limit: usize,
+    ) -> CoreResult<Vec<Lesson>> {
+        raw::lessons(&self.conn, repo, query, failures_only, limit.min(200))
     }
 
     /// What a human should look at in this repo, and why. Ranked by

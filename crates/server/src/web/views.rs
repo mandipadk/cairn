@@ -3,7 +3,7 @@
 //! rendered with raw HTML events stripped before it gets here.
 
 use super::diff::{FileDiff, LineKind};
-use super::{LandingData, Sidebar, Viewer};
+use super::{Brief, LandingData, Sidebar, Viewer};
 use cairn_core::{
     Change, ChangeState, Claim, Disposition, Envelope, Event, PolicyTrace, Repo, Revision, Task,
     Verdict, Verification,
@@ -62,6 +62,7 @@ pub enum Tab {
     Code,
     Changes,
     Landing,
+    Lessons,
     Log,
 }
 
@@ -94,6 +95,7 @@ fn layout(
                                 (tab(repo, "", "Code", active == Some(Tab::Code)))
                                 (tab(repo, "/changes", "Changes", active == Some(Tab::Changes)))
                                 (tab(repo, "/landing", "Landing", active == Some(Tab::Landing)))
+                                (tab(repo, "/lessons", "Lessons", active == Some(Tab::Lessons)))
                                 (tab(repo, "/log", "Log", active == Some(Tab::Log)))
                             }
                         }
@@ -534,6 +536,7 @@ pub fn change(page: ChangePage) -> Markup {
                     }
                 }
             }
+            (disagreement(verdicts))
             div class="chg-split" {
                 div {
                     @if files.is_empty() {
@@ -615,6 +618,61 @@ pub fn change(page: ChangePage) -> Markup {
             }
         },
     )
+}
+
+/// Where reviewers reached opposite conclusions, put the positions
+/// beside each other. This is the one place a human's judgment is
+/// provably worth more than another review, so it gets the top of the
+/// page rather than a line in a list.
+fn disagreement(verdicts: &[Verdict]) -> Markup {
+    let favour: Vec<&Verdict> = verdicts
+        .iter()
+        .filter(|v| v.disposition == Disposition::Approve)
+        .collect();
+    let against: Vec<&Verdict> = verdicts
+        .iter()
+        .filter(|v| v.disposition == Disposition::Block)
+        .collect();
+    let reserved: Vec<&Verdict> = verdicts
+        .iter()
+        .filter(|v| v.disposition == Disposition::Concern)
+        .collect();
+    // Only a genuine conflict qualifies: someone for, someone against.
+    if favour.is_empty() || (against.is_empty() && reserved.is_empty()) {
+        return html! {};
+    }
+    html! {
+        section class="disagree" {
+            header {
+                h2 { "Reviewers disagree" }
+                span { "your judgment decides this" }
+            }
+            div class="sides" {
+                div class="side" {
+                    span class="pos ok" { "In favour" }
+                    @for verdict in &favour { (position(verdict)) }
+                }
+                div class="side" {
+                    span class="pos bad" {
+                        @if against.is_empty() { "Reserved" } @else { "Against" }
+                    }
+                    @for verdict in against.iter().chain(reserved.iter()) { (position(verdict)) }
+                }
+            }
+        }
+    }
+}
+
+fn position(verdict: &Verdict) -> Markup {
+    html! {
+        div class="stance" {
+            div class="who-line" {
+                span class="nm" { (verdict.by) }
+                span class="sec3" { (verdict.domain.as_str()) }
+            }
+            q { (verdict.rationale) }
+        }
+    }
 }
 
 fn claim_row(claim: &Claim, verifications: &[Verification]) -> Markup {
@@ -700,6 +758,7 @@ pub fn landing(
         html! {
             div class="cols2" {
                 div {
+                    (brief(repo, &data.brief))
                     div class="need" {
                         div class="sechead" { b { "Needs you" } span { (data.needs_you.len()) } }
                         @if data.needs_you.is_empty() {
@@ -1133,4 +1192,100 @@ fn coverage_gaps(repo: &str, rows: &[BlameRow]) -> Markup {
             }
         }
     }
+}
+
+/// The state of things lately, in sentences whose every number is the
+/// size of something the reader can go and look at. Nothing here is
+/// generated prose: it is the log, counted.
+fn brief(repo: &str, brief: &Brief) -> Markup {
+    let quiet = brief.landed == 0
+        && brief.dequeued.is_empty()
+        && brief.failed_sessions.is_empty()
+        && brief.disputed == 0;
+    html! {
+        section class="brief" {
+            @if quiet {
+                p { "Nothing has landed or failed recently." }
+            } @else {
+                p {
+                    @if brief.landed > 0 {
+                        "The train landed "
+                        a class="link" href={ "/" (repo) "/log?after=" (brief.since) } {
+                            @if brief.landed == 1 { "one change" } @else { (brief.landed) " changes" }
+                        }
+                        ". "
+                    }
+                    @if brief.disputed > 0 {
+                        @if brief.disputed == 1 { "One claim was disputed by a runner. " }
+                        @else { (brief.disputed) " claims were disputed by runners. " }
+                    }
+                    @for (change, reason) in &brief.dequeued {
+                        (change) " left the queue — " (reason) ". "
+                    }
+                }
+                @for lesson in &brief.failed_sessions {
+                    p class="lesson" {
+                        (lesson.agent) " gave up on " (lesson.task_title) ": " (lesson.outcome)
+                    }
+                }
+            }
+            div class="src" {
+                "counted from the log after " (brief.since)
+                @if !brief.failed_sessions.is_empty() {
+                    " · "
+                    a class="link" href={ "/" (repo) "/lessons" } { "all lessons" }
+                }
+            }
+        }
+    }
+}
+
+/// What earlier attempts learned. A corpus nobody has to maintain: the
+/// protocol already refuses to let a session end without recording an
+/// outcome, so failure leaves knowledge behind by construction.
+pub fn lessons(
+    theme: Theme,
+    viewer: &Viewer,
+    repo: &str,
+    search: Option<&str>,
+    lessons: &[cairn_core::Lesson],
+) -> Markup {
+    layout(
+        theme,
+        Some(viewer),
+        Some(repo),
+        Some(Tab::Lessons),
+        "Lessons",
+        html! {
+            div class="sechead" {
+                b { "Lessons" }
+                span { (lessons.len()) }
+                form class="search-form" method="get" action={ "/" (repo) "/lessons" } {
+                    input type="search" name="q" value=[search]
+                          placeholder="Has anyone tried this before?";
+                }
+            }
+            @if lessons.is_empty() {
+                p class="empty" {
+                    @match search {
+                        Some(term) => { "Nothing recorded matches " (term) "." }
+                        None => { "No sessions have ended yet." }
+                    }
+                }
+            }
+            @for lesson in lessons {
+                div class="lesson-row" {
+                    span class={ "dot " @if lesson.state == cairn_core::SessionState::Failed { "bad" } @else { "ok" } } {}
+                    div {
+                        div class="head" {
+                            span class="t" { (lesson.task_title) }
+                            span class="sec3" { (lesson.agent) }
+                            span class="sec3" { (lesson.state.as_str()) }
+                        }
+                        p { (lesson.outcome) }
+                    }
+                }
+            }
+        },
+    )
 }

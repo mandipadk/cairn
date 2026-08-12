@@ -210,6 +210,21 @@ a.srow:hover .t { text-decoration: underline; }
 /* changes list */
 .ctable .trow { grid-template-columns: 16px 52px minmax(0, 1fr) 140px 40px; }
 
+/* the two positions, side by side */
+.disagree { border-top: 1px solid var(--hair); padding: 18px 22px 20px; }
+.disagree > header { display: flex; align-items: baseline; gap: 10px; padding-bottom: 12px; }
+.disagree > header h2 { font-size: 14px; font-weight: 600; }
+.disagree > header span { font-size: 12px; color: var(--ink3); }
+.sides { display: grid; grid-template-columns: 1fr 1fr; gap: 0 28px; }
+@media (max-width: 900px) { .sides { grid-template-columns: 1fr; gap: 18px; } }
+.side + .side { border-left: 1px solid var(--hair); padding-left: 28px; }
+.side .pos { font-size: 12px; font-weight: 600; display: block; padding-bottom: 8px; }
+.side .pos.ok { color: var(--ok); }
+.side .pos.bad { color: var(--bad); }
+.stance { padding: 6px 0; font-size: 12.5px; color: var(--ink2); }
+.stance + .stance { border-top: 1px solid var(--hair); margin-top: 6px; }
+.stance q { quotes: none; font-style: normal; display: block; margin-top: 3px; }
+
 /* change page */
 .chg-title { padding: 22px 22px 0; }
 .chg-title .line1 { display: flex; align-items: baseline; gap: 10px; }
@@ -291,6 +306,29 @@ a.srow:hover .t { text-decoration: underline; }
 .req.unmet .s { color: var(--bad); }
 .ready form { margin-top: 12px; }
 .ready .note { margin-top: 10px; font-size: 12px; color: var(--ink3); }
+
+/* the brief: prose whose numbers are all checkable */
+.brief { padding: 18px 22px 16px; border-bottom: 1px solid var(--hair); }
+.brief p { font-size: 13.5px; color: var(--ink); max-width: 76ch; line-height: 1.65; }
+.brief p.lesson { color: var(--ink2); margin-top: 6px; }
+.brief .src { margin-top: 8px; font-size: 11.5px; color: var(--ink3); }
+
+/* lessons */
+.search-form { margin-left: auto; }
+.search-form input {
+  font: inherit; font-size: 12.5px; color: var(--ink);
+  background: var(--raise); border: 1px solid var(--hair);
+  border-radius: 6px; padding: 5px 10px; min-width: 260px;
+}
+.search-form input:focus { outline: none; border-color: var(--ink2); }
+.lesson-row {
+  display: grid; grid-template-columns: 14px 1fr; gap: 10px;
+  padding: 12px 22px; border-top: 1px solid var(--hair);
+}
+.lesson-row .dot { margin-top: 6px; }
+.lesson-row .head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.lesson-row .head .t { font-weight: 600; }
+.lesson-row p { font-size: 12.5px; color: var(--ink2); margin-top: 3px; max-width: 88ch; }
 
 /* landing */
 .lane-row {

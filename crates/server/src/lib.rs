@@ -90,6 +90,7 @@ pub fn router(state: AppState) -> Router {
             post(routes::issue_grant).get(routes::list_grants),
         )
         .route("/api/grants/{id}/revoke", post(routes::revoke_grant))
+        .route("/api/lessons", get(routes::lessons))
         .route("/api/events", get(routes::list_events))
         .route("/api/events/stream", get(sse::stream))
         .route("/api/git/pushes", post(git_http::record_push))

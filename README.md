@@ -98,6 +98,15 @@ and the agent decides what to do. Declarations are replaced rather than
 accumulated, so narrowing scope releases ground, and a lease lives
 exactly as long as the session behind it.
 
+Where reviewers reach opposite conclusions, both positions are put side
+by side on the change — that is the one place a human's judgment is
+worth more than another review.
+
+Because the protocol refuses to let a session end without recording an
+outcome, failed attempts leave knowledge behind by construction. Those
+outcomes are searchable, so the question an agent should ask first —
+has anyone tried this before? — has an answer.
+
 Not yet implemented: speculative queue batching.
 
 ## Running

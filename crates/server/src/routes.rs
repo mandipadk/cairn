@@ -11,6 +11,7 @@ use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use cairn_core::{
     Capability, ChangeId, ChangeSpec, ClaimId, ClaimSpec, CoreError, Disposition, Envelope,
     EventSeq, GrantId, ObjectFormat, PrincipalId, PrincipalKind, ReviewDomain, SessionId,
@@ -886,4 +887,32 @@ pub async fn get_mirror(
 ) -> ApiResult<Json<Value>> {
     let record = found(app.with_store(|s| s.repo(&repo))?, "repo")?;
     Ok(Json(json!(record.mirror)))
+}
+
+/// Liveness and readiness in one: the store answers, so the forge can
+/// serve. Deliberately unauthenticated and deliberately dull — a probe
+/// that needs a credential is a probe nobody configures.
+pub async fn health(State(app): State<AppState>) -> Response {
+    match app.with_store(|s| s.latest_seq()) {
+        Ok(seq) => (StatusCode::OK, Json(json!({ "ok": true, "seq": seq.0 }))).into_response(),
+        Err(err) => {
+            tracing::error!(error = %err, "health: the store did not answer");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "ok": false })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// The changes a runner should pick up: open work whose claims name a
+/// command nobody has re-run.
+pub async fn awaiting_verification(
+    State(app): State<AppState>,
+    _actor: Actor,
+    Path(repo): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let waiting = app.with_store(|s| s.awaiting_verification(&repo))?;
+    Ok(Json(json!(waiting)))
 }

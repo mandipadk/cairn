@@ -78,6 +78,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/repos/{name}/queue", get(routes::list_queue))
         .route("/api/repos/{name}/attention", get(routes::attention))
         .route(
+            "/api/repos/{name}/awaiting-verification",
+            get(routes::awaiting_verification),
+        )
+        .route(
             "/api/repos/{name}/policy",
             get(routes::get_policy).post(routes::set_policy),
         )
@@ -100,6 +104,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/grants/{id}/revoke", post(routes::revoke_grant))
         .route("/api/lessons", get(routes::lessons))
+        .route("/healthz", get(routes::health))
         .route("/api/events", get(routes::list_events))
         .route("/api/events/stream", get(sse::stream))
         .route("/api/git/pushes", post(git_http::record_push))

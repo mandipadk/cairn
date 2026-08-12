@@ -84,25 +84,56 @@ impl LoginLimiter {
     }
 }
 
-/// The caller's address, when the server was started in a way that
-/// knows it. In-process callers (tests, embedded use) have none, and
-/// are not rate limited — there is no anonymous network in front of
-/// them to protect against.
+/// The caller's address. In-process callers (tests, embedded use)
+/// have none, and are not rate limited — there is no anonymous
+/// network in front of them to protect against.
+///
+/// Behind a reverse proxy every connection appears to come from the
+/// proxy, which would put every caller in one bucket. The forwarded
+/// header fixes that, but only where it can be believed: a header
+/// anyone can set is worse than no header at all, so it is read only
+/// when the operator says something trustworthy sets it.
 pub struct ClientIp(pub Option<IpAddr>);
 
-impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ClientIp {
+/// Whose word to take for the caller's address.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ProxyTrust {
+    /// Only the connection itself.
+    Connection,
+    /// The last hop recorded in X-Forwarded-For, which is the one the
+    /// trusted proxy appended and the only one a client cannot forge.
+    ForwardedHeader,
+}
+
+/// Read the address a trusted proxy recorded. The rightmost entry is
+/// the one the nearest proxy added; entries further left were supplied
+/// by whatever came before it, including the client.
+fn forwarded_for(parts: &axum::http::request::Parts) -> Option<IpAddr> {
+    parts
+        .headers
+        .get("x-forwarded-for")?
+        .to_str()
+        .ok()?
+        .rsplit(',')
+        .map(str::trim)
+        .find_map(|hop| hop.parse().ok())
+}
+
+impl axum::extract::FromRequestParts<crate::AppState> for ClientIp {
     type Rejection = std::convert::Infallible;
 
     async fn from_request_parts(
         parts: &mut axum::http::request::Parts,
-        _state: &S,
+        state: &crate::AppState,
     ) -> Result<Self, Self::Rejection> {
-        Ok(ClientIp(
-            parts
-                .extensions
-                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-                .map(|connected| connected.0.ip()),
-        ))
+        let connected = parts
+            .extensions
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|connected| connected.0.ip());
+        Ok(ClientIp(match state.proxy_trust() {
+            ProxyTrust::ForwardedHeader => forwarded_for(parts).or(connected),
+            ProxyTrust::Connection => connected,
+        }))
     }
 }
 
@@ -118,6 +149,26 @@ pub fn too_many_attempts() -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_forwarded_address_is_read_from_the_nearest_hop() {
+        let request = axum::http::Request::builder()
+            // A client can put anything on the left; only the last
+            // entry was written by the proxy we trust.
+            .header("x-forwarded-for", "10.0.0.1, 198.51.100.9, 203.0.113.4")
+            .body(())
+            .unwrap();
+        let (parts, ()) = request.into_parts();
+        assert_eq!(
+            forwarded_for(&parts),
+            Some("203.0.113.4".parse().unwrap()),
+            "the rightmost hop is the one a client cannot forge"
+        );
+
+        let empty = axum::http::Request::builder().body(()).unwrap();
+        let (parts, ()) = empty.into_parts();
+        assert_eq!(forwarded_for(&parts), None);
+    }
 
     #[test]
     fn a_caller_gets_its_allowance_and_no_more() {

@@ -1,0 +1,50 @@
+# Continuous integration against a cairn forge.
+#
+# Copy this to verify.yml once a forge is reachable from Actions, and
+# set two repository secrets: CAIRN_SERVER (its base URL) and
+# CAIRN_TOKEN (an API token for a principal holding the verify
+# capability, and nothing else).
+#
+# What this does is not "run the tests and report a status". It takes
+# every change whose claims name a command nobody has re-run, fetches
+# the exact revision the change proposes, runs those commands, and
+# records what it saw. A claim it cannot reproduce blocks the change
+# from landing until someone resolves it, and this job goes red.
+#
+# The runner needs no push access and no review authority: it re-runs
+# other people's claims and reports honestly, which is the whole job.
+
+name: verify
+
+on:
+  # Sweep on a schedule, so work that arrives between pushes is picked
+  # up without anyone asking.
+  schedule:
+    - cron: "*/15 * * * *"
+  # And on demand, for when you would rather not wait.
+  workflow_dispatch:
+
+concurrency:
+  # One sweep at a time: two runners racing on the same change would
+  # record the same verification twice.
+  group: cairn-verify
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the runner
+        run: cargo install --git https://github.com/mandipadk/cairn cairn --locked
+      - name: Re-run what is currently taken on trust
+        env:
+          CAIRN_SERVER: ${{ secrets.CAIRN_SERVER }}
+          CAIRN_TOKEN: ${{ secrets.CAIRN_TOKEN }}
+        run: |
+          cairn verify \
+            --server "$CAIRN_SERVER" \
+            --token "$CAIRN_TOKEN" \
+            --repo cairn \
+            --workdir "$RUNNER_TEMP/cairn-verify" \
+            --checkout

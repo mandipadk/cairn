@@ -141,13 +141,26 @@ since two lanes never advance the same ref. Within a lane, order stays
 strict — that is what keeps every landing a plain consequence of the
 one before it.
 
+## Continuous integration
+
+`cairn verify` is the runner. Given a change it re-runs that change's
+claims; given none, it works through every change whose claims name a
+command nobody has re-run, fetching each revision from the forge rather
+than trusting whatever directory it was started in. It exits non-zero
+when a claim cannot be reproduced, so a CI job goes red where people
+already look, and the dispute blocks the change until someone resolves
+it. `.github/workflows/verify.yml.example` is a working configuration;
+nothing about the runner is specific to any CI product.
+
 ## Exposure
 
 Before putting a forge somewhere strangers can reach it: serve it over
 HTTPS and pass `--secure-cookies`, keep `--dev` off, and note what is
 and is not defended. Responses carry a strict content policy, frame and
 sniffing protections, and HSTS. Sign-in attempts are rate limited per
-source address. Every free-text field a caller controls is bounded, so
+source address — behind a reverse proxy, pass `--trust-proxy` so callers
+are told apart by the forwarded address rather than sharing the proxy's.
+`/healthz` answers unauthenticated, for whatever is watching. Every free-text field a caller controls is bounded, so
 the log cannot be inflated by a stranger. Git subprocesses have
 timeouts, so a hung transfer cannot hold a connection indefinitely.
 

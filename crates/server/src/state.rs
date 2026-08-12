@@ -37,6 +37,7 @@ pub struct AppState {
     /// Set when the forge is reached over HTTPS, so session cookies
     /// can be marked Secure.
     secure_cookies: bool,
+    proxy_trust: crate::guard::ProxyTrust,
     pub(crate) login_limiter: crate::guard::LoginLimiter,
     /// Ephemeral secrets handed to proc-receive hooks, mapped to the
     /// authenticated pusher. In-memory only, expiring, never logged.
@@ -52,6 +53,7 @@ impl AppState {
             git: None,
             dev_identity: false,
             secure_cookies: false,
+            proxy_trust: crate::guard::ProxyTrust::Connection,
             login_limiter: crate::guard::LoginLimiter::default(),
             push_tokens: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -78,6 +80,18 @@ impl AppState {
 
     pub(crate) fn secure_cookies(&self) -> bool {
         self.secure_cookies
+    }
+
+    /// Believe the forwarded address recorded by whatever sits in
+    /// front. Only set this when something trustworthy does, since an
+    /// unfiltered header lets any caller claim any address.
+    pub fn trusting_proxy(mut self) -> Self {
+        self.proxy_trust = crate::guard::ProxyTrust::ForwardedHeader;
+        self
+    }
+
+    pub(crate) fn proxy_trust(&self) -> crate::guard::ProxyTrust {
+        self.proxy_trust
     }
 
     /// Issue an ephemeral token for a hook spawned on behalf of an

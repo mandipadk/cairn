@@ -848,6 +848,28 @@ impl Store {
         raw::lessons(&self.conn, repo, query, failures_only, limit.min(200))
     }
 
+    /// Open changes whose latest revision carries a claim that names
+    /// a command nobody has re-run. This is the work queue for a
+    /// runner: everything currently taken on trust.
+    pub fn awaiting_verification(&self, repo: &str) -> CoreResult<Vec<Change>> {
+        let mut waiting = Vec::new();
+        for change in raw::changes_in_repo(&self.conn, repo)? {
+            if change.state != ChangeState::Open || change.latest_revision == 0 {
+                continue;
+            }
+            let revision = change.latest_revision;
+            let claims = raw::claims_on(&self.conn, change.id.as_str(), revision)?;
+            let verifications = raw::verifications_on(&self.conn, change.id.as_str(), revision)?;
+            let unrun = claims.iter().any(|claim| {
+                claim.command.is_some() && !verifications.iter().any(|v| v.claim == claim.id)
+            });
+            if unrun {
+                waiting.push(change);
+            }
+        }
+        Ok(waiting)
+    }
+
     /// What a proposed policy would mean for the changes already
     /// open: the answer to "if we tighten this, what stops landing?"
     pub fn policy_preview(

@@ -42,6 +42,11 @@ enum Command {
         /// GitHub token. Read from CAIRN_MIRROR_TOKEN when unset.
         #[arg(long)]
         mirror_token: Option<String>,
+        /// Believe X-Forwarded-For. Set this only when a proxy you
+        /// control sets that header, since otherwise any caller can
+        /// claim any address.
+        #[arg(long)]
+        trust_proxy: bool,
     },
     /// Offline administration against the forge database. Having file
     /// access to the database is the root authority.
@@ -52,7 +57,9 @@ enum Command {
     /// The proc-receive hook endpoint; spawned by git receive-pack.
     #[command(name = "internal-proc-receive", hide = true)]
     InternalProcReceive,
-    /// Re-run a change's claims and record what actually happened.
+    /// Re-run claims and record what actually happened. With no
+    /// change number, works through everything waiting on a runner —
+    /// which is what a CI job should call.
     Verify {
         /// Base URL of the forge.
         #[arg(long, default_value = "http://127.0.0.1:6160")]
@@ -63,8 +70,12 @@ enum Command {
         /// Repository the change belongs to.
         #[arg(long)]
         repo: String,
-        /// Change number.
-        change: i64,
+        /// A single change; omit to take everything waiting.
+        change: Option<i64>,
+        /// Fetch each change's revision before running its claims,
+        /// instead of trusting the working directory. Use this in CI.
+        #[arg(long)]
+        checkout: bool,
         /// Working directory to run the claims' commands in.
         #[arg(long, default_value = ".")]
         workdir: PathBuf,
@@ -126,6 +137,7 @@ async fn main() -> anyhow::Result<()> {
             dev,
             secure_cookies,
             mirror_token,
+            trust_proxy,
         } => {
             let store = Store::open(&db)
                 .with_context(|| format!("opening forge database at {}", db.display()))?;
@@ -146,6 +158,9 @@ async fn main() -> anyhow::Result<()> {
             }
             if let Some(token) = mirror_token.or_else(|| std::env::var("CAIRN_MIRROR_TOKEN").ok()) {
                 state = state.with_mirror_credential(token);
+            }
+            if trust_proxy {
+                state = state.trusting_proxy();
             }
             if secure_cookies {
                 state = state.with_secure_cookies();
@@ -203,16 +218,18 @@ async fn main() -> anyhow::Result<()> {
             token,
             repo,
             change,
+            checkout,
             workdir,
             dry_run,
         } => {
-            verify::run(verify::Runner {
+            verify::run_all(verify::Runner {
                 server: &server,
                 token: &token,
                 repo: &repo,
                 change,
                 workdir: &workdir,
                 dry_run,
+                checkout,
             })?;
         }
         Command::InternalProcReceive => {

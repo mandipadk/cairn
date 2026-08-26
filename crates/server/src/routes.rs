@@ -104,15 +104,17 @@ pub async fn create_repo(
     actor: Actor,
     Json(body): Json<CreateRepo>,
 ) -> ApiResult<Json<Value>> {
-    if app.with_store(|s| s.repo(&body.name))?.is_some() {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            "conflict",
-            format!("repo {} already exists", body.name),
-        ));
-    }
-    // The bare repo lands on disk first; the graph event follows. An
-    // orphan directory from a lost race is harmless, the reverse is not.
+    // Ask before doing anything outside the store. Creating the bare
+    // repo first used to mean a caller who turned out to hold no admin
+    // capability, or who named a repository something disallowed, still
+    // left a directory behind — a side effect ahead of the check that
+    // should have prevented it. create_repo applies these same rules
+    // again when it appends the event.
+    app.with_store(|s| s.check_new_repo(&actor.0, &body.name, &body.default_branch))?;
+    // Then the bare repo lands on disk before the graph event. An orphan
+    // directory from a lost race is harmless — nothing serves a
+    // repository the graph does not know about — whereas the reverse
+    // would leave a repository that exists but cannot be cloned.
     if let Some(git) = app.git() {
         git.store
             .create_repo(

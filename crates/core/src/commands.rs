@@ -96,6 +96,26 @@ fn valid_commit_oid(oid: &str) -> bool {
     matches!(oid.len(), 40 | 64) && oid.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// The rules a new repository name must satisfy. One definition, used
+/// both to answer "may this be created?" and to enforce it at creation,
+/// so the two can never disagree.
+fn new_repo_is_allowed(tx: &Transaction, name: &str, default_branch: &str) -> CoreResult<()> {
+    const RESERVED: &[&str] = &["api", "git", "login", "logout", "assets", "ui"];
+    require(validate_slug(name), || {
+        format!("repo name {name:?} is not a valid slug")
+    })?;
+    require(!RESERVED.contains(&name), || {
+        format!("repo name {name:?} is reserved")
+    })?;
+    require(valid_branch(default_branch), || {
+        format!("{default_branch:?} is not a valid branch name")
+    })?;
+    if raw::repo(tx, name)?.is_some() {
+        return Err(CoreError::Conflict(format!("repo {name} already exists")));
+    }
+    Ok(())
+}
+
 impl Store {
     /// Register a principal. Bootstrap exception: the very first principal
     /// may register itself, since no authority exists yet to vouch for it.
@@ -146,6 +166,27 @@ impl Store {
         Ok(env)
     }
 
+    /// Everything that must be true before a repository may exist,
+    /// checked without creating anything.
+    ///
+    /// Creating a repository has a side effect outside this store — a
+    /// directory on disk — and that side effect must not happen for a
+    /// caller who is not allowed to create one, or under a name that is
+    /// not allowed at all. So the caller can ask first, and
+    /// [`Store::create_repo`] applies exactly the same rules again when
+    /// the event is appended.
+    pub fn check_new_repo(
+        &mut self,
+        actor: &PrincipalId,
+        name: &str,
+        default_branch: &str,
+    ) -> CoreResult<()> {
+        let tx = self.conn.transaction()?;
+        authorize(&tx, actor, Capability::Admin, None)?;
+        new_repo_is_allowed(&tx, name, default_branch)
+        // The transaction is dropped, so nothing here is kept.
+    }
+
     pub fn create_repo(
         &mut self,
         actor: &PrincipalId,
@@ -153,21 +194,9 @@ impl Store {
         default_branch: &str,
         object_format: ObjectFormat,
     ) -> CoreResult<Envelope> {
-        const RESERVED: &[&str] = &["api", "git", "login", "logout", "assets", "ui"];
         let tx = self.conn.transaction()?;
         authorize(&tx, actor, Capability::Admin, None)?;
-        require(validate_slug(name), || {
-            format!("repo name {name:?} is not a valid slug")
-        })?;
-        require(!RESERVED.contains(&name), || {
-            format!("repo name {name:?} is reserved")
-        })?;
-        require(valid_branch(default_branch), || {
-            format!("{default_branch:?} is not a valid branch name")
-        })?;
-        if raw::repo(&tx, name)?.is_some() {
-            return Err(CoreError::Conflict(format!("repo {name} already exists")));
-        }
+        new_repo_is_allowed(&tx, name, default_branch)?;
         let env = append(
             &tx,
             actor,

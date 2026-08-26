@@ -201,13 +201,22 @@ pub async fn api_with_token(
 /// browser half does with a credential. Returns the status only: these
 /// callers care whether they were let in, not what was rendered.
 pub async fn get_with_cookie(app: &Router, path: &str, cookie: &str) -> StatusCode {
+    page_with_cookie(app, path, cookie).await.0
+}
+
+/// The same, keeping the rendered body — for asserting that something
+/// hostile produced no content it should not have.
+pub async fn page_with_cookie(app: &Router, path: &str, cookie: &str) -> (StatusCode, String) {
     let request = Request::builder()
         .method("GET")
         .uri(path)
         .header("cookie", cookie)
         .body(Body::empty())
         .unwrap();
-    app.clone().oneshot(request).await.unwrap().status()
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
 }
 
 pub async fn api(

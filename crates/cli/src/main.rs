@@ -245,12 +245,15 @@ async fn main() -> anyhow::Result<()> {
                     divergences.extend(state.branches_match_the_log().await?);
                 }
                 if divergences.is_empty() {
-                    println!("clean: every projection matches the log");
+                    println!("clean: everything matches the log");
                 } else {
                     for divergence in &divergences {
                         eprintln!("diverged: {divergence}");
                     }
-                    anyhow::bail!("{} projection(s) do not match the log", divergences.len());
+                    // Not always a projection: with --repos this also
+                    // covers branches, and saying otherwise sends whoever
+                    // reads it looking in the wrong place.
+                    anyhow::bail!("{} divergence(s) from the log", divergences.len());
                 }
             }
         },

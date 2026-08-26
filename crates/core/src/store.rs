@@ -1049,3 +1049,77 @@ mod concurrency_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod exhaustion_tests {
+    use super::*;
+    use crate::types::PrincipalKind;
+
+    /// A full disk must fail a write, not damage the log.
+    ///
+    /// Every command is one transaction, so a write that cannot complete
+    /// should roll back whole: no half-applied projection, no event
+    /// without its effect. `max_page_count` reproduces the condition
+    /// exactly — SQLite reports the same SQLITE_FULL it reports when the
+    /// filesystem has nothing left — without needing a real disk to be
+    /// filled underneath the test.
+    #[test]
+    fn a_database_with_no_room_left_fails_cleanly() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("forge.db");
+        let mut store = Store::open(&path).unwrap();
+        let ada = PrincipalId::new("ada").unwrap();
+        store
+            .register_principal(&ada, &ada, PrincipalKind::Human, "Ada", None, None)
+            .unwrap();
+        store
+            .create_repo(&ada, "demo", "main", Default::default())
+            .unwrap();
+
+        let used: i64 = store
+            .conn
+            .query_row("PRAGMA page_count", [], |row| row.get(0))
+            .unwrap();
+        // Just enough headroom to start a transaction and not finish many.
+        store
+            .conn
+            .pragma_update(None, "max_page_count", used + 2)
+            .unwrap();
+
+        let mut refused = None;
+        for n in 0..2_000 {
+            // Bounded but not tiny, so the file has to grow.
+            let title = format!("task {n} {}", "x".repeat(200));
+            match store.create_task(&ada, Some("demo"), &title, "spec", None) {
+                Ok(_) => continue,
+                Err(err) => {
+                    refused = Some(err);
+                    break;
+                }
+            }
+        }
+        let refused = refused.expect("a database with no room must eventually refuse a write");
+        assert!(
+            format!("{refused}").to_lowercase().contains("full")
+                || format!("{refused}").to_lowercase().contains("database"),
+            "the refusal should say what happened: {refused}"
+        );
+
+        // The point: whatever failed, failed entirely. Give the database
+        // room again and the log must still explain every projection.
+        store
+            .conn
+            .pragma_update(None, "max_page_count", 1_073_741_823i64)
+            .unwrap();
+        assert!(
+            store.fsck().unwrap().is_empty(),
+            "a refused write must leave no half-applied state behind"
+        );
+
+        // And the forge keeps working once there is room.
+        store
+            .create_task(&ada, Some("demo"), "after", "spec", None)
+            .expect("writes resume once the database has room");
+        assert!(store.fsck().unwrap().is_empty());
+    }
+}

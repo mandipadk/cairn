@@ -56,6 +56,20 @@ fn redact(message: &str, credential: Option<&str>) -> String {
     cleaned.trim().chars().take(400).collect()
 }
 
+/// What came back when asking for a file's contents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Blob {
+    Text(String),
+    /// Not text; the size is still worth telling someone.
+    Binary {
+        bytes: u64,
+    },
+    /// Larger than this forge will render.
+    TooLarge {
+        bytes: u64,
+    },
+}
+
 /// How a queued change can land on a moved (or unmoved) target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RebaseOutcome {
@@ -591,6 +605,45 @@ impl GitStore {
             Err(GitError::CommandFailed { .. }) => Ok(None),
             Err(other) => Err(other),
         }
+    }
+
+    /// A blob, or a reason it is not being shown.
+    ///
+    /// Reading first and deciding afterwards is the wrong order when the
+    /// caller does not control the size: a repository may legitimately
+    /// contain a video, and rendering it would mean the bytes in memory
+    /// once, a lossy `String` copy of them, and an escaped HTML copy
+    /// larger still — for a file nobody can read anyway. So the size is
+    /// asked for before anything is read.
+    pub async fn read_blob(
+        &self,
+        name: &str,
+        rev: &str,
+        path: &str,
+        limit: u64,
+    ) -> GitResult<Option<Blob>> {
+        let repo = self.existing_repo_path(name)?;
+        let spec = format!("{rev}:{path}");
+        let Ok(raw) = self.run(Some(&repo), &["cat-file", "-s", &spec]).await else {
+            return Ok(None);
+        };
+        let bytes: u64 = String::from_utf8_lossy(&raw).trim().parse().unwrap_or(0);
+        if bytes > limit {
+            return Ok(Some(Blob::TooLarge { bytes }));
+        }
+        let content = match self.run(Some(&repo), &["show", &spec]).await {
+            Ok(content) => content,
+            Err(GitError::CommandFailed { .. }) => return Ok(None),
+            Err(other) => return Err(other),
+        };
+        // git's own heuristic: a NUL anywhere near the start means this
+        // is not text, and showing it as text helps nobody.
+        if content.iter().take(8000).any(|byte| *byte == 0) {
+            return Ok(Some(Blob::Binary { bytes }));
+        }
+        Ok(Some(Blob::Text(
+            String::from_utf8_lossy(&content).into_owned(),
+        )))
     }
 
     /// The unified diff a commit introduces over its first parent.

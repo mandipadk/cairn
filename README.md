@@ -164,6 +164,16 @@ are told apart by the forwarded address rather than sharing the proxy's.
 the log cannot be inflated by a stranger. Git subprocesses have
 timeouts, so a hung transfer cannot hold a connection indefinitely.
 
+What one request may cost is bounded too, because the sizes involved are
+not the forge's to choose. A single push carries at most 64 commits —
+beyond that it is history rather than a stack, and it is refused with
+that explanation. Files are rendered up to 2 MB and diffs up to 1 MB;
+past that the page says how large the thing is instead of loading it,
+since the bytes would otherwise be held once as read, again as a string,
+and again escaped into HTML. Binary files are named rather than shown. A
+database with no room left fails the write whole: every command is one
+transaction, so a full disk costs the write and not the log.
+
 What is not here yet: request-rate limiting beyond sign-in, quotas on
 repository or push size, and any protection against a principal that
 holds legitimate capabilities and abuses them. Grants are the tool for

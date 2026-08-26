@@ -26,6 +26,16 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 const STYLE: &str = include_str!("style.css");
+/// The largest file rendered in a browser. Comfortably larger than any
+/// source file, far smaller than what would hurt the process: the bytes
+/// are held once as read, again as a string, and again escaped into
+/// HTML, so the real cost is several times this.
+const MAX_RENDERED_BLOB: u64 = 2 * 1024 * 1024;
+
+/// The largest diff rendered on a change page. Same reasoning, plus the
+/// diff is parsed into per-file structures before it is displayed.
+const MAX_RENDERED_DIFF: usize = 1024 * 1024;
+
 const TOKEN_COOKIE: &str = "cairn_token";
 const DEV_COOKIE: &str = "cairn_dev";
 const THEME_COOKIE: &str = "cairn_theme";
@@ -51,6 +61,19 @@ pub fn routes() -> Router<AppState> {
 
 async fn stylesheet() -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], STYLE)
+}
+
+/// Sizes for people, not for machines.
+fn human_bytes(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = KIB * 1024;
+    const GIB: u64 = MIB * 1024;
+    match bytes {
+        b if b >= GIB => format!("{:.1} GB", b as f64 / GIB as f64),
+        b if b >= MIB => format!("{:.1} MB", b as f64 / MIB as f64),
+        b if b >= KIB => format!("{:.1} kB", b as f64 / KIB as f64),
+        b => format!("{b} bytes"),
+    }
 }
 
 fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -260,8 +283,12 @@ async fn render_tree(
 
     // A blob path renders as a file; a tree path (or the root) lists.
     if !path.is_empty() {
-        match git.store.show_file(&repo, &rev, &path).await {
-            Ok(Some(bytes)) => {
+        match git
+            .store
+            .read_blob(&repo, &rev, &path, MAX_RENDERED_BLOB)
+            .await
+        {
+            Ok(Some(blob)) => {
                 let is_dir = git
                     .store
                     .ls_tree(&repo, &rev, &path)
@@ -269,7 +296,18 @@ async fn render_tree(
                     .map(|entries| !entries.is_empty())
                     .unwrap_or(false);
                 if !is_dir {
-                    let text = String::from_utf8_lossy(&bytes).into_owned();
+                    let text = match blob {
+                        cairn_git::Blob::Text(text) => text,
+                        cairn_git::Blob::Binary { bytes } => {
+                            format!("Binary file, {}.", human_bytes(bytes))
+                        }
+                        cairn_git::Blob::TooLarge { bytes } => format!(
+                            "File is {}, larger than the {} this forge renders. \
+                             Clone the repository to read it.",
+                            human_bytes(bytes),
+                            human_bytes(MAX_RENDERED_BLOB)
+                        ),
+                    };
                     let landed_by = git
                         .store
                         .last_commit_for(&repo, &rev, &path)
@@ -326,12 +364,16 @@ async fn render_tree(
         });
     }
     let readme = if path.is_empty() && tip.is_some() {
-        git.store
-            .show_file(&repo, &rev, "README.md")
+        // This one renders without anyone asking for it, so the bound
+        // matters more here than on a file someone chose to open.
+        match git
+            .store
+            .read_blob(&repo, &rev, "README.md", MAX_RENDERED_BLOB)
             .await
-            .ok()
-            .flatten()
-            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        {
+            Ok(Some(cairn_git::Blob::Text(text))) => Some(text),
+            _ => None,
+        }
     } else {
         None
     };
@@ -505,11 +547,29 @@ async fn change_page(
         .and_then(|id| app.with_store(|s| s.task(id)).ok().flatten());
 
     let patch = match (app.git(), revisions.iter().find(|r| r.number == shown)) {
-        (Some(git), Some(revision)) => git
-            .store
-            .show_patch(&repo, &revision.commit_oid)
-            .await
-            .unwrap_or_default(),
+        (Some(git), Some(revision)) => {
+            let full = git
+                .store
+                .show_patch(&repo, &revision.commit_oid)
+                .await
+                .unwrap_or_default();
+            // A change that adds a large file produces a diff nobody
+            // reads and every viewer pays for. Cut it at a boundary the
+            // parser understands, on a line, and say so.
+            if full.len() > MAX_RENDERED_DIFF {
+                let cut = full[..MAX_RENDERED_DIFF]
+                    .rfind('\n')
+                    .unwrap_or(MAX_RENDERED_DIFF);
+                format!(
+                    "{}\n--- diff truncated at {} of {}; fetch the revision to see the rest ---\n",
+                    &full[..cut],
+                    human_bytes(MAX_RENDERED_DIFF as u64),
+                    human_bytes(full.len() as u64)
+                )
+            } else {
+                full
+            }
+        }
         _ => String::new(),
     };
     let files = diff::parse(&patch);

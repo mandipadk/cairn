@@ -13,6 +13,6 @@ mod store;
 
 pub use commit::{CommitInfo, parse_commit_object};
 pub use store::{
-    GitError, GitResult, GitStore, MIN_GIT, MIN_GIT_SHA256_CLIENT, RebaseOutcome, Service,
+    Blob, GitError, GitResult, GitStore, MIN_GIT, MIN_GIT_SHA256_CLIENT, RebaseOutcome, Service,
     preflight, version,
 };

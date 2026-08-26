@@ -9,6 +9,14 @@ use tokio::sync::broadcast;
 /// than any receive-pack, far shorter than mattering if leaked.
 const PUSH_TOKEN_TTL: Duration = Duration::from_secs(600);
 
+/// One change the log says landed, and where.
+struct Landed {
+    repo: String,
+    target: String,
+    number: i64,
+    oid: Option<String>,
+}
+
 /// Git hosting context: the repo store plus the base URL the
 /// proc-receive hook uses to call back into this server.
 pub(crate) struct GitContext {
@@ -42,6 +50,9 @@ pub struct AppState {
     /// Ephemeral secrets handed to proc-receive hooks, mapped to the
     /// authenticated pusher. In-memory only, expiring, never logged.
     push_tokens: Arc<Mutex<HashMap<String, (PrincipalId, Instant)>>>,
+    /// Branches whose advance failed after the merge was recorded, so
+    /// the next tick can replay the decision the log already holds.
+    refs_needing_advancing: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 impl AppState {
@@ -56,7 +67,28 @@ impl AppState {
             proxy_trust: crate::guard::ProxyTrust::Connection,
             login_limiter: crate::guard::LoginLimiter::default(),
             push_tokens: Arc::new(Mutex::new(HashMap::new())),
+            refs_needing_advancing: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// Remember a branch that did not move after its merge was recorded.
+    pub(crate) fn note_ref_needs_advancing(&self, repo: &str, target: &str) {
+        let mut pending = self
+            .refs_needing_advancing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = (repo.to_owned(), target.to_owned());
+        if !pending.contains(&entry) {
+            pending.push(entry);
+        }
+    }
+
+    pub(crate) fn take_refs_needing_advancing(&self) -> Vec<(String, String)> {
+        let mut pending = self
+            .refs_needing_advancing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::mem::take(&mut *pending)
     }
 
     /// Accept asserted identity via the dev header. For local
@@ -155,57 +187,103 @@ impl AppState {
     /// Every change the log says landed must actually be on the branch
     /// it landed on.
     ///
-    /// Recording the merge and moving the ref are two steps, and they
-    /// cannot be made one: the graph and git are different stores. If
-    /// the second fails — a crash, or a second forge process sharing
-    /// this database moving the branch first — the log claims a merge
-    /// the branch never received, and nothing notices, because every
-    /// other query answers from the graph. This is how someone finds
-    /// out.
-    ///
-    /// The graph is read first and the lock released before any git
-    /// runs, so a slow subprocess never blocks a request.
+    /// Recording the merge and moving the ref are two writes to two
+    /// different stores. The queue repairs what it safely can, but a
+    /// branch that moved somewhere else in between needs a person — and
+    /// nothing else would ever notice, because every other query answers
+    /// from the graph. This is how someone finds out.
     pub async fn branches_match_the_log(&self) -> cairn_core::CoreResult<Vec<String>> {
-        let Some(git) = self.git() else {
-            return Ok(Vec::new());
-        };
-        let landed = self.with_store(|store| -> cairn_core::CoreResult<Vec<_>> {
+        let mut divergences: Vec<String> = self
+            .all_merges_missing_from_branches()
+            .await?
+            .into_iter()
+            .map(|(repo, target, number, oid)| {
+                format!(
+                    "{repo}: change {number} is merged as {oid} but {target} does not contain it"
+                )
+            })
+            .collect();
+        // A merged change with no landed commit is its own kind of wrong.
+        for change in self.landed_changes()? {
+            if change.oid.is_none() {
+                divergences.push(format!(
+                    "{}: change {} is merged but records no landed commit",
+                    change.repo, change.number
+                ));
+            }
+        }
+        Ok(divergences)
+    }
+
+    /// Everything the log says landed.
+    fn landed_changes(&self) -> cairn_core::CoreResult<Vec<Landed>> {
+        self.with_store(|store| {
             let mut landed = Vec::new();
             for repo in store.repos()? {
                 for change in store.changes_in_repo(&repo.name)? {
                     if change.state == cairn_core::ChangeState::Merged {
-                        landed.push((
-                            repo.name.clone(),
-                            change.number,
-                            change.target.clone(),
-                            change.landed_oid.clone(),
-                        ));
+                        landed.push(Landed {
+                            repo: repo.name.clone(),
+                            target: change.target.clone(),
+                            number: change.number,
+                            oid: change.landed_oid.clone(),
+                        });
                     }
                 }
             }
             Ok(landed)
-        })?;
+        })
+    }
 
-        let mut divergences = Vec::new();
-        for (repo, number, target, oid) in landed {
-            let Some(oid) = oid else {
-                divergences.push(format!(
-                    "{repo}: change {number} is merged but records no landed commit"
-                ));
+    /// Landed changes on one branch that the branch does not contain.
+    pub(crate) async fn merges_missing_from_branch(
+        &self,
+        repo: &str,
+        target: &str,
+    ) -> cairn_core::CoreResult<Vec<(i64, String)>> {
+        let Some(git) = self.git() else {
+            return Ok(Vec::new());
+        };
+        let branch = format!("refs/heads/{target}");
+        let mut missing = Vec::new();
+        for change in self.landed_changes()? {
+            if change.repo != repo || change.target != target {
                 continue;
-            };
-            let branch = format!("refs/heads/{target}");
-            match git.store.is_ancestor(&repo, &oid, &branch).await {
-                Ok(true) => {}
-                Ok(false) => divergences.push(format!(
-                    "{repo}: change {number} is merged as {oid} but {target} does not contain it"
-                )),
-                Err(err) => divergences.push(format!(
-                    "{repo}: change {number} could not be checked against {target}: {err}"
-                )),
+            }
+            let Some(oid) = change.oid else { continue };
+            if !git
+                .store
+                .is_ancestor(repo, &oid, &branch)
+                .await
+                .unwrap_or(true)
+            {
+                missing.push((change.number, oid));
             }
         }
-        Ok(divergences)
+        Ok(missing)
+    }
+
+    /// The same across every repository, for recovery at startup.
+    pub(crate) async fn all_merges_missing_from_branches(
+        &self,
+    ) -> cairn_core::CoreResult<Vec<(String, String, i64, String)>> {
+        let Some(git) = self.git() else {
+            return Ok(Vec::new());
+        };
+        let mut missing = Vec::new();
+        for change in self.landed_changes()? {
+            let Some(oid) = change.oid else { continue };
+            let branch = format!("refs/heads/{}", change.target);
+            if !git
+                .store
+                .is_ancestor(&change.repo, &oid, &branch)
+                .await
+                .unwrap_or(true)
+            {
+                missing.push((change.repo, change.target, change.number, oid));
+            }
+        }
+        Ok(missing)
     }
 
     /// Run a closure against the store. Sync on purpose: the closure must

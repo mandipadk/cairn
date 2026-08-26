@@ -21,7 +21,7 @@ mod sse;
 mod state;
 mod web;
 
-pub use queue::spawn_queue_processor;
+pub use queue::{reconcile_branches, spawn_queue_processor};
 pub use state::AppState;
 
 use axum::Router;

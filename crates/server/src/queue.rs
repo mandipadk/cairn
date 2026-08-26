@@ -41,7 +41,14 @@ async fn run(state: AppState) {
     let mut events = state.subscribe();
     let mut tick = tokio::time::interval(TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // A forge that just started may be recovering from a crash between
+    // recording a merge and moving the branch. Replay those decisions
+    // before doing anything new.
+    for stuck in reconcile_branches(&state).await {
+        tracing::error!("{stuck}");
+    }
     loop {
+        retry_pending_advances(&state).await;
         process_lanes(&state).await;
         tokio::select! {
             _ = tick.tick() => {}
@@ -198,9 +205,12 @@ async fn land(
         .advance_ref(&entry.repo, &entry.target, &landed, tip.as_deref())
         .await
     {
-        // The graph recorded the merge but the ref did not move; loud,
-        // and safe to retry by hand. Same wrinkle as direct merges.
-        tracing::error!(error = %err, change = %entry.change, "queue: merge recorded but ref advance failed");
+        // The graph recorded the merge but the ref did not move. The
+        // decision is already durable and names the exact commit meant
+        // to land, so recovery replays it rather than recomputing it —
+        // remember the branch and retry on the next tick.
+        tracing::error!(error = %err, change = %entry.change, "queue: merge recorded but ref advance failed; will retry");
+        state.note_ref_needs_advancing(&entry.repo, &entry.target);
         return Ok(true);
     }
     carry_children(state, entry, &landed).await;
@@ -326,4 +336,117 @@ async fn dequeue(state: &AppState, entry: &QueueEntry, reason: &str) {
             tracing::warn!(error = %err, change = %entry.change, "queue: recording dequeue failed")
         }
     }
+}
+
+/// Make a branch carry what the log already decided should be on it.
+///
+/// Recording a merge and moving a branch are two writes to two different
+/// stores, so a crash or a second forge process can land between them.
+/// The standard shape for that is to make the durable record the
+/// intent and the external step an idempotent retry — which works here
+/// because the merge event names the exact commit meant to land. Nothing
+/// is recomputed: a rebase run a second time would produce a *different*
+/// commit and land the work twice.
+///
+/// Three cases, and only one of them acts:
+///
+/// - the branch already contains the commit — nothing to do, which is
+///   what makes this safe to run repeatedly;
+/// - the branch is behind it, so advancing is a fast-forward that
+///   discards nothing — do it, compare-and-swap against the tip just
+///   read so a concurrent mover still wins;
+/// - the branch is somewhere else entirely — something landed in
+///   between, and choosing what survives is not a decision to make
+///   automatically. Reported, never guessed at.
+///
+/// No event is appended for a repair. Nothing new was decided; the merge
+/// event already explains the branch, and the log records decisions
+/// rather than the mechanics of carrying them out.
+async fn advance_to_recorded(
+    state: &AppState,
+    repo: &str,
+    target: &str,
+    landed: &str,
+    change: i64,
+) -> Option<String> {
+    let git = state.git()?;
+    let branch = format!("refs/heads/{target}");
+    match git.store.is_ancestor(repo, landed, &branch).await {
+        Ok(true) => return None,
+        Ok(false) => {}
+        Err(err) => {
+            return Some(format!(
+                "{repo}: change {change} could not be checked against {target}: {err}"
+            ));
+        }
+    }
+    let tip = match git.store.tip(repo, target).await {
+        Ok(tip) => tip,
+        Err(err) => {
+            return Some(format!("{repo}: reading {target} failed: {err}"));
+        }
+    };
+    let safe = match &tip {
+        None => true,
+        Some(tip) => git
+            .store
+            .is_ancestor(repo, tip, landed)
+            .await
+            .unwrap_or(false),
+    };
+    if !safe {
+        return Some(format!(
+            "{repo}: change {change} is merged as {landed} but {target} moved elsewhere;              this needs a person"
+        ));
+    }
+    match git
+        .store
+        .advance_ref(repo, target, landed, tip.as_deref())
+        .await
+    {
+        Ok(()) => {
+            tracing::warn!(
+                repo,
+                target,
+                change,
+                landed,
+                "queue: branch was behind a recorded merge; advanced it"
+            );
+            None
+        }
+        Err(err) => Some(format!(
+            "{repo}: change {change} could not be advanced onto {target}: {err}"
+        )),
+    }
+}
+
+/// Retry branches whose advance failed while this process was running.
+/// Cheap: it looks only at what actually failed, not at every merge.
+async fn retry_pending_advances(state: &AppState) {
+    for (repo, target) in state.take_refs_needing_advancing() {
+        let Ok(pending) = state.merges_missing_from_branch(&repo, &target).await else {
+            continue;
+        };
+        for (change, landed) in pending {
+            if let Some(stuck) = advance_to_recorded(state, &repo, &target, &landed, change).await {
+                tracing::error!("{stuck}");
+                state.note_ref_needs_advancing(&repo, &target);
+            }
+        }
+    }
+}
+
+/// A full pass over every landed change, for recovering at startup.
+/// Returns what could not be repaired without a person.
+pub async fn reconcile_branches(state: &AppState) -> Vec<String> {
+    let Ok(missing) = state.all_merges_missing_from_branches().await else {
+        return vec!["reconcile: reading the graph failed".to_owned()];
+    };
+    let mut stuck = Vec::new();
+    for (repo, target, change, landed) in missing {
+        if let Some(problem) = advance_to_recorded(state, &repo, &target, &landed, change).await {
+            stuck.push(problem);
+        }
+    }
+    stuck
 }

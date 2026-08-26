@@ -325,7 +325,7 @@ const MAX_STACK: usize = 64;
 /// so re-pushing a stack after amending one commit touches one change.
 pub async fn record_push(
     State(app): State<AppState>,
-    actor: Actor,
+    actor: crate::auth::Pusher,
     Json(body): Json<RecordPush>,
 ) -> ApiResult<Json<Value>> {
     if body.commits.is_empty() {

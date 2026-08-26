@@ -22,6 +22,9 @@ pub struct Forge {
     pub addr: SocketAddr,
     pub work: PathBuf,
     pub scout_token: String,
+    /// A human's token, for the flows that must be driven by real
+    /// credentials rather than the dev header.
+    pub ada_token: String,
     /// Kept so tests can reach the store directly, e.g. to check that
     /// the log still explains every projection after a real flow.
     pub state: AppState,
@@ -34,6 +37,18 @@ pub async fn boot() -> Forge {
 }
 
 pub async fn boot_with(object_format: &str) -> Forge {
+    boot_inner(object_format, true).await
+}
+
+/// A forge with the dev identity header switched off — how a real
+/// deployment runs, where identity comes only from a token. Anything
+/// asserting something about authentication has to use this, because the
+/// dev header bypasses tokens entirely.
+pub async fn boot_token_only() -> Forge {
+    boot_inner("sha1", false).await
+}
+
+async fn boot_inner(object_format: &str, dev: bool) -> Forge {
     let tmp = tempfile::tempdir().unwrap();
     let repos = tmp.path().join("repos");
     let work = tmp.path().join("work");
@@ -76,22 +91,26 @@ pub async fn boot_with(object_format: &str) -> Forge {
         )
         .unwrap();
     let (_, scout_token, _) = store.mint_token(&scout, &scout, Some("test")).unwrap();
+    let (_, ada_token, _) = store.mint_token(&ada, &ada, Some("test")).unwrap();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let git_store = GitStore::new(&repos, env!("CARGO_BIN_EXE_cairn"));
-    let state = AppState::new(store)
-        .with_dev_identity()
-        .with_git(git_store, format!("http://{addr}"));
+    let mut state = AppState::new(store).with_git(git_store, format!("http://{addr}"));
+    if dev {
+        state = state.with_dev_identity();
+    }
     cairn_server::spawn_queue_processor(state.clone());
     let app = router(state.clone());
     tokio::spawn(axum::serve(listener, app.clone()).into_future());
 
-    let (status, _) = api(
+    // Authenticate the setup with a real token rather than the dev
+    // header, so booting works the same whether or not dev identity is on.
+    let (status, _) = api_with_token(
         &app,
         "POST",
         "/api/repos",
-        "ada",
+        &ada_token,
         Some(json!({ "name": "demo", "object_format": object_format })),
     )
     .await;
@@ -104,6 +123,7 @@ pub async fn boot_with(object_format: &str) -> Forge {
         addr,
         work,
         scout_token,
+        ada_token,
         state,
     }
 }
@@ -140,7 +160,15 @@ pub fn git_expect_fail(dir: &Path, args: &[&str]) -> String {
 pub fn git_raw(dir: &Path, args: &[&str]) -> std::process::Output {
     Command::new("git")
         .current_dir(dir)
+        // Hermetic on purpose. Whatever git configuration the machine
+        // carries must not reach these tests: an inherited credential
+        // helper can satisfy a push the test expects to be *refused*,
+        // which makes the suite's answer depend on what happens to be
+        // cached in a keychain. Signing, autocrlf and a default branch
+        // name would all leak in the same way.
         .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_AUTHOR_NAME", "Ada")
         .env("GIT_AUTHOR_EMAIL", "ada@example.test")
         .env("GIT_COMMITTER_NAME", "Ada")
@@ -150,6 +178,38 @@ pub fn git_raw(dir: &Path, args: &[&str]) -> std::process::Output {
         .expect("run git")
 }
 
+/// Make a request authenticated the way the outside world must:
+/// a bearer token, with no dev header anywhere.
+pub async fn api_with_token(
+    app: &Router,
+    method: &str,
+    path: &str,
+    token: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    request_with(
+        app,
+        method,
+        path,
+        ("authorization", format!("Bearer {token}")),
+        body,
+    )
+    .await
+}
+
+/// Fetch a page carrying a raw Cookie header, for asserting what the
+/// browser half does with a credential. Returns the status only: these
+/// callers care whether they were let in, not what was rendered.
+pub async fn get_with_cookie(app: &Router, path: &str, cookie: &str) -> StatusCode {
+    let request = Request::builder()
+        .method("GET")
+        .uri(path)
+        .header("cookie", cookie)
+        .body(Body::empty())
+        .unwrap();
+    app.clone().oneshot(request).await.unwrap().status()
+}
+
 pub async fn api(
     app: &Router,
     method: &str,
@@ -157,10 +217,27 @@ pub async fn api(
     actor: &str,
     body: Option<Value>,
 ) -> (StatusCode, Value) {
+    request_with(
+        app,
+        method,
+        path,
+        ("x-cairn-principal", actor.to_owned()),
+        body,
+    )
+    .await
+}
+
+async fn request_with(
+    app: &Router,
+    method: &str,
+    path: &str,
+    (header, value): (&str, String),
+    body: Option<Value>,
+) -> (StatusCode, Value) {
     let request = Request::builder()
         .method(method)
         .uri(path)
-        .header("x-cairn-principal", actor);
+        .header(header, value);
     let request = match body {
         Some(json) => request
             .header("content-type", "application/json")

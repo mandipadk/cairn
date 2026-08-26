@@ -334,8 +334,11 @@ async fn push_requires_a_live_token_without_dev_mode() {
     let wc = work.join("wc");
     commit_file(&wc, "f.txt", "x\n", "Add f\n\nChange-Id: Itok01");
 
-    // Wrong password refused; bare username refused.
+    // No credentials, wrong password, and a bare username are all
+    // refused. The anonymous case matters most: reads are open here, and
+    // nothing about that may spill into write access.
     for bad in [
+        format!("http://{addr}/git/demo"),
         format!("http://scout:wrong@{addr}/git/demo"),
         format!("http://scout@{addr}/git/demo"),
     ] {

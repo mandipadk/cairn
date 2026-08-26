@@ -139,6 +139,7 @@ async fn main() -> anyhow::Result<()> {
             mirror_token,
             trust_proxy,
         } => {
+            let git_version = cairn_git::preflight().context("checking the git on PATH")?;
             let store = Store::open(&db)
                 .with_context(|| format!("opening forge database at {}", db.display()))?;
             let listener = tokio::net::TcpListener::bind(listen)
@@ -172,7 +173,13 @@ async fn main() -> anyhow::Result<()> {
             }
             cairn_server::spawn_queue_processor(state.clone());
             let app = router(state);
-            tracing::info!(%listen, db = %db.display(), repos = %repos.display(), "cairn serving");
+            tracing::info!(
+                %listen,
+                db = %db.display(),
+                repos = %repos.display(),
+                git = %git_version,
+                "cairn serving"
+            );
             // Connect info is what lets the sign-in limiter tell one
             // caller from another.
             axum::serve(

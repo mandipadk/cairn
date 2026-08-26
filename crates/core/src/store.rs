@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -67,6 +67,15 @@ CREATE TABLE IF NOT EXISTS repos (
   object_format  TEXT NOT NULL DEFAULT 'sha1',
   policy         TEXT NOT NULL DEFAULT '{}',
   mirror         TEXT
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS imports (
+  repo    TEXT NOT NULL,
+  branch  TEXT NOT NULL,
+  source  TEXT NOT NULL,
+  tip_oid TEXT NOT NULL,
+  commits INTEGER NOT NULL,
+  PRIMARY KEY (repo, branch)
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -180,6 +189,7 @@ DROP TABLE IF EXISTS principals;
 DROP TABLE IF EXISTS tokens;
 DROP TABLE IF EXISTS grants;
 DROP TABLE IF EXISTS repos;
+DROP TABLE IF EXISTS imports;
 DROP TABLE IF EXISTS tasks;
 DROP TABLE IF EXISTS sessions;
 DROP TABLE IF EXISTS leases;
@@ -422,6 +432,19 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                     object_format.as_str(),
                     serde_json::to_string(&Policy::default()).expect("policy serializes")
                 ],
+            )?;
+        }
+        Event::HistoryImported {
+            repo,
+            branch,
+            source,
+            tip_oid,
+            commits,
+        } => {
+            tx.execute(
+                "INSERT OR REPLACE INTO imports (repo, branch, source, tip_oid, commits)
+                 VALUES (?, ?, ?, ?, ?)",
+                params![repo, branch, source, tip_oid, commits],
             )?;
         }
         Event::MirrorSet { repo, mirror } => {

@@ -37,6 +37,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/principals/{id}", get(routes::get_principal))
         .route("/api/repos", post(routes::create_repo))
         .route("/api/repos/{name}", get(routes::get_repo))
+        .route("/api/repos/{name}/import", post(routes::import_history))
         .route("/api/repos/{name}/changes", get(routes::list_changes))
         .route(
             "/api/repos/{name}/changes/{number}",

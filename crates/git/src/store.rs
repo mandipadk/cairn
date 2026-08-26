@@ -3,7 +3,8 @@
 //! The wire protocol is served by spawning `git upload-pack` /
 //! `git receive-pack` — deliberately boring, because protocol
 //! compatibility is exactly where cleverness goes to die. Push-to-create
-//! rides git's own `proc-receive` mechanism (git 2.29+): repos are
+//! rides git's own `proc-receive` mechanism (git 2.29+), though merging
+//! needs 2.38 and [`preflight`] enforces that floor: repos are
 //! configured so pushes to `refs/for/*` are handed to a hook, which
 //! records the revision in the graph and reports a
 //! `refs/changes/<number>/<revision>` name back to the pusher. The ref
@@ -126,6 +127,54 @@ while read old new ref; do
 done
 exit $status
 "#;
+
+/// The oldest git this forge can run on. `merge-tree --write-tree`,
+/// which is how a change is merged without ever checking anything out,
+/// arrived in git 2.38. Everything else it uses is far older.
+pub const MIN_GIT: (u32, u32) = (2, 38);
+
+/// Check the git on PATH before serving anything.
+///
+/// A forge that boots happily on a git too old to merge tells nobody
+/// anything until the first change is ready to land, and then reports it
+/// as a server error to whoever happened to be waiting. Fail here
+/// instead, naming the version found and the one needed.
+pub fn preflight() -> GitResult<String> {
+    let output = std::process::Command::new("git")
+        .arg("--version")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| GitError::CommandFailed {
+            args: "--version".into(),
+            stderr: format!("git is not on PATH: {e}"),
+        })?;
+    let found = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let numbers: Vec<u32> = found
+        .split_whitespace()
+        .find(|word| word.starts_with(|c: char| c.is_ascii_digit()))
+        .map(|version| {
+            version
+                .split('.')
+                .map_while(|part| part.parse().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let (major, minor) = (
+        numbers.first().copied().unwrap_or(0),
+        numbers.get(1).copied().unwrap_or(0),
+    );
+    if (major, minor) < MIN_GIT {
+        return Err(GitError::CommandFailed {
+            args: "--version".into(),
+            stderr: format!(
+                "{found} is too old: cairn needs git {}.{} or newer, because it merges with \
+                 `merge-tree --write-tree`",
+                MIN_GIT.0, MIN_GIT.1
+            ),
+        });
+    }
+    Ok(found)
+}
 
 pub struct GitStore {
     root: PathBuf,
@@ -429,17 +478,19 @@ impl GitStore {
         } else {
             format!("{rev}:{path}")
         };
-        let stdout = self
-            .run(
-                Some(&repo),
-                &["ls-tree", "--format=%(objecttype) %(path)", &spec],
-            )
-            .await?;
+        // Default output, not --format: that option arrived in git 2.36,
+        // and Ubuntu 22.04 — a normal place to run this — ships 2.34.
+        // -z gives NUL-terminated records with raw, unquoted paths, so a
+        // filename containing a space or newline still parses.
+        let stdout = self.run(Some(&repo), &["ls-tree", "-z", &spec]).await?;
         let mut entries: Vec<(String, String)> = String::from_utf8_lossy(&stdout)
-            .lines()
-            .filter_map(|line| {
-                line.split_once(' ')
-                    .map(|(kind, path)| (kind.to_owned(), path.to_owned()))
+            .split('\0')
+            .filter(|record| !record.is_empty())
+            .filter_map(|record| {
+                // "<mode> <type> <oid>\t<path>"
+                let (meta, path) = record.split_once('\t')?;
+                let kind = meta.split_whitespace().nth(1)?;
+                Some((kind.to_owned(), path.to_owned()))
             })
             .collect();
         entries.sort_by(|a, b| (a.0 != "tree", &a.1).cmp(&(b.0 != "tree", &b.1)));
@@ -594,6 +645,56 @@ impl GitStore {
         Ok(output.status.success())
     }
 
+    /// Fetch a branch's history from elsewhere into this repository,
+    /// without publishing it. Returns the fetched tip and how many
+    /// commits came with it. Nothing is pointed at the branch here: the
+    /// caller records the import first, so the log never trails the ref.
+    pub async fn fetch_history(
+        &self,
+        name: &str,
+        source: &str,
+        branch: &str,
+    ) -> GitResult<(String, i64)> {
+        let path = self.existing_repo_path(name)?;
+        // Land it on a holding ref so a failed fetch leaves the branch
+        // untouched, and so nothing is reachable under refs/heads until
+        // the import is on the record.
+        let staging = format!("refs/import/{branch}");
+        self.run(
+            Some(&path),
+            &[
+                "fetch",
+                "--no-tags",
+                source,
+                &format!("+refs/heads/{branch}:{staging}"),
+            ],
+        )
+        .await?;
+        let tip = String::from_utf8_lossy(&self.run(Some(&path), &["rev-parse", &staging]).await?)
+            .trim()
+            .to_owned();
+        let count = String::from_utf8_lossy(
+            &self
+                .run(Some(&path), &["rev-list", "--count", &staging])
+                .await?,
+        )
+        .trim()
+        .parse()
+        .unwrap_or(0);
+        Ok((tip, count))
+    }
+
+    /// Drop an import's holding ref once the branch carries it.
+    pub async fn clear_import_ref(&self, name: &str, branch: &str) -> GitResult<()> {
+        let path = self.existing_repo_path(name)?;
+        self.run(
+            Some(&path),
+            &["update-ref", "-d", &format!("refs/import/{branch}")],
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Fast-forward a branch, compare-and-swap against the expected old
     /// tip (zero-oid when creating the branch).
     pub async fn advance_ref(
@@ -614,5 +715,41 @@ impl GitStore {
         )
         .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The git this test suite is running against must itself satisfy
+    /// the floor, or every merge test here is proving something about a
+    /// git nobody will deploy on.
+    #[test]
+    fn preflight_accepts_the_git_we_test_with() {
+        let found = preflight().expect("the test environment needs a supported git");
+        assert!(found.contains("git version"), "unexpected output: {found}");
+    }
+
+    #[test]
+    fn ls_tree_records_parse_with_awkward_paths() {
+        // What `ls-tree -z` actually emits: NUL-separated, tab before a
+        // raw path that may contain spaces.
+        let raw = "100644 blob abc123\ta file.txt\u{0}040000 tree def456\tsub dir\u{0}";
+        let entries: Vec<(String, String)> = raw
+            .split('\0')
+            .filter(|record| !record.is_empty())
+            .filter_map(|record| {
+                let (meta, path) = record.split_once('\t')?;
+                Some((meta.split_whitespace().nth(1)?.to_owned(), path.to_owned()))
+            })
+            .collect();
+        assert_eq!(
+            entries,
+            vec![
+                ("blob".to_owned(), "a file.txt".to_owned()),
+                ("tree".to_owned(), "sub dir".to_owned()),
+            ]
+        );
     }
 }

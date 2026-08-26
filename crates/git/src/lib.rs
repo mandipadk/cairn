@@ -12,4 +12,4 @@ pub mod pkt;
 mod store;
 
 pub use commit::{CommitInfo, parse_commit_object};
-pub use store::{GitError, GitResult, GitStore, RebaseOutcome, Service};
+pub use store::{GitError, GitResult, GitStore, MIN_GIT, RebaseOutcome, Service, preflight};

@@ -181,6 +181,67 @@ impl Store {
         Ok(env)
     }
 
+    /// Check an import source before anyone connects to it. The command
+    /// enforces this too, but a caller that fetches first would have the
+    /// forge dial an arbitrary url — and carry a credential there — on
+    /// nothing but a caller's say-so. Validate, then fetch.
+    pub fn validate_import_source(source: &str) -> CoreResult<()> {
+        bounded("source", source, MAX_TITLE)?;
+        require(
+            ["https://", "ssh://", "file://"]
+                .iter()
+                .any(|scheme| source.starts_with(scheme)),
+            || "a source url must be https://, ssh://, or file://".into(),
+        )?;
+        require(!source.contains('@'), || {
+            "keep credentials out of the source url: pass a token when serving".into()
+        })?;
+        Ok(())
+    }
+
+    /// Record that a branch was seeded with history from somewhere
+    /// else. Every other way a branch moves carries a policy trace
+    /// saying why it was allowed; this one carries the opposite — an
+    /// explicit marker that the commits below this tip were never
+    /// judged here. Admin authority, and only onto a branch that does
+    /// not exist yet: importing over reviewed history would overwrite
+    /// exactly the decisions the log exists to keep.
+    pub fn import_history(
+        &mut self,
+        actor: &PrincipalId,
+        repo: &str,
+        branch: &str,
+        source: &str,
+        tip_oid: &str,
+        commits: i64,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        authorize(&tx, actor, Capability::Admin, Some(repo))?;
+        raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
+        require(valid_branch(branch), || {
+            format!("{branch:?} is not a valid branch name")
+        })?;
+        Self::validate_import_source(source)?;
+        require(
+            matches!(tip_oid.len(), 40 | 64) && tip_oid.chars().all(|c| c.is_ascii_hexdigit()),
+            || format!("{tip_oid:?} is not an object id"),
+        )?;
+        require(commits > 0, || "an import must carry commits".into())?;
+        let env = append(
+            &tx,
+            actor,
+            Event::HistoryImported {
+                repo: repo.to_owned(),
+                branch: branch.to_owned(),
+                source: source.to_owned(),
+                tip_oid: tip_oid.to_owned(),
+                commits,
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
     /// Set the rules a repository requires. Admin authority, because
     /// a policy decides what everyone else's work must satisfy.
     pub fn set_policy(

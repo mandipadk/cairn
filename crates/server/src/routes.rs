@@ -134,6 +134,54 @@ pub async fn create_repo(
     Ok(committed(Some(body.name), &env))
 }
 
+#[derive(Deserialize)]
+pub struct ImportHistory {
+    /// Where to fetch from. Credentials belong in --mirror-token, not here.
+    pub source: String,
+    #[serde(default = "default_branch")]
+    pub branch: String,
+}
+
+/// Seed a branch with history that already existed somewhere else.
+///
+/// Every other route that moves a branch does so because a policy said
+/// yes. This one cannot: the commits predate the forge. So it refuses to
+/// pretend — the import is recorded as its own kind of event, and the
+/// compare-and-swap against the zero-oid means it can only ever create a
+/// branch, never overwrite one the log has already vouched for.
+pub async fn import_history(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(name): Path<String>,
+    Json(body): Json<ImportHistory>,
+) -> ApiResult<Json<Value>> {
+    let git = app.git().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            "unavailable",
+            "this forge is running without git storage",
+        )
+    })?;
+    // Before dialling out: the url is a caller's, and this forge does
+    // not connect anywhere on nothing but a caller's say-so.
+    cairn_core::Store::validate_import_source(&body.source)?;
+    let (tip, commits) = git
+        .store
+        .fetch_history(&name, &body.source, &body.branch)
+        .await?;
+    // Record before publishing the ref: if this fails, the branch stays
+    // absent and the import can be retried, which is the harmless order.
+    let env = app.with_store(|s| {
+        s.import_history(&actor.0, &name, &body.branch, &body.source, &tip, commits)
+    })?;
+    git.store
+        .advance_ref(&name, &body.branch, &tip, None)
+        .await?;
+    let _ = git.store.clear_import_ref(&name, &body.branch).await;
+    app.publish(&env);
+    Ok(committed(Some(name), &env))
+}
+
 pub async fn get_repo(
     State(app): State<AppState>,
     _actor: Actor,

@@ -76,6 +76,21 @@ pub enum Event {
         object_format: ObjectFormat,
     },
 
+    /// History that predates this forge, brought in whole. Recorded as
+    /// its own kind rather than dressed up as a merge: nothing here was
+    /// reviewed under this repository's policy, and the log says so
+    /// instead of implying otherwise.
+    HistoryImported {
+        repo: String,
+        branch: String,
+        /// Where it came from, credentials excluded.
+        source: String,
+        /// The tip the branch was set to.
+        tip_oid: String,
+        /// How many commits arrived without ever facing a policy.
+        commits: i64,
+    },
+
     /// A repository set the rules everything on it must meet.
     PolicySet {
         repo: String,
@@ -237,6 +252,7 @@ impl Event {
             Event::GrantIssued { .. } => "grant_issued",
             Event::GrantRevoked { .. } => "grant_revoked",
             Event::RepoCreated { .. } => "repo_created",
+            Event::HistoryImported { .. } => "history_imported",
             Event::PolicySet { .. } => "policy_set",
             Event::MirrorSet { .. } => "mirror_set",
             Event::MirrorPushed { .. } => "mirror_pushed",

@@ -925,3 +925,127 @@ mod tests {
         assert_eq!(before, after, "a rebuild must not change what state says");
     }
 }
+
+#[cfg(test)]
+mod concurrency_tests {
+    use super::*;
+    use crate::id::ChangeId;
+    use crate::types::{
+        Capability, ChangeSpec, ClaimKind, ClaimSpec, Independence, Policy, PrincipalKind,
+    };
+
+    /// Build a store on disk holding one change that is ready to land.
+    fn ready_change(path: &std::path::Path) -> (PrincipalId, ChangeId) {
+        let mut store = Store::open(path).unwrap();
+        let ada = PrincipalId::new("ada").unwrap();
+        store
+            .register_principal(&ada, &ada, PrincipalKind::Human, "Ada", None, None)
+            .unwrap();
+        store
+            .create_repo(&ada, "demo", "main", Default::default())
+            .unwrap();
+        // Isolate the question: policy is satisfied, so the only thing
+        // that can stop a second merge is the concurrency guard.
+        store
+            .set_policy(
+                &ada,
+                "demo",
+                Policy {
+                    require_executed_check: false,
+                    require_runner_verification: false,
+                    independence: Independence::None,
+                    required_domains: Vec::new(),
+                },
+            )
+            .unwrap();
+        let (change, _, _) = store
+            .open_change(
+                &ada,
+                ChangeSpec {
+                    repo: "demo".into(),
+                    target: "main".into(),
+                    title: "Racy".into(),
+                    task: None,
+                    parent_change: None,
+                    external_key: None,
+                },
+            )
+            .unwrap();
+        store
+            .push_revision(&ada, &change, &"a".repeat(40), None, "m")
+            .unwrap();
+        store
+            .attach_claim(
+                &ada,
+                &change,
+                1,
+                ClaimSpec {
+                    kind: ClaimKind::Test,
+                    command: Some("true".into()),
+                    passed: true,
+                    summary: "ok".into(),
+                    unchecked: Vec::new(),
+                },
+            )
+            .unwrap();
+        let _ = Capability::Merge;
+        (ada, change)
+    }
+
+    /// Two forge processes can share one database — an overlapping
+    /// restart is enough to arrange it. Neither may land the same change,
+    /// because a second merge event would mean the log records a decision
+    /// that was never made and the branch moved twice for one change.
+    #[test]
+    fn a_change_cannot_be_merged_twice_from_two_connections() {
+        // A barrier only guarantees the two threads *start* together, so
+        // one attempt would prove little. Repeat the race: over this many
+        // rounds the interleavings vary, and every round must still leave
+        // exactly one merge.
+        for round in 0..12 {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("forge.db");
+            let (ada, change) = ready_change(&path);
+
+            // Two independent connections, as two processes would have.
+            let mut one = Store::open(&path).unwrap();
+            let mut two = Store::open(&path).unwrap();
+
+            let barrier = std::sync::Barrier::new(2);
+            let (first, second) = std::thread::scope(|scope| {
+                let a = scope.spawn(|| {
+                    barrier.wait();
+                    one.merge_change_as(&ada, &change, None)
+                });
+                let b = scope.spawn(|| {
+                    barrier.wait();
+                    two.merge_change_as(&ada, &change, None)
+                });
+                (a.join().unwrap(), b.join().unwrap())
+            });
+
+            let winners = [&first, &second].iter().filter(|r| r.is_ok()).count();
+            assert_eq!(
+                winners, 1,
+                "round {round}: exactly one merge may succeed, and one must — \
+                 got first={first:?} second={second:?}"
+            );
+
+            // The log is the real check, whatever the calls returned.
+            let store = Store::open(&path).unwrap();
+            let merged: i64 = store
+                .conn
+                .query_row(
+                    "SELECT count(*) FROM events WHERE kind = 'change_merged'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(merged, 1, "round {round}: the log must record one merge");
+            assert!(
+                store.fsck().unwrap().is_empty(),
+                "round {round}: state must still be explained by the log"
+            );
+        }
+    }
+}

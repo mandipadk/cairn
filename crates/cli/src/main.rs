@@ -122,6 +122,12 @@ enum AdminCommand {
     Fsck {
         #[arg(long, default_value = "cairn.db")]
         db: PathBuf,
+        /// Also check that every branch really contains what the log
+        /// says landed on it. Recording a merge and moving the branch
+        /// are two steps, and a crash or a second forge process sharing
+        /// this database can land between them.
+        #[arg(long)]
+        repos: Option<PathBuf>,
     },
 }
 
@@ -226,10 +232,18 @@ async fn main() -> anyhow::Result<()> {
                 let (_, secret, _) = store.mint_token(&id, &id, label.as_deref())?;
                 println!("token (shown once, store it safely): {secret}");
             }
-            AdminCommand::Fsck { db } => {
+            AdminCommand::Fsck { db, repos } => {
                 let store = Store::open(&db)
                     .with_context(|| format!("opening forge database at {}", db.display()))?;
-                let divergences = store.fsck()?;
+                let mut divergences = store.fsck()?;
+                if let Some(repos) = repos {
+                    let git = GitStore::new(
+                        &repos,
+                        std::env::current_exe().context("locating own binary")?,
+                    );
+                    let state = AppState::new(store).with_git(git, String::new());
+                    divergences.extend(state.branches_match_the_log().await?);
+                }
                 if divergences.is_empty() {
                     println!("clean: every projection matches the log");
                 } else {

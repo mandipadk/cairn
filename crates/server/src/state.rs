@@ -152,6 +152,62 @@ impl AppState {
         self.with_store(|store| store.fsck())
     }
 
+    /// Every change the log says landed must actually be on the branch
+    /// it landed on.
+    ///
+    /// Recording the merge and moving the ref are two steps, and they
+    /// cannot be made one: the graph and git are different stores. If
+    /// the second fails — a crash, or a second forge process sharing
+    /// this database moving the branch first — the log claims a merge
+    /// the branch never received, and nothing notices, because every
+    /// other query answers from the graph. This is how someone finds
+    /// out.
+    ///
+    /// The graph is read first and the lock released before any git
+    /// runs, so a slow subprocess never blocks a request.
+    pub async fn branches_match_the_log(&self) -> cairn_core::CoreResult<Vec<String>> {
+        let Some(git) = self.git() else {
+            return Ok(Vec::new());
+        };
+        let landed = self.with_store(|store| -> cairn_core::CoreResult<Vec<_>> {
+            let mut landed = Vec::new();
+            for repo in store.repos()? {
+                for change in store.changes_in_repo(&repo.name)? {
+                    if change.state == cairn_core::ChangeState::Merged {
+                        landed.push((
+                            repo.name.clone(),
+                            change.number,
+                            change.target.clone(),
+                            change.landed_oid.clone(),
+                        ));
+                    }
+                }
+            }
+            Ok(landed)
+        })?;
+
+        let mut divergences = Vec::new();
+        for (repo, number, target, oid) in landed {
+            let Some(oid) = oid else {
+                divergences.push(format!(
+                    "{repo}: change {number} is merged but records no landed commit"
+                ));
+                continue;
+            };
+            let branch = format!("refs/heads/{target}");
+            match git.store.is_ancestor(&repo, &oid, &branch).await {
+                Ok(true) => {}
+                Ok(false) => divergences.push(format!(
+                    "{repo}: change {number} is merged as {oid} but {target} does not contain it"
+                )),
+                Err(err) => divergences.push(format!(
+                    "{repo}: change {number} could not be checked against {target}: {err}"
+                )),
+            }
+        }
+        Ok(divergences)
+    }
+
     /// Run a closure against the store. Sync on purpose: the closure must
     /// not (and cannot) await while holding the lock.
     pub(crate) fn with_store<T>(&self, f: impl FnOnce(&mut Store) -> T) -> T {

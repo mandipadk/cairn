@@ -128,10 +128,26 @@ done
 exit $status
 "#;
 
-/// The oldest git this forge can run on. `merge-tree --write-tree`,
-/// which is how a change is merged without ever checking anything out,
-/// arrived in git 2.38. Everything else it uses is far older.
-pub const MIN_GIT: (u32, u32) = (2, 38);
+/// The oldest git this forge runs on.
+///
+/// Every git feature used here, with the release that introduced it:
+///
+/// | feature                            | since |
+/// |------------------------------------|-------|
+/// | `merge-tree --write-tree`          | 2.38  |
+/// | `proc-receive` / `procReceiveRefs` | 2.29  |
+/// | `init --object-format`             | 2.29  |
+/// | `init --initial-branch`            | 2.28  |
+/// | `merge-base --is-ancestor`         | 1.8   |
+/// | everything else                    | < 2.0 |
+///
+/// Merging sets the real floor at 2.38, but this says 2.39, because 2.39
+/// is the oldest git the test suite is actually run against (see the
+/// `minimum-git` CI job). Claiming support for a version nothing
+/// exercises is how a forge ends up deployed somewhere it cannot merge.
+/// Anyone adding a git invocation should extend the table above, and
+/// lower this only alongside a job that proves the older version works.
+pub const MIN_GIT: (u32, u32) = (2, 39);
 
 /// Check the git on PATH before serving anything.
 ///
@@ -167,8 +183,8 @@ pub fn preflight() -> GitResult<String> {
         return Err(GitError::CommandFailed {
             args: "--version".into(),
             stderr: format!(
-                "{found} is too old: cairn needs git {}.{} or newer, because it merges with \
-                 `merge-tree --write-tree`",
+                "{found} is too old: cairn needs git {}.{} or newer. Merging uses \
+                 `merge-tree --write-tree`, which does not exist before 2.38",
                 MIN_GIT.0, MIN_GIT.1
             ),
         });

@@ -169,6 +169,17 @@ repository or push size, and any protection against a principal that
 holds legitimate capabilities and abuses them. Grants are the tool for
 that, and they are only as narrow as whoever issues them.
 
+## Requirements
+
+**git 2.39 or newer**, on the PATH of whoever runs `serve`. Merging uses
+`merge-tree --write-tree`, which arrived in git 2.38, so a stock Ubuntu
+22.04 (git 2.34) cannot merge — add `ppa:git-core/ppa`, or run somewhere
+newer. `serve` checks this at startup and refuses to boot on a git it
+cannot merge with, rather than accepting work it will fail to land.
+
+2.39 rather than 2.38 because 2.39 is the oldest git the test suite runs
+against; the floor is a tested fact, not an inference.
+
 ## Running
 
 ```sh

@@ -23,3 +23,32 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
+
+  # The job above runs against whatever git the runner happens to ship,
+  # which is always recent. That hid a real defect: the forge shells out
+  # to git constantly, and an option that only exists in newer releases
+  # fails nowhere in CI and everywhere on a stock LTS server. This job
+  # runs the same suite against the oldest git the project claims to
+  # support, so the claim in MIN_GIT is a tested fact.
+  minimum-git:
+    runs-on: ubuntu-latest
+    container: rust:1-bookworm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Confirm this image still provides the declared floor
+        run: |
+          set -e
+          declared=$(grep -oE 'MIN_GIT: \(u32, u32\) = \([0-9]+, [0-9]+\)' \
+            crates/git/src/store.rs | grep -oE '[0-9]+, [0-9]+' | tr -d ' ')
+          found=$(git --version | grep -oE '[0-9]+\.[0-9]+' | head -1 | tr '.' ',')
+          echo "declared floor: $declared / image provides: $found"
+          # If the base image moves off the declared floor, this job stops
+          # testing what it says it tests. Fail loudly instead of drifting.
+          test "$declared" = "$found" || {
+            echo "::error::MIN_GIT is $declared but this image has $found;" \
+                 "pin an image at the declared floor or update MIN_GIT"
+            exit 1
+          }
+      - uses: Swatinem/rust-cache@v2
+      - name: Test against the oldest supported git
+        run: cargo test --workspace

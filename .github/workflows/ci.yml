@@ -52,3 +52,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Test against the oldest supported git
         run: cargo test --workspace
+      - name: Say what this git could not exercise
+        # Cargo captures output from passing tests, so a test that skips
+        # itself looks exactly like one that ran. Print the sha256 case
+        # uncaptured: silent skips are how coverage quietly disappears.
+        run: cargo test --test git_flow push_review_merge_sha256_repo -- --nocapture

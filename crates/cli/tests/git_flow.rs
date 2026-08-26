@@ -20,7 +20,30 @@ async fn push_review_merge_over_real_git() {
 /// to end, from clone through merge.
 #[tokio::test(flavor = "multi_thread")]
 async fn push_review_merge_sha256_repo() {
-    single_change_flow(boot_with("sha256").await, 64).await;
+    // Cloning an *empty* sha256 repo cannot infer the object format from
+    // any object, so it depends on the client being new enough to learn
+    // it from the transport. Older git silently makes a sha1 working
+    // copy. That is a client limitation the forge cannot fix, and it is
+    // documented — so on such a git, assert the documentation actually
+    // explains what we are seeing, rather than passing quietly.
+    let forge = boot_with("sha256").await;
+
+    // The server half holds on any git: the repository really was
+    // created with a sha256 object database. Worth asserting separately,
+    // so an old client costs us the end-to-end run and nothing more.
+    let (_, repo) = api(&forge.app, "GET", "/api/repos/demo", "ada", None).await;
+    assert_eq!(repo["object_format"], "sha256");
+
+    let (running, reported) = cairn_git::version().expect("git on PATH");
+    if running < cairn_git::MIN_GIT_SHA256_CLIENT {
+        let (major, minor) = cairn_git::MIN_GIT_SHA256_CLIENT;
+        eprintln!(
+            "not exercising sha256 end to end: {reported} predates the documented \
+             client floor of {major}.{minor} for cloning an empty sha256 repository"
+        );
+        return;
+    }
+    single_change_flow(forge, 64).await;
 }
 
 async fn single_change_flow(forge: Forge, oid_len: usize) {

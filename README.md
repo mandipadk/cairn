@@ -180,6 +180,13 @@ cannot merge with, rather than accepting work it will fail to land.
 2.39 rather than 2.38 because 2.39 is the oldest git the test suite runs
 against; the floor is a tested fact, not an inference.
 
+**SHA-256 repositories additionally need git 2.43 or newer on the
+client.** Cloning an empty repository cannot infer the object format from
+any object, so it depends on the transport advertising it, and older git
+quietly produces a SHA-1 working copy whose first push will not match the
+repository it came from. Verified: 2.40 fails, 2.43 works. This is a
+client limitation and applies to whoever clones, not to the server.
+
 ## Running
 
 ```sh

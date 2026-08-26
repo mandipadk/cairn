@@ -149,13 +149,24 @@ exit $status
 /// lower this only alongside a job that proves the older version works.
 pub const MIN_GIT: (u32, u32) = (2, 39);
 
-/// Check the git on PATH before serving anything.
+/// SHA-256 repositories need more than the server floor, and the extra
+/// requirement falls on the *client*.
 ///
-/// A forge that boots happily on a git too old to merge tells nobody
-/// anything until the first change is ready to land, and then reports it
-/// as a server error to whoever happened to be waiting. Fail here
-/// instead, naming the version found and the one needed.
-pub fn preflight() -> GitResult<String> {
+/// Cloning an empty repository cannot infer the object format from any
+/// object, so it depends on the transport advertising it. Git before
+/// 2.43 quietly produces a SHA-1 working copy instead, and the first
+/// push from it will not match the repository it came from. Nothing the
+/// forge does can fix that from this side; hosting SHA-256 works on the
+/// server floor, but whoever clones needs 2.43.
+///
+/// 2.43 because that is the oldest release verified to work: 2.40 fails,
+/// 2.43 succeeds, and the fix landed somewhere between them. Claiming
+/// the untested boundary would be a guess.
+pub const MIN_GIT_SHA256_CLIENT: (u32, u32) = (2, 43);
+
+/// The git on PATH, as `(major, minor)` plus the version string it
+/// reported.
+pub fn version() -> GitResult<((u32, u32), String)> {
     let output = std::process::Command::new("git")
         .arg("--version")
         .stdin(Stdio::null())
@@ -175,11 +186,24 @@ pub fn preflight() -> GitResult<String> {
                 .collect()
         })
         .unwrap_or_default();
-    let (major, minor) = (
-        numbers.first().copied().unwrap_or(0),
-        numbers.get(1).copied().unwrap_or(0),
-    );
-    if (major, minor) < MIN_GIT {
+    Ok((
+        (
+            numbers.first().copied().unwrap_or(0),
+            numbers.get(1).copied().unwrap_or(0),
+        ),
+        found,
+    ))
+}
+
+/// Check the git on PATH before serving anything.
+///
+/// A forge that boots happily on a git too old to merge tells nobody
+/// anything until the first change is ready to land, and then reports it
+/// as a server error to whoever happened to be waiting. Fail here
+/// instead, naming the version found and the one needed.
+pub fn preflight() -> GitResult<String> {
+    let (found_version, found) = version()?;
+    if found_version < MIN_GIT {
         return Err(GitError::CommandFailed {
             args: "--version".into(),
             stderr: format!(

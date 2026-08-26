@@ -145,6 +145,13 @@ impl AppState {
         self.git.as_deref()
     }
 
+    /// Check that live state is still exactly the log applied. Public
+    /// because this is a question an operator asks of a *running* forge,
+    /// not only of a database file at rest.
+    pub fn fsck(&self) -> cairn_core::CoreResult<Vec<String>> {
+        self.with_store(|store| store.fsck())
+    }
+
     /// Run a closure against the store. Sync on purpose: the closure must
     /// not (and cannot) await while holding the lock.
     pub(crate) fn with_store<T>(&self, f: impl FnOnce(&mut Store) -> T) -> T {

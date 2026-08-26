@@ -116,6 +116,13 @@ enum AdminCommand {
         #[arg(long)]
         label: Option<String>,
     },
+    /// Check that current state is exactly the log applied, by replaying
+    /// it into empty projections and comparing. Exits non-zero on any
+    /// divergence, so it can be run from cron or a health check.
+    Fsck {
+        #[arg(long, default_value = "cairn.db")]
+        db: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -218,6 +225,19 @@ async fn main() -> anyhow::Result<()> {
                     .with_context(|| format!("{principal:?} is not a valid principal slug"))?;
                 let (_, secret, _) = store.mint_token(&id, &id, label.as_deref())?;
                 println!("token (shown once, store it safely): {secret}");
+            }
+            AdminCommand::Fsck { db } => {
+                let store = Store::open(&db)
+                    .with_context(|| format!("opening forge database at {}", db.display()))?;
+                let divergences = store.fsck()?;
+                if divergences.is_empty() {
+                    println!("clean: every projection matches the log");
+                } else {
+                    for divergence in &divergences {
+                        eprintln!("diverged: {divergence}");
+                    }
+                    anyhow::bail!("{} projection(s) do not match the log", divergences.len());
+                }
             }
         },
         Command::Verify {

@@ -183,23 +183,29 @@ CREATE TABLE IF NOT EXISTS verdicts (
 CREATE INDEX IF NOT EXISTS idx_verdicts_change ON verdicts (change_id, revision);
 ";
 
-/// The reverse, for a rebuild.
-const DROP_PROJECTIONS: &str = "
-DROP TABLE IF EXISTS principals;
-DROP TABLE IF EXISTS tokens;
-DROP TABLE IF EXISTS grants;
-DROP TABLE IF EXISTS repos;
-DROP TABLE IF EXISTS imports;
-DROP TABLE IF EXISTS tasks;
-DROP TABLE IF EXISTS sessions;
-DROP TABLE IF EXISTS leases;
-DROP TABLE IF EXISTS changes;
-DROP TABLE IF EXISTS revisions;
-DROP TABLE IF EXISTS claims;
-DROP TABLE IF EXISTS merge_queue;
-DROP TABLE IF EXISTS verifications;
-DROP TABLE IF EXISTS verdicts;
-";
+/// Every table derived from the log.
+///
+/// One list, used both to drop projections for a rebuild and to compare
+/// them in [`Store::fsck`], so the two can never disagree about what the
+/// log is supposed to produce. A new projection table belongs here the
+/// moment it exists; forgetting means a rebuild leaves it stale and fsck
+/// never looks at it.
+const PROJECTION_TABLES: &[&str] = &[
+    "principals",
+    "tokens",
+    "grants",
+    "repos",
+    "imports",
+    "tasks",
+    "sessions",
+    "leases",
+    "changes",
+    "revisions",
+    "claims",
+    "merge_queue",
+    "verifications",
+    "verdicts",
+];
 
 pub struct Store {
     pub(crate) conn: Connection,
@@ -216,6 +222,60 @@ impl Store {
     /// forge core can be stood up inside a unit test.
     pub fn open_in_memory() -> CoreResult<Self> {
         Self::init(Connection::open_in_memory()?)
+    }
+
+    /// Check that current state is nothing more than the log applied.
+    ///
+    /// That claim is the foundation everything else rests on, and it is
+    /// checkable rather than merely asserted: replay the log into empty
+    /// projections and see whether the answer matches what is live. A
+    /// divergence means either a projection was written by something
+    /// other than an event, or replaying the same log twice does not
+    /// produce the same state — and both make every downstream promise,
+    /// including the policy trace on a merge, worth nothing.
+    ///
+    /// Returns one line per divergence; empty means clean. Descriptions
+    /// name tables and row positions rather than contents, so this is
+    /// safe to print and paste.
+    pub fn fsck(&self) -> CoreResult<Vec<String>> {
+        let mut shadow = Connection::open_in_memory()?;
+        shadow.execute_batch(PROJECTION_SCHEMA)?;
+        {
+            let tx = shadow.transaction()?;
+            replay_into(&tx, &self.conn)?;
+            tx.commit()?;
+        }
+
+        let mut divergences = Vec::new();
+        for table in PROJECTION_TABLES {
+            let live = dump_table(&self.conn, table)?;
+            let replayed = dump_table(&shadow, table)?;
+            if live == replayed {
+                continue;
+            }
+            if live.len() != replayed.len() {
+                divergences.push(format!(
+                    "{table}: {} row(s) live, {} produced by the log",
+                    live.len(),
+                    replayed.len()
+                ));
+                continue;
+            }
+            let differing = live
+                .iter()
+                .zip(&replayed)
+                .enumerate()
+                .filter(|(_, (a, b))| a != b)
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            divergences.push(format!(
+                "{table}: {} of {} row(s) differ from the log (first at row {})",
+                differing.len(),
+                live.len(),
+                differing.first().copied().unwrap_or(0)
+            ));
+        }
+        Ok(divergences)
     }
 
     fn init(mut conn: Connection) -> CoreResult<Self> {
@@ -295,10 +355,75 @@ pub(crate) fn append(tx: &Transaction, actor: &PrincipalId, event: Event) -> Cor
     Ok(envelope)
 }
 
+/// One projection table, rendered as ordered rows of text so two
+/// databases can be compared without knowing anything about the schema.
+fn dump_table(conn: &Connection, table: &str) -> CoreResult<Vec<String>> {
+    // Row order is not guaranteed by SQLite, so sort by every column:
+    // the comparison is about contents, not storage order.
+    let width = conn
+        .prepare(&format!("SELECT * FROM {table} LIMIT 0"))?
+        .column_count();
+    let order = (1..=width)
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut stmt = conn.prepare(&format!("SELECT * FROM {table} ORDER BY {order}"))?;
+    let rows = stmt.query_map([], |row| {
+        let mut cells = Vec::with_capacity(width);
+        for index in 0..width {
+            cells.push(match row.get_ref(index)? {
+                rusqlite::types::ValueRef::Null => "NULL".to_owned(),
+                rusqlite::types::ValueRef::Integer(value) => value.to_string(),
+                rusqlite::types::ValueRef::Real(value) => value.to_string(),
+                rusqlite::types::ValueRef::Text(value) => {
+                    String::from_utf8_lossy(value).into_owned()
+                }
+                rusqlite::types::ValueRef::Blob(value) => format!("blob:{}", value.len()),
+            });
+        }
+        Ok(cells.join("\u{1f}"))
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// Replay every event into empty projections and apply them to `tx`.
+fn replay_into(tx: &Transaction, source: &Connection) -> CoreResult<u64> {
+    let mut stmt = source.prepare("SELECT seq, ts, actor, payload FROM events ORDER BY seq")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+    let mut replayed = 0;
+    for row in rows {
+        let (seq, ts, actor, payload) = row?;
+        let event: Event = serde_json::from_str(&payload).map_err(|e| CoreError::Corrupt {
+            at: format!("event seq {seq}"),
+            reason: e.to_string(),
+        })?;
+        apply(
+            tx,
+            &Envelope {
+                seq: EventSeq(seq),
+                ts,
+                actor: PrincipalId(actor),
+                event,
+            },
+        )?;
+        replayed += 1;
+    }
+    Ok(replayed)
+}
+
 /// Rebuild every projection by replaying the log into it.
 fn rebuild_projections(conn: &mut Connection) -> CoreResult<()> {
     let tx = conn.transaction()?;
-    tx.execute_batch(DROP_PROJECTIONS)?;
+    for table in PROJECTION_TABLES {
+        tx.execute_batch(&format!("DROP TABLE IF EXISTS {table};"))?;
+    }
     tx.execute_batch(PROJECTION_SCHEMA)?;
 
     let mut replayed = 0u64;
@@ -708,4 +833,95 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::PrincipalKind;
+
+    /// fsck is only worth running if it can fail. A check that always
+    /// reports "clean" passes every positive test ever written for it,
+    /// so the important assertion is that deliberately unexplained state
+    /// gets caught.
+    #[test]
+    fn fsck_notices_state_the_log_does_not_explain() {
+        let mut store = Store::open_in_memory().unwrap();
+        let ada = PrincipalId::new("ada").unwrap();
+        store
+            .register_principal(&ada, &ada, PrincipalKind::Human, "Ada", None, None)
+            .unwrap();
+        store
+            .create_repo(&ada, "demo", "main", Default::default())
+            .unwrap();
+        assert!(
+            store.fsck().unwrap().is_empty(),
+            "a store built only from events should be clean"
+        );
+
+        // A row nothing in the log ever asked for: the shape of the bug
+        // this exists to find — a projection written by something other
+        // than an event.
+        store
+            .conn
+            .execute(
+                "INSERT INTO repos (name, default_branch, object_format, policy)
+                 VALUES ('ghost', 'main', 'sha1', '{}')",
+                [],
+            )
+            .unwrap();
+        let divergences = store.fsck().unwrap();
+        assert!(
+            divergences.iter().any(|d| d.starts_with("repos:")),
+            "an unexplained repo row must be reported; got {divergences:#?}"
+        );
+
+        // And an edited row, which is subtler than an extra one: same
+        // count, different contents.
+        let mut store = Store::open_in_memory().unwrap();
+        store
+            .register_principal(&ada, &ada, PrincipalKind::Human, "Ada", None, None)
+            .unwrap();
+        store
+            .create_repo(&ada, "demo", "main", Default::default())
+            .unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE repos SET default_branch = 'trunk' WHERE name = 'demo'",
+                [],
+            )
+            .unwrap();
+        let divergences = store.fsck().unwrap();
+        assert!(
+            divergences.iter().any(|d| d.starts_with("repos:")),
+            "an edited repo row must be reported; got {divergences:#?}"
+        );
+    }
+
+    /// Replaying the same log twice must produce the same state, or the
+    /// rebuild that runs on every schema change is not deterministic.
+    #[test]
+    fn replay_is_deterministic() {
+        let mut store = Store::open_in_memory().unwrap();
+        let ada = PrincipalId::new("ada").unwrap();
+        store
+            .register_principal(&ada, &ada, PrincipalKind::Human, "Ada", None, None)
+            .unwrap();
+        for name in ["one", "two", "three"] {
+            store
+                .create_repo(&ada, name, "main", Default::default())
+                .unwrap();
+        }
+        let before: Vec<Vec<String>> = PROJECTION_TABLES
+            .iter()
+            .map(|table| dump_table(&store.conn, table).unwrap())
+            .collect();
+        rebuild_projections(&mut store.conn).unwrap();
+        let after: Vec<Vec<String>> = PROJECTION_TABLES
+            .iter()
+            .map(|table| dump_table(&store.conn, table).unwrap())
+            .collect();
+        assert_eq!(before, after, "a rebuild must not change what state says");
+    }
 }

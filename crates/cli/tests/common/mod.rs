@@ -22,6 +22,9 @@ pub struct Forge {
     pub addr: SocketAddr,
     pub work: PathBuf,
     pub scout_token: String,
+    /// Kept so tests can reach the store directly, e.g. to check that
+    /// the log still explains every projection after a real flow.
+    pub state: AppState,
 }
 
 /// Boot a forge with git hosting, principals (human `ada`, agents
@@ -81,7 +84,7 @@ pub async fn boot_with(object_format: &str) -> Forge {
         .with_dev_identity()
         .with_git(git_store, format!("http://{addr}"));
     cairn_server::spawn_queue_processor(state.clone());
-    let app = router(state);
+    let app = router(state.clone());
     tokio::spawn(axum::serve(listener, app.clone()).into_future());
 
     let (status, _) = api(
@@ -101,6 +104,7 @@ pub async fn boot_with(object_format: &str) -> Forge {
         addr,
         work,
         scout_token,
+        state,
     }
 }
 
@@ -170,7 +174,15 @@ pub async fn api(
     let value = if bytes.is_empty() {
         Value::Null
     } else {
-        serde_json::from_slice(&bytes).unwrap()
+        // A non-JSON body is nearly always a route that did not match or
+        // a rejected extractor, and the body says which. Swallowing it
+        // turns a one-line diagnosis into a hunt.
+        serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+            panic!(
+                "{method} {path} returned {status} with a body that is not JSON ({e}): {}",
+                String::from_utf8_lossy(&bytes)
+            )
+        })
     };
     (status, value)
 }
@@ -250,7 +262,13 @@ pub async fn approve_and_enqueue(app: &Router, change_id: &str) {
 }
 
 pub fn commit_file(wc: &Path, file: &str, contents: &str, message: &str) {
-    std::fs::write(wc.join(file), contents).unwrap();
+    let path = wc.join(file);
+    // Nested paths are the interesting ones for leases and blame, so
+    // they should not need a separate mkdir at every call site.
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(&path, contents).unwrap();
     git(wc, &["add", "."]);
     git(wc, &["commit", "-m", message]);
 }

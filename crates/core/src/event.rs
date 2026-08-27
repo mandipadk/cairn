@@ -47,14 +47,19 @@ pub enum Event {
 
     /// A human set a password, theirs or (as an admin) someone's.
     ///
-    /// The stored value is an argon2id PHC string, never the password.
-    /// Like a token's hash it lives in the log forever, which is the
-    /// honest cost of a log that explains everything: setting a new
-    /// password supersedes the old hash but cannot unwrite it, so an old
-    /// backup carries old hashes exactly as a password database would.
+    /// The fact belongs in the log — it is worth knowing that somebody's
+    /// credential changed, and when, and on whose authority. The
+    /// credential does not: the log is append-only, so a hash written
+    /// here could never be rotated out or erased, and a password whose
+    /// old hash survives every change is a password that was never
+    /// really changed. The hash lives in the credentials table instead.
+    ///
+    /// The optional field exists only to read events written before that
+    /// was understood. Nothing populates it now.
     PasswordSet {
         principal: PrincipalId,
-        hash: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hash: Option<String>,
     },
 
     TokenMinted {

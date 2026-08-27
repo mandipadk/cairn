@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -29,6 +29,41 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_kind ON events (kind, seq);
 ";
 
+/// State that is deliberately *not* derived from the log.
+///
+/// The log records decisions about software, and it is append-only, so
+/// anything written there can never be rotated out or erased. Neither
+/// property suits authentication material: a password must be
+/// changeable in a way that retires the old secret, and a session must
+/// be revocable and must expire. Keeping them here — same database,
+/// outside the projections — is what lets them be updated and deleted
+/// like the operational records they are.
+///
+/// Consequently a replay does not reconstruct these, which is correct:
+/// they are not consequences of the log. Rebuilding projections leaves
+/// them untouched, and `fsck` does not compare them, because there is
+/// nothing to compare them against.
+const OPERATIONAL_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS credentials (
+  principal TEXT PRIMARY KEY,
+  hash      TEXT NOT NULL,
+  set_at    TEXT NOT NULL
+) STRICT;
+
+-- Not `sessions`: that already means an agent's run of work against a
+-- task, and this is somebody's browser being signed in. Two different
+-- things with one name is how a silent CREATE TABLE IF NOT EXISTS ends
+-- up writing to the wrong table.
+CREATE TABLE IF NOT EXISTS browser_sessions (
+  id_hash   TEXT PRIMARY KEY,
+  principal TEXT NOT NULL,
+  created   TEXT NOT NULL,
+  expires   TEXT NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_browser_sessions_principal ON browser_sessions (principal);
+CREATE INDEX IF NOT EXISTS idx_browser_sessions_expires ON browser_sessions (expires);
+";
+
 /// Everything derived. Dropping and replaying these is always safe:
 /// the log is the truth and this is only its current shape.
 const PROJECTION_SCHEMA: &str = "
@@ -38,8 +73,7 @@ CREATE TABLE IF NOT EXISTS principals (
   kind    TEXT NOT NULL,
   display TEXT NOT NULL,
   model   TEXT,
-  harness TEXT,
-  password TEXT
+  harness TEXT
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS tokens (
@@ -283,6 +317,7 @@ impl Store {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(EVENT_SCHEMA)?;
+        conn.execute_batch(OPERATIONAL_SCHEMA)?;
 
         // Projections are derived, so a schema change is not a
         // migration problem: drop them and replay the log. This is the
@@ -544,12 +579,9 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                 params![grant.as_str()],
             )?;
         }
-        Event::PasswordSet { principal, hash } => {
-            tx.execute(
-                "UPDATE principals SET password = ? WHERE id = ?",
-                params![hash, principal.as_str()],
-            )?;
-        }
+        // The credential itself is not in the event and not a
+        // projection; this records only that it happened, and when.
+        Event::PasswordSet { .. } => {}
         Event::RepoCreated {
             repo,
             default_branch,
@@ -1127,6 +1159,156 @@ mod exhaustion_tests {
         store
             .create_task(&ada, Some("demo"), "after", "spec", None)
             .expect("writes resume once the database has room");
+        assert!(store.fsck().unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::*;
+    use crate::types::PrincipalKind;
+
+    fn human(path: &std::path::Path) -> (Store, PrincipalId) {
+        let mut store = Store::open(path).unwrap();
+        let ada = PrincipalId::new("ada").unwrap();
+        store
+            .register_principal(&ada, &ada, PrincipalKind::Human, "Ada", None, None)
+            .unwrap();
+        (store, ada)
+    }
+
+    /// The whole reason sessions are stored rather than held in memory:
+    /// deploying must not sign everybody out.
+    #[test]
+    fn a_session_outlives_the_process_that_issued_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("forge.db");
+        let (mut store, ada) = human(&path);
+        store
+            .set_password(&ada, &ada, "correct horse battery staple")
+            .unwrap();
+        let secret = store.start_session(&ada, 14).unwrap();
+        drop(store);
+
+        // A new process, the same database.
+        let mut restarted = Store::open(&path).unwrap();
+        assert_eq!(
+            restarted.session_holder(&secret),
+            Some(ada.clone()),
+            "a restart must not sign anyone out"
+        );
+
+        restarted.end_browser_session(&secret).unwrap();
+        assert_eq!(
+            restarted.session_holder(&secret),
+            None,
+            "signing out must end it everywhere, not just clear a cookie"
+        );
+    }
+
+    /// Only a hash is kept, so reading the database yields nothing that
+    /// can be replayed as a credential.
+    #[test]
+    fn the_database_holds_no_usable_session_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("forge.db");
+        let (mut store, ada) = human(&path);
+        let secret = store.start_session(&ada, 14).unwrap();
+
+        let stored: String = store
+            .conn
+            .query_row("SELECT id_hash FROM browser_sessions", [], |row| row.get(0))
+            .unwrap();
+        assert_ne!(stored, secret, "the secret itself must not be stored");
+        assert!(
+            !stored.contains(&secret) && !secret.contains(&stored),
+            "and neither must anything it can be recovered from"
+        );
+    }
+
+    /// An expiry that has passed is not a session.
+    #[test]
+    fn an_expired_session_stops_working() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("forge.db");
+        let (mut store, ada) = human(&path);
+        let secret = store.start_session(&ada, 14).unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE browser_sessions SET expires = '2020-01-01T00:00:00Z'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(store.session_holder(&secret), None);
+    }
+
+    /// A password is a credential, so it lives where credentials can be
+    /// rotated and erased — never in an append-only log.
+    #[test]
+    fn a_password_hash_never_reaches_the_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("forge.db");
+        let (mut store, ada) = human(&path);
+        store
+            .set_password(&ada, &ada, "correct horse battery staple")
+            .unwrap();
+        store
+            .set_password(&ada, &ada, "an entirely different secret")
+            .unwrap();
+
+        let payloads: Vec<String> = store
+            .conn
+            .prepare("SELECT payload FROM events WHERE kind = 'password_set'")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(payloads.len(), 2, "both changes are on the record");
+        for payload in &payloads {
+            assert!(
+                !payload.contains("argon2") && !payload.contains("hash"),
+                "the log records that it happened, never the credential: {payload}"
+            );
+        }
+
+        // Rotation actually retires the old secret.
+        assert!(!store.password_matches(&ada, "correct horse battery staple"));
+        assert!(store.password_matches(&ada, "an entirely different secret"));
+
+        // Exactly one credential is kept, not a history of them.
+        let rows: i64 = store
+            .conn
+            .query_row("SELECT count(*) FROM credentials", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 1, "a rotated password leaves nothing behind");
+    }
+
+    /// Rebuilding projections must not touch operational state: a schema
+    /// change to the graph is not a reason to sign everyone out or wipe
+    /// everybody's password.
+    #[test]
+    fn a_projection_rebuild_leaves_credentials_and_sessions_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("forge.db");
+        let (mut store, ada) = human(&path);
+        store
+            .set_password(&ada, &ada, "correct horse battery staple")
+            .unwrap();
+        let secret = store.start_session(&ada, 14).unwrap();
+
+        rebuild_projections(&mut store.conn).unwrap();
+
+        assert!(
+            store.password_matches(&ada, "correct horse battery staple"),
+            "a rebuild must not erase credentials"
+        );
+        assert_eq!(
+            store.session_holder(&secret),
+            Some(ada),
+            "a rebuild must not sign anyone out"
+        );
         assert!(store.fsck().unwrap().is_empty());
     }
 }

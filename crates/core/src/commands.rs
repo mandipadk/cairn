@@ -233,16 +233,97 @@ impl Store {
             "a password must be between 12 and 1024 bytes".into()
         })?;
         let hash = hash_password(password)?;
+        // The credential is written outside the log, in the same
+        // transaction as the fact that it changed — so the two cannot
+        // disagree, and the secret can still be rotated or erased.
+        tx.execute(
+            "INSERT INTO credentials (principal, hash, set_at) VALUES (?, ?, ?)
+             ON CONFLICT(principal) DO UPDATE SET hash = excluded.hash, set_at = excluded.set_at",
+            rusqlite::params![principal.as_str(), hash, jiff::Timestamp::now().to_string()],
+        )?;
+        // Changing a password ends the sessions it was protecting.
+        tx.execute(
+            "DELETE FROM browser_sessions WHERE principal = ?",
+            rusqlite::params![principal.as_str()],
+        )?;
         let env = append(
             &tx,
             actor,
             Event::PasswordSet {
                 principal: principal.clone(),
-                hash,
+                hash: None,
             },
         )?;
         tx.commit()?;
         Ok(env)
+    }
+
+    /// Begin a browser session, returning the secret that names it.
+    ///
+    /// Only a hash of that secret is stored, for the same reason a token
+    /// stores only a hash: reading the database must not yield working
+    /// credentials. Sessions persist, so a deploy does not sign everyone
+    /// out, and they carry an expiry so an abandoned one stops working
+    /// on its own.
+    pub fn start_session(&mut self, principal: &PrincipalId, ttl_days: i64) -> CoreResult<String> {
+        // A session secret is a credential of the same weight as a
+        // token, so it is generated the same way.
+        let secret = format!("s{}", random_token_secret());
+        let now = jiff::Timestamp::now();
+        // Timestamps are absolute instants, so an expiry is expressed in
+        // hours: calendar days are a civil-time idea and mean different
+        // amounts of elapsed time across a DST boundary.
+        let expires = now + jiff::Span::new().hours(ttl_days * 24);
+        let tx = self.conn.transaction()?;
+        // Expired rows are dead weight; clear them whenever one is made.
+        tx.execute(
+            "DELETE FROM browser_sessions WHERE expires <= ?",
+            rusqlite::params![now.to_string()],
+        )?;
+        tx.execute(
+            "INSERT INTO browser_sessions (id_hash, principal, created, expires) VALUES (?, ?, ?, ?)",
+            rusqlite::params![
+                token_hash(&secret),
+                principal.as_str(),
+                now.to_string(),
+                expires.to_string()
+            ],
+        )?;
+        tx.commit()?;
+        Ok(secret)
+    }
+
+    /// Whose session this is, if it is live.
+    pub fn session_holder(&self, secret: &str) -> Option<PrincipalId> {
+        self.conn
+            .prepare_cached(
+                "SELECT principal FROM browser_sessions WHERE id_hash = ? AND expires > ?",
+            )
+            .ok()?
+            .query_row(
+                rusqlite::params![token_hash(secret), jiff::Timestamp::now().to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .ok()
+            .map(PrincipalId)
+    }
+
+    /// End one session — signing out.
+    pub fn end_browser_session(&mut self, secret: &str) -> CoreResult<()> {
+        self.conn.execute(
+            "DELETE FROM browser_sessions WHERE id_hash = ?",
+            rusqlite::params![token_hash(secret)],
+        )?;
+        Ok(())
+    }
+
+    /// End every session a principal holds.
+    pub fn end_browser_sessions_of(&mut self, principal: &PrincipalId) -> CoreResult<()> {
+        self.conn.execute(
+            "DELETE FROM browser_sessions WHERE principal = ?",
+            rusqlite::params![principal.as_str()],
+        )?;
+        Ok(())
     }
 
     /// Check a password. Returns false for an unknown principal, one
@@ -250,7 +331,7 @@ impl Store {
     /// to say so in the first two cases as the third, so the answer
     /// cannot be read off the clock.
     pub fn password_matches(&self, principal: &PrincipalId, password: &str) -> bool {
-        let stored = raw::password_hash(&self.conn, principal.as_str())
+        let stored = raw::credential(&self.conn, principal.as_str())
             .ok()
             .flatten();
         match stored {

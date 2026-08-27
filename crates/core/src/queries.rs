@@ -33,12 +33,11 @@ pub(crate) mod raw {
     /// Deliberately not a field on [`Principal`]: that struct is
     /// serialised straight into API responses, and a hash that is never
     /// in the type cannot leak through one.
-    pub fn password_hash(conn: &Connection, id: &str) -> CoreResult<Option<String>> {
+    pub fn credential(conn: &Connection, id: &str) -> CoreResult<Option<String>> {
         Ok(conn
-            .prepare_cached("SELECT password FROM principals WHERE id = ?")?
-            .query_row(params![id], |row| row.get::<_, Option<String>>(0))
-            .optional()?
-            .flatten())
+            .prepare_cached("SELECT hash FROM credentials WHERE principal = ?")?
+            .query_row(params![id], |row| row.get::<_, String>(0))
+            .optional()?)
     }
 
     pub fn principal(conn: &Connection, id: &str) -> CoreResult<Option<Principal>> {

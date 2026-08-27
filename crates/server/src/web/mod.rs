@@ -216,8 +216,10 @@ async fn login_submit(
                 .into_response();
         };
         return if app.with_store(|s| s.password_matches(&principal, &password)) {
-            let session = app.start_session(&principal);
-            signed_in(&app, SESSION_COOKIE, &session)
+            match app.start_session(&principal) {
+                Ok(session) => signed_in(&app, SESSION_COOKIE, &session),
+                Err(err) => oops(err),
+            }
         } else {
             Redirect::to("/login?error=That+name+and+password+do+not+match").into_response()
         };

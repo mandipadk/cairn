@@ -54,11 +54,14 @@ pub enum Event {
     /// old hash survives every change is a password that was never
     /// really changed. The hash lives in the credentials table instead.
     ///
-    /// The optional field exists only to read events written before that
-    /// was understood. Nothing populates it now.
+    /// The optional field exists only to *read* events written before
+    /// that was understood, and is never serialised again: those events
+    /// are in the log for good, but the event feed and the web UI hand
+    /// their payloads to any authenticated caller, and a credential is
+    /// not something to publish because it is already recorded.
     PasswordSet {
         principal: PrincipalId,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing)]
         hash: Option<String>,
     },
 

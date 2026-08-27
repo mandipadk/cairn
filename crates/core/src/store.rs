@@ -1312,3 +1312,29 @@ mod credential_tests {
         assert!(store.fsck().unwrap().is_empty());
     }
 }
+
+#[cfg(test)]
+mod legacy_payload_tests {
+    use super::*;
+
+    /// Events written by the earlier design carry a password hash. They
+    /// cannot be unwritten — the log is append-only, which is the whole
+    /// point — but they must never be handed back out: the event feed
+    /// answers any authenticated caller, including one holding nothing
+    /// but the verify capability.
+    #[test]
+    fn a_legacy_password_hash_is_read_but_never_served() {
+        let stored = r#"{"kind":"password_set","principal":"ada","hash":"$argon2id$v=19$m=19456,t=2,p=1$abc$def"}"#;
+        let event: Event = serde_json::from_str(stored).expect("old events must still replay");
+        // Reading works, so the log still applies.
+        assert!(
+            matches!(&event, Event::PasswordSet { principal, .. } if principal.as_str() == "ada")
+        );
+        // Writing it back out drops the credential.
+        let served = serde_json::to_string(&event).unwrap();
+        assert!(
+            !served.contains("argon2") && !served.contains("hash"),
+            "a credential must not be republished: {served}"
+        );
+    }
+}

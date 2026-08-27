@@ -93,12 +93,20 @@ async fn the_home_ranks_what_wants_a_person_across_every_repository() {
         &body[..body.len().min(600)]
     );
 
-    // And the repositories are still reachable, with what is in flight.
-    assert!(body.contains("Repositories"));
-    assert!(body.contains("second"));
+    // The chrome is on every page: repositories in the sidebar, search,
+    // and a way to create something.
     assert!(
-        body.contains("open"),
-        "a repository should show its open work"
+        body.contains("Repositories"),
+        "the sidebar lists repositories"
+    );
+    assert!(body.contains("second"), "including every one of them");
+    assert!(
+        body.contains("/search") && body.contains("/new"),
+        "search and create belong in the bar, not in a README somewhere"
+    );
+    assert!(
+        body.contains("Your changes"),
+        "and a way back to your own work"
     );
 }
 

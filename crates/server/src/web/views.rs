@@ -74,6 +74,21 @@ fn layout(
     title: &str,
     body: Markup,
 ) -> Markup {
+    layout_with(theme, viewer, repo, active, title, body, None)
+}
+
+/// The frame every signed-in page renders inside: a global bar, a
+/// sidebar of what you have and who is working, the page itself, and
+/// optionally a rail on the right.
+fn layout_with(
+    theme: Theme,
+    viewer: Option<&Viewer>,
+    repo: Option<&str>,
+    active: Option<Tab>,
+    title: &str,
+    body: Markup,
+    rail: Option<Markup>,
+) -> Markup {
     html! {
         (DOCTYPE)
         html lang="en" data-theme=(theme.attr()) {
@@ -84,35 +99,97 @@ fn layout(
                 link rel="stylesheet" href="/assets/app.css";
             }
             body {
-                @if let Some(viewer) = viewer {
-                    nav class="topnav" {
-                        a href="/" aria-label="Home" {
-                            span class="stones" aria-hidden="true" { span {} span {} span {} }
-                        }
-                        @if let Some(repo) = repo {
-                            span class="repo" { (repo) }
-                            div class="tabs" {
-                                (tab(repo, "", "Code", active == Some(Tab::Code)))
-                                (tab(repo, "/changes", "Changes", active == Some(Tab::Changes)))
-                                (tab(repo, "/landing", "Landing", active == Some(Tab::Landing)))
-                                (tab(repo, "/lessons", "Lessons", active == Some(Tab::Lessons)))
-                                (tab(repo, "/log", "Log", active == Some(Tab::Log)))
+                @match viewer {
+                    Some(viewer) => {
+                        div class={ "app" @if rail.is_none() { " narrow" } } {
+                            (topbar(theme, viewer))
+                            (sidebar(viewer, repo))
+                            main class="main" {
+                                @if let Some(repo) = repo {
+                                    div class="repohead" {
+                                        span class="repo" { (repo) }
+                                        div class="tabs" {
+                                            (tab(repo, "", "Code", active == Some(Tab::Code)))
+                                            (tab(repo, "/changes", "Changes", active == Some(Tab::Changes)))
+                                            (tab(repo, "/landing", "Landing", active == Some(Tab::Landing)))
+                                            (tab(repo, "/lessons", "Lessons", active == Some(Tab::Lessons)))
+                                            (tab(repo, "/log", "Log", active == Some(Tab::Log)))
+                                        }
+                                    }
+                                }
+                                (body)
                             }
-                        }
-                        div class="right" {
-                            form method="post" action="/theme" {
-                                input type="hidden" name="to" value=(theme.other());
-                                button class="quiet" type="submit" { (theme.switch_label()) }
+                            @if let Some(rail) = rail {
+                                aside class="rail" { (rail) }
                             }
-                            form method="post" action="/logout" {
-                                button class="quiet" type="submit" { "Sign out" }
-                            }
-                            span class="avatar" { (viewer.0.as_str().chars().next().unwrap_or('?').to_uppercase()) }
                         }
                     }
+                    None => (body),
                 }
-                (body)
             }
+        }
+    }
+}
+
+fn topbar(theme: Theme, viewer: &Viewer) -> Markup {
+    html! {
+        div class="bar" {
+            a class="brand" href="/" aria-label="Home" {
+                span class="stones" aria-hidden="true" { span {} span {} span {} }
+                b { "cairn" }
+            }
+            form class="search" method="get" action="/search" {
+                input name="q" type="search" placeholder="Search repositories, changes, people"
+                      autocomplete="off" aria-label="Search";
+            }
+            div class="baractions" {
+                a class="quiet" href="/new" { "New" }
+                form method="post" action="/theme" {
+                    input type="hidden" name="to" value=(theme.other());
+                    button class="quiet" type="submit" { (theme.switch_label()) }
+                }
+                form method="post" action="/logout" {
+                    button class="quiet" type="submit" { "Sign out" }
+                }
+                span class="avatar" title=(viewer.0.as_str()) {
+                    (viewer.0.as_str().chars().next().unwrap_or('?').to_uppercase())
+                }
+            }
+        }
+    }
+}
+
+fn sidebar(viewer: &Viewer, current: Option<&str>) -> Markup {
+    let chrome = &viewer.1;
+    html! {
+        nav class="side" {
+            h4 { "Repositories" }
+            @if chrome.repos.is_empty() {
+                div class="row" { span class="n" { "None yet" } span {} }
+            }
+            @for repo in &chrome.repos {
+                a class={ @if current == Some(repo.name.as_str()) { "on" } @else { "" } }
+                  href={ "/" (repo.name) } {
+                    span { (repo.name) }
+                    span class="n" { @if repo.open > 0 { (repo.open) } }
+                }
+            }
+
+            @if !chrome.working.is_empty() {
+                div class="sep" {}
+                h4 { "Working now" }
+                @for worker in &chrome.working {
+                    div class="row" title=(worker.paths.join(", ")) {
+                        span class="dotline" { span class="mini live" {} (worker.who) }
+                        span class="n" { @if let Some(repo) = &worker.repo { (repo) } }
+                    }
+                }
+            }
+
+            div class="sep" {}
+            h4 { "You" }
+            a href="/you" { span { "Your changes" } span class="n" { @if chrome.yours > 0 { (chrome.yours) } } }
+            a href="/you/tokens" { span { "Tokens & agents" } span class="n" {} }
         }
     }
 }
@@ -185,38 +262,65 @@ pub fn login(theme: Theme, dev: bool, error: Option<&str>) -> Markup {
     )
 }
 
-pub fn home(
-    theme: Theme,
-    viewer: &Viewer,
-    repos: &[super::HomeRepo],
-    needs_you: &[super::HomeAttention],
-) -> Markup {
-    layout(
+pub fn home(theme: Theme, viewer: &Viewer, data: &super::HomeData) -> Markup {
+    let rail = html! {
+        @if !data.lanes.is_empty() {
+            div class="card" {
+                div class="sechead" { b { "Landing" } span {} }
+                @for lane in &data.lanes {
+                    div class="line" {
+                        span { b { (lane.repo) } " · " (lane.branch) }
+                        span class="q" { (lane.queued) " queued" }
+                    }
+                }
+            }
+        }
+        @if !viewer.1.working.is_empty() {
+            div class="card" {
+                div class="sechead" { b { "In flight" } span { (viewer.1.working.len()) } }
+                @for worker in &viewer.1.working {
+                    div class="line" {
+                        span {
+                            b { (worker.who) }
+                            @if let Some(repo) = &worker.repo { " · " (repo) }
+                            @if !worker.paths.is_empty() {
+                                br;
+                                span class="q" { (worker.paths.join(", ")) }
+                            }
+                        }
+                        span class="q" {}
+                    }
+                }
+            }
+        }
+        @if !data.lessons.is_empty() {
+            div class="card" {
+                div class="sechead" { b { "Lessons" } span {} }
+                @for lesson in &data.lessons {
+                    div class="lesson" { (lesson.outcome) }
+                }
+            }
+        }
+    };
+
+    layout_with(
         theme,
         Some(viewer),
         None,
         None,
         "Home",
         html! {
-            div class="need homeneed" {
-                div class="sechead" { b { "Needs you" } span { (needs_you.len()) } }
-                @if needs_you.is_empty() {
-                    div class="trow sec3" {
-                        span {}
-                        span { "Nothing is waiting on a human." }
-                        span {}
-                    }
+            div class="block homeneed" {
+                div class="sechead" { b { "Needs you" } span { (data.needs_you.len()) } }
+                @if data.needs_you.is_empty() {
+                    div class="trow sec3" { span {} span { "Nothing is waiting on a human." } span {} }
                 }
-                @for entry in needs_you {
+                @for entry in &data.needs_you {
                     a class="trow" href={ "/" (entry.repo) "/changes/" (entry.item.change.number) }
                       title=(attention_evidence(&entry.item)) {
                         span class="sec3" { (entry.repo) " #" (entry.item.change.number) }
                         span style="font-weight: 500;" { (entry.item.change.title) }
                         span class="reasons" {
-                            // The two heaviest reasons, so every row is
-                            // one line and the list keeps its rhythm.
-                            // The rest are in the hover evidence and in
-                            // full on the change itself.
                             @for (index, signal) in entry.item.signals.iter().take(2).enumerate() {
                                 @if index > 0 { span class="sec3" { " · " } }
                                 span class={ @if index == 0 { "lead" } @else { "sec3" } } {
@@ -231,21 +335,200 @@ pub fn home(
                 }
             }
 
-            div class="homerepos" {
-                div class="sechead" { b { "Repositories" } span { (repos.len()) } }
-                @if repos.is_empty() {
-                    p class="empty" { "No repositories yet." }
-                }
-                @for entry in repos {
-                    a class="trow" href={ "/" (entry.repo.name) } {
-                        span style="font-weight: 500;" { (entry.repo.name) }
-                        span class="sec3" { (entry.repo.default_branch) }
-                        span class="sec3" {
-                            @if entry.open > 0 { (entry.open) " open" }
-                            @if entry.open > 0 && entry.queued > 0 { " · " }
-                            @if entry.queued > 0 { (entry.queued) " landing" }
+            @if !data.mine.is_empty() {
+                div class="block homemine" {
+                    div class="sechead" { b { "Your changes" } span { (data.mine.len()) } }
+                    @for (repo, change) in &data.mine {
+                        a class="trow" href={ "/" (repo) "/changes/" (change.number) } {
+                            span class="sec3" { (repo) " #" (change.number) }
+                            span style="font-weight: 500;" { (change.title) }
+                            span class="sec3" { "revision " (change.latest_revision) }
                         }
                     }
+                }
+            }
+
+            @if !data.recent.is_empty() {
+                div class="block homefeed" {
+                    div class="sechead" { b { "Across your repositories" } span {} }
+                    @for line in &data.recent {
+                        div class="trow" {
+                            span class="sec3" { (line.where_) }
+                            span { (line.what) }
+                            span class="sec3" { (line.kind) }
+                        }
+                    }
+                }
+            }
+        },
+        Some(rail),
+    )
+}
+
+/// A forge with nothing in it yet. The first thing anyone sees, so it
+/// teaches the model rather than reporting an absence.
+pub fn first_run(theme: Theme, viewer: &Viewer) -> Markup {
+    layout(
+        theme,
+        Some(viewer),
+        None,
+        None,
+        "Home",
+        html! {
+            div class="first" {
+                h2 { "Nothing here yet" }
+                p {
+                    "cairn records how software actually came to exist — who claimed what, \
+                     who re-ran it, and why anything was allowed to land. It starts \
+                     recording from the first push."
+                }
+                a class="do" href="/new" {
+                    b { "Create a repository" }
+                    span { "empty, ready for a first push" }
+                }
+                a class="do" href="/new" {
+                    b { "Import from GitHub" }
+                    span { "recorded as imported, never as reviewed" }
+                }
+                a class="do" href="/you/tokens" {
+                    b { "Add an agent" }
+                    span { "a token and a narrow capability grant" }
+                }
+            }
+        },
+    )
+}
+
+pub fn search(theme: Theme, viewer: &Viewer, query: &str, hits: &[super::Hit]) -> Markup {
+    layout(
+        theme,
+        Some(viewer),
+        None,
+        None,
+        "Search",
+        html! {
+            div class="sechead" { b { "Search" } span { @if !query.is_empty() { (hits.len()) } } }
+            form class="searchbig" method="get" action="/search" {
+                input name="q" type="search" value=(query) autofocus
+                      placeholder="Repositories, changes, people" aria-label="Search";
+            }
+            @if query.is_empty() {
+                p class="empty" { "Type to search repositories, changes and people." }
+            } @else if hits.is_empty() {
+                p class="empty" { "Nothing matches " b { (query) } "." }
+            }
+            @for hit in hits {
+                a class="trow" href=(hit.href) style="grid-template-columns: 92px minmax(0,1fr) auto;" {
+                    span class="sec3" { (hit.kind) }
+                    span style="font-weight: 500;" { (hit.label) }
+                    span class="sec3" { (hit.detail) }
+                }
+            }
+        },
+    )
+}
+
+pub fn new_repo(theme: Theme, viewer: &Viewer, error: Option<&str>) -> Markup {
+    layout(
+        theme,
+        Some(viewer),
+        None,
+        None,
+        "New repository",
+        html! {
+            div class="narrowcol" {
+                div class="sechead" { b { "New repository" } span {} }
+                @if let Some(error) = error {
+                    p class="error" { (error) }
+                }
+                form class="stack" method="post" action="/new" {
+                    div {
+                        label for="name" { "Name" }
+                        input id="name" name="name" type="text" autofocus autocomplete="off"
+                              placeholder="lowercase, digits and hyphens";
+                    }
+                    div {
+                        label for="default_branch" { "Default branch" }
+                        input id="default_branch" name="default_branch" type="text"
+                              autocomplete="off" placeholder="main";
+                    }
+                    div {
+                        label for="source" { "Import from" }
+                        input id="source" name="source" type="text" autocomplete="off"
+                              placeholder="https://github.com/you/project.git — optional";
+                        p class="hint" {
+                            "History brought in this way is recorded as imported. \
+                             Nothing here was reviewed under this repository's policy, \
+                             and the log says so rather than implying otherwise."
+                        }
+                    }
+                    button class="btn" type="submit" { "Create" }
+                }
+            }
+        },
+    )
+}
+
+pub fn you(theme: Theme, viewer: &Viewer, mine: &[(String, Change)]) -> Markup {
+    layout(
+        theme,
+        Some(viewer),
+        None,
+        None,
+        "Your changes",
+        html! {
+            div class="sechead" { b { "Your open changes" } span { (mine.len()) } }
+            @if mine.is_empty() {
+                p class="empty" { "Nothing of yours is open." }
+            }
+            @for (repo, change) in mine {
+                a class="trow" href={ "/" (repo) "/changes/" (change.number) }
+                  style="grid-template-columns: 120px minmax(0,1fr) auto;" {
+                    span class="sec3" { (repo) " #" (change.number) }
+                    span style="font-weight: 500;" { (change.title) }
+                    span class="sec3" { "revision " (change.latest_revision) }
+                }
+            }
+        },
+    )
+}
+
+pub fn tokens(
+    theme: Theme,
+    viewer: &Viewer,
+    tokens: &[cairn_core::TokenInfo],
+    agents: &[cairn_core::Principal],
+) -> Markup {
+    layout(
+        theme,
+        Some(viewer),
+        None,
+        None,
+        "Tokens & agents",
+        html! {
+            div class="sechead" { b { "Your tokens" } span { (tokens.len()) } }
+            @if tokens.is_empty() {
+                p class="empty" {
+                    "None yet. Mint one with " code { "cairn admin mint-token" } "."
+                }
+            }
+            @for token in tokens {
+                div class="trow" style="grid-template-columns: minmax(0,1fr) auto auto;" {
+                    span { (token.label.as_deref().unwrap_or("unlabelled")) }
+                    span class="sec3" { (token.id.0) }
+                    span class="sec3" { @if token.revoked { "revoked" } @else { "live" } }
+                }
+            }
+
+            div class="sechead" style="margin-top: 26px;" { b { "Agents" } span { (agents.len()) } }
+            @if agents.is_empty() {
+                p class="empty" { "No agents registered." }
+            }
+            @for agent in agents {
+                div class="trow" style="grid-template-columns: 150px minmax(0,1fr) auto;" {
+                    span style="font-weight: 500;" { (agent.id.as_str()) }
+                    span class="sec3" { (agent.display) }
+                    span class="sec3" { (agent.model.as_deref().unwrap_or("")) }
                 }
             }
         },

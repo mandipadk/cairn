@@ -48,6 +48,10 @@ pub fn routes() -> Router<AppState> {
         .route("/login", get(login_page).post(login_submit))
         .route("/logout", post(logout))
         .route("/theme", post(set_theme))
+        .route("/search", get(search_page))
+        .route("/new", get(new_page).post(create_from_form))
+        .route("/you", get(you_page))
+        .route("/you/tokens", get(tokens_page))
         .route("/{repo}", get(repo_page))
         .route("/{repo}/tree/{*path}", get(tree_page))
         .route("/{repo}/blame/{*path}", get(blame_page))
@@ -85,6 +89,256 @@ fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
         .split("; ")
         .find_map(|pair| pair.strip_prefix(&format!("{name}=")))
         .map(str::to_owned)
+}
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    #[serde(default)]
+    q: String,
+}
+
+/// One search hit, whatever kind of thing it is.
+pub struct Hit {
+    pub kind: &'static str,
+    pub label: String,
+    pub detail: String,
+    pub href: String,
+}
+
+/// Search across the things a person actually looks for by name:
+/// repositories, changes, and the principals doing the work.
+async fn search_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    viewer: Viewer,
+    Query(query): Query<SearchQuery>,
+) -> Response {
+    let needle = query.q.trim().to_lowercase();
+    if needle.is_empty() {
+        return views::search(theme, &viewer, "", &[]).into_response();
+    }
+    let hits = app.with_store(|store| -> Result<Vec<Hit>, cairn_core::CoreError> {
+        let mut hits = Vec::new();
+        for repo in store.repos()? {
+            if repo.name.to_lowercase().contains(&needle) {
+                hits.push(Hit {
+                    kind: "repository",
+                    label: repo.name.clone(),
+                    detail: repo.default_branch.clone(),
+                    href: format!("/{}", repo.name),
+                });
+            }
+            for change in store.changes_in_repo(&repo.name)? {
+                if change.title.to_lowercase().contains(&needle) {
+                    hits.push(Hit {
+                        kind: "change",
+                        label: change.title.clone(),
+                        detail: format!(
+                            "{} #{} · {}",
+                            repo.name,
+                            change.number,
+                            change.state.as_str()
+                        ),
+                        href: format!("/{}/changes/{}", repo.name, change.number),
+                    });
+                }
+            }
+        }
+        for principal in store.principals()? {
+            let matches = principal.id.as_str().to_lowercase().contains(&needle)
+                || principal.display.to_lowercase().contains(&needle);
+            if matches {
+                hits.push(Hit {
+                    kind: "person",
+                    label: principal.display.clone(),
+                    detail: principal.id.as_str().to_owned(),
+                    href: format!("/search?q={}", principal.id.as_str()),
+                });
+            }
+        }
+        Ok(hits)
+    });
+    match hits {
+        Ok(hits) => views::search(theme, &viewer, &query.q, &hits).into_response(),
+        Err(err) => oops(err),
+    }
+}
+
+async fn new_page(Palette(theme): Palette, viewer: Viewer) -> Response {
+    views::new_repo(theme, &viewer, None).into_response()
+}
+
+#[derive(Deserialize)]
+struct NewRepoForm {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    default_branch: String,
+    #[serde(default)]
+    source: String,
+}
+
+/// Create a repository, and import into it when a source is given —
+/// one form, because "start a repository" is one intention whether the
+/// history already exists somewhere or not.
+async fn create_from_form(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    viewer: Viewer,
+    Form(form): Form<NewRepoForm>,
+) -> Response {
+    let name = form.name.trim().to_owned();
+    let branch = match form.default_branch.trim() {
+        "" => "main".to_owned(),
+        given => given.to_owned(),
+    };
+    let source = form.source.trim().to_owned();
+
+    let created = app.with_store(|store| {
+        store.check_new_repo(&viewer.0, &name, &branch)?;
+        Ok::<_, cairn_core::CoreError>(())
+    });
+    if let Err(err) = created {
+        return views::new_repo(theme, &viewer, Some(&err.to_string())).into_response();
+    }
+    if let Some(git) = app.git()
+        && let Err(err) = git.store.create_repo(&name, &branch, "sha1").await
+    {
+        return views::new_repo(theme, &viewer, Some(&err.to_string())).into_response();
+    }
+    let env = app.with_store(|store| {
+        store.create_repo(&viewer.0, &name, &branch, cairn_core::ObjectFormat::Sha1)
+    });
+    match env {
+        Ok(env) => app.publish(&env),
+        Err(err) => return views::new_repo(theme, &viewer, Some(&err.to_string())).into_response(),
+    }
+
+    if !source.is_empty() {
+        let outcome = import_into(&app, &viewer.0, &name, &branch, &source).await;
+        if let Err(message) = outcome {
+            return views::new_repo(theme, &viewer, Some(&message)).into_response();
+        }
+    }
+    Redirect::to(&format!("/{name}")).into_response()
+}
+
+/// Bring existing history in. Same path the API takes, so the import is
+/// recorded as an import rather than dressed up as review.
+async fn import_into(
+    app: &AppState,
+    who: &PrincipalId,
+    repo: &str,
+    branch: &str,
+    source: &str,
+) -> Result<(), String> {
+    cairn_core::Store::validate_import_source(source).map_err(|e| e.to_string())?;
+    let git = app.git().ok_or("this forge has no git storage")?;
+    let (tip, commits) = git
+        .store
+        .fetch_history(repo, source, branch)
+        .await
+        .map_err(|e| e.to_string())?;
+    let env = app
+        .with_store(|store| store.import_history(who, repo, branch, source, &tip, commits))
+        .map_err(|e| e.to_string())?;
+    git.store
+        .advance_ref(repo, branch, &tip, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = git.store.clear_import_ref(repo, branch).await;
+    app.publish(&env);
+    Ok(())
+}
+
+/// Your open work, across every repository.
+async fn you_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    viewer: Viewer,
+) -> Response {
+    let mine = app.with_store(
+        |store| -> Result<Vec<(String, cairn_core::Change)>, cairn_core::CoreError> {
+            let mut mine = Vec::new();
+            for repo in store.repos()? {
+                for change in store.changes_in_repo(&repo.name)? {
+                    if change.owner == viewer.0 && change.state == cairn_core::ChangeState::Open {
+                        mine.push((repo.name.clone(), change));
+                    }
+                }
+            }
+            Ok(mine)
+        },
+    );
+    match mine {
+        Ok(mine) => views::you(theme, &viewer, &mine).into_response(),
+        Err(err) => oops(err),
+    }
+}
+
+/// Your tokens, and the agents acting under grants you can see.
+async fn tokens_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    viewer: Viewer,
+) -> Response {
+    let data = app.with_store(|store| {
+        let tokens = store.tokens_of(&viewer.0)?;
+        let agents: Vec<_> = store
+            .principals()?
+            .into_iter()
+            .filter(|p| p.kind == cairn_core::PrincipalKind::Agent)
+            .collect();
+        Ok::<_, cairn_core::CoreError>((tokens, agents))
+    });
+    match data {
+        Ok((tokens, agents)) => views::tokens(theme, &viewer, &tokens, &agents).into_response(),
+        Err(err) => oops(err),
+    }
+}
+
+/// Everything the chrome needs, in one pass over the store.
+fn chrome_for(app: &AppState, who: &PrincipalId) -> Result<Chrome, cairn_core::CoreError> {
+    app.with_store(|store| {
+        let mut repos = Vec::new();
+        let mut yours = 0;
+        let mut leases = Vec::new();
+        for repo in store.repos()? {
+            leases.extend(store.live_leases(&repo.name)?);
+            let changes = store.changes_in_repo(&repo.name)?;
+            let open: Vec<_> = changes
+                .iter()
+                .filter(|c| c.state == cairn_core::ChangeState::Open)
+                .collect();
+            yours += open.iter().filter(|c| c.owner == *who).count();
+            repos.push(ChromeRepo {
+                name: repo.name,
+                open: open.len(),
+            });
+        }
+
+        // Who is mid-session, and what they said they would touch. This
+        // is cairn's version of a live activity view: not what people
+        // published, but what is being worked on at this moment.
+        let working = store
+            .active_sessions()?
+            .into_iter()
+            .map(|session| {
+                let lease = leases.iter().find(|l| l.session == session.id);
+                Working {
+                    who: session.agent.as_str().to_owned(),
+                    repo: lease.map(|l| l.repo.clone()),
+                    paths: lease.map(|l| l.paths.clone()).unwrap_or_default(),
+                }
+            })
+            .collect();
+
+        Ok(Chrome {
+            repos,
+            working,
+            yours,
+        })
+    })
 }
 
 /// The viewer's palette. Dark unless they have chosen otherwise.
@@ -128,7 +382,32 @@ async fn set_theme(headers: HeaderMap, Form(form): Form<ThemeForm>) -> Response 
 
 /// The signed-in viewer. Pages redirect to /login instead of failing
 /// with a machine-shaped 401.
-pub struct Viewer(pub PrincipalId);
+/// One repository, as the sidebar lists it.
+pub struct ChromeRepo {
+    pub name: String,
+    pub open: usize,
+}
+
+/// Somebody working right now: an agent or a person mid-session.
+pub struct Working {
+    pub who: String,
+    pub repo: Option<String>,
+    pub paths: Vec<String>,
+}
+
+/// What every signed-in page renders around its content.
+///
+/// Gathered by the [`Viewer`] extractor rather than by each handler:
+/// the question "who is looking" and the question "what can they see"
+/// have the same answer, and threading it through thirteen page
+/// functions would only invite them to drift apart.
+pub struct Chrome {
+    pub repos: Vec<ChromeRepo>,
+    pub working: Vec<Working>,
+    pub yours: usize,
+}
+
+pub struct Viewer(pub PrincipalId, pub Chrome);
 
 impl FromRequestParts<AppState> for Viewer {
     type Rejection = Response;
@@ -138,25 +417,27 @@ impl FromRequestParts<AppState> for Viewer {
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         // A signed-in browser, the ordinary case.
-        if let Some(id) = cookie(&parts.headers, SESSION_COOKIE)
+        let who = if let Some(id) = cookie(&parts.headers, SESSION_COOKIE)
             && let Some(principal) = state.resolve_session(&id)
         {
-            return Ok(Viewer(principal));
+            principal
         }
         // A pasted API token still works, for anyone driving the UI the
         // way a script would.
-        if let Some(token) = cookie(&parts.headers, TOKEN_COOKIE)
+        else if let Some(token) = cookie(&parts.headers, TOKEN_COOKIE)
             && let Ok(principal) = resolve_bearer(state, &token)
         {
-            return Ok(Viewer(principal));
-        }
-        if state.dev_identity()
+            principal
+        } else if state.dev_identity()
             && let Some(name) = cookie(&parts.headers, DEV_COOKIE)
             && let Some(principal) = PrincipalId::new(&name)
         {
-            return Ok(Viewer(principal));
-        }
-        Err(Redirect::to("/login").into_response())
+            principal
+        } else {
+            return Err(Redirect::to("/login").into_response());
+        };
+        let chrome = chrome_for(state, &who).map_err(oops)?;
+        Ok(Viewer(who, chrome))
     }
 }
 
@@ -165,64 +446,136 @@ struct FlashQuery {
     error: Option<String>,
 }
 
-/// One repository as the home lists it: the name, and what is in flight.
-pub struct HomeRepo {
-    pub repo: cairn_core::Repo,
-    pub open: usize,
-    pub queued: usize,
-}
-
 /// A change wanting judgment, and which repository it lives in.
 pub struct HomeAttention {
     pub repo: String,
     pub item: cairn_core::AttentionItem,
 }
 
+/// One line of "what happened lately", already resolved to words.
+pub struct Recent {
+    pub where_: String,
+    pub what: String,
+    pub kind: &'static str,
+}
+
+/// A branch's landing queue, for the rail.
+pub struct Lane {
+    pub repo: String,
+    pub branch: String,
+    pub queued: usize,
+}
+
+pub struct HomeData {
+    pub needs_you: Vec<HomeAttention>,
+    pub mine: Vec<(String, cairn_core::Change)>,
+    pub recent: Vec<Recent>,
+    pub lanes: Vec<Lane>,
+    pub lessons: Vec<cairn_core::Lesson>,
+}
+
 /// The page someone lands on after signing in.
 ///
 /// Deliberately not an inventory of repositories. The question a person
-/// arrives with is what wants them, and that does not care which
-/// repository it happens to live in — so attention is gathered across
-/// all of them and ranked as one list. The repositories are underneath,
-/// where you go when you already know where you are going.
+/// arrives with is what wants them, then what they were in the middle
+/// of, then what happened while they were away — in that order, because
+/// that is the order the answers are useful in.
 async fn home(State(app): State<AppState>, Palette(theme): Palette, viewer: Viewer) -> Response {
-    let repos = match app.with_store(|s| s.repos()) {
-        Ok(repos) => repos,
-        Err(err) => return oops(err),
-    };
-
-    let mut needs_you: Vec<HomeAttention> = Vec::new();
-    let mut listed: Vec<HomeRepo> = Vec::new();
-    for repo in repos {
-        let items = match app.with_store(|s| s.attention_for(&repo.name)) {
-            Ok(items) => items,
-            Err(err) => return oops(err),
-        };
-        let changes = match app.with_store(|s| s.changes_in_repo(&repo.name)) {
-            Ok(changes) => changes,
-            Err(err) => return oops(err),
-        };
-        let queued = match app.with_store(|s| s.queue_for(&repo.name, &repo.default_branch)) {
-            Ok(queue) => queue.len(),
-            Err(err) => return oops(err),
-        };
-        listed.push(HomeRepo {
-            open: changes
-                .iter()
-                .filter(|c| c.state == cairn_core::ChangeState::Open)
-                .count(),
-            queued,
-            repo,
-        });
-        needs_you.extend(items.into_iter().map(|item| HomeAttention {
-            repo: listed.last().expect("just pushed").repo.name.clone(),
-            item,
-        }));
+    if viewer.1.repos.is_empty() {
+        return views::first_run(theme, &viewer).into_response();
     }
-    needs_you.sort_by_key(|entry| std::cmp::Reverse(entry.item.score));
-    needs_you.truncate(12);
+    match gather_home(&app, &viewer.0) {
+        Ok(data) => views::home(theme, &viewer, &data).into_response(),
+        Err(err) => oops(err),
+    }
+}
 
-    views::home(theme, &viewer, &listed, &needs_you).into_response()
+fn gather_home(app: &AppState, who: &PrincipalId) -> Result<HomeData, cairn_core::CoreError> {
+    app.with_store(|store| {
+        let mut needs_you = Vec::new();
+        let mut mine = Vec::new();
+        let mut lanes = Vec::new();
+        for repo in store.repos()? {
+            for item in store.attention_for(&repo.name)? {
+                needs_you.push(HomeAttention {
+                    repo: repo.name.clone(),
+                    item,
+                });
+            }
+            for change in store.changes_in_repo(&repo.name)? {
+                if change.owner == *who && change.state == cairn_core::ChangeState::Open {
+                    mine.push((repo.name.clone(), change));
+                }
+            }
+            let queued = store.queue_for(&repo.name, &repo.default_branch)?.len();
+            if queued > 0 {
+                lanes.push(Lane {
+                    repo: repo.name.clone(),
+                    branch: repo.default_branch.clone(),
+                    queued,
+                });
+            }
+        }
+        // Rank the whole set together: the work does not care which
+        // repository it happens to live in.
+        needs_you.sort_by_key(|entry| std::cmp::Reverse(entry.item.score));
+        needs_you.truncate(10);
+        mine.truncate(6);
+
+        let latest = store.latest_seq()?.0;
+        let recent = store
+            .events_after(cairn_core::EventSeq((latest - 300).max(0)), 320)?
+            .into_iter()
+            .rev()
+            .filter_map(describe)
+            .take(8)
+            .collect();
+
+        // Failures only: a lesson is what an attempt that did not work left behind.
+        let lessons = store.lessons(None, None, true, 3)?;
+        Ok(HomeData {
+            needs_you,
+            mine,
+            recent,
+            lanes,
+            lessons,
+        })
+    })
+}
+
+/// Turn an event into a line worth reading. Anything not worth a
+/// person's attention on a home page is left out rather than padded in.
+fn describe(envelope: cairn_core::Envelope) -> Option<Recent> {
+    use cairn_core::Event;
+    let actor = envelope.actor.as_str().to_owned();
+    match envelope.event {
+        Event::ChangeMerged { change, .. } => Some(Recent {
+            where_: change.as_str().to_owned(),
+            what: format!("{actor} landed a change"),
+            kind: "landed",
+        }),
+        Event::ChangeDequeued { reason, .. } => Some(Recent {
+            where_: String::new(),
+            what: reason,
+            kind: "dequeued",
+        }),
+        Event::ClaimVerified { agrees, .. } if !agrees => Some(Recent {
+            where_: String::new(),
+            what: format!("{actor} could not reproduce a claim"),
+            kind: "disputed",
+        }),
+        Event::HistoryImported { repo, commits, .. } => Some(Recent {
+            where_: repo,
+            what: format!("{actor} imported {commits} commits"),
+            kind: "imported",
+        }),
+        Event::RepoCreated { repo, .. } => Some(Recent {
+            where_: repo.clone(),
+            what: format!("{actor} created {repo}"),
+            kind: "created",
+        }),
+        _ => None,
+    }
 }
 
 async fn login_page(

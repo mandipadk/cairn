@@ -61,6 +61,67 @@ button { font: inherit; cursor: pointer; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* chrome */
+/* The frame: a global bar across the top, a sidebar of what you have
+   and who is working, the page, and optionally a rail. Every signed-in
+   page renders inside this, so it is the product's shape rather than
+   one page's layout. */
+.app {
+  display: grid; grid-template-columns: 232px minmax(0, 1fr) 296px;
+  grid-template-rows: auto 1fr; min-height: 100vh;
+}
+.app.narrow { grid-template-columns: 232px minmax(0, 1fr); }
+
+.bar {
+  position: sticky; top: 0; z-index: 5; grid-column: 1 / -1;
+  display: grid; grid-template-columns: 232px minmax(0, 1fr) auto;
+  align-items: center; gap: 16px; height: 52px; padding-right: 18px;
+  border-bottom: 1px solid var(--hair); background: var(--bg);
+}
+.bar .brand { display: flex; align-items: center; gap: 9px; padding-left: 18px; }
+.bar .brand b { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+.search { max-width: 520px; }
+.search input {
+  width: 100%; font: inherit; font-size: 13px; color: var(--ink);
+  border: 1px solid var(--hair); border-radius: 7px; padding: 6px 10px;
+  background: var(--raise);
+}
+.search input::placeholder { color: var(--ink3); }
+.search input:focus { outline: none; border-color: var(--ink2); }
+.baractions { display: flex; align-items: center; gap: 14px; justify-self: end; }
+
+.side { border-right: 1px solid var(--hair); padding: 16px 0; }
+.side h4 { font-size: 11.5px; color: var(--ink3); font-weight: 500; margin: 0 0 8px; padding: 0 18px; }
+.side a, .side .row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px;
+  padding: 6px 18px; font-size: 13px; color: var(--ink2);
+}
+.side a:hover { background: var(--hover); color: var(--ink); }
+.side a.on { color: var(--ink); background: var(--hover); box-shadow: inset 2px 0 0 var(--ink); }
+.side .n { font-size: 12px; color: var(--ink3); }
+.side .sep { height: 1px; background: var(--hair); margin: 14px 0; }
+.dotline { display: inline-flex; align-items: center; gap: 7px; }
+.mini { width: 6px; height: 6px; border-radius: 50%; background: var(--idle); flex: none; }
+.mini.live { background: var(--ok); }
+
+.main { padding: 20px 26px 60px; min-width: 0; }
+.rail { border-left: 1px solid var(--hair); padding: 20px; }
+.rail .line {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px;
+  padding: 7px 0; font-size: 12.5px; color: var(--ink2);
+  border-bottom: 1px solid var(--hair);
+}
+.rail .line b { font-weight: 500; color: var(--ink); }
+.rail .q { font-size: 12px; color: var(--ink3); }
+.rail .card { margin-bottom: 24px; }
+
+/* Inside a repository, its name and tabs head the page rather than the
+   global bar — the bar belongs to the forge, not to one repository. */
+.repohead {
+  display: flex; align-items: center; gap: 10px;
+  margin: -20px -26px 20px; padding: 0 26px; height: 46px;
+  border-bottom: 1px solid var(--hair);
+}
+
 .topnav {
   display: flex; align-items: center; gap: 20px;
   padding: 0 22px; height: 50px;
@@ -71,8 +132,8 @@ button { font: inherit; cursor: pointer; }
 .stones span:nth-child(1) { width: 8px; }
 .stones span:nth-child(2) { width: 12px; }
 .stones span:nth-child(3) { width: 16px; }
-.topnav .repo { font-size: 13.5px; font-weight: 600; }
-.tabs { display: flex; gap: 2px; height: 100%; margin-left: 6px; }
+.topnav .repo, .repohead .repo { font-size: 13.5px; font-weight: 600; }
+.tabs { display: flex; gap: 2px; align-self: stretch; margin-left: 6px; }
 .tab {
   display: flex; align-items: center; padding: 0 12px;
   font-size: 13px; color: var(--ink2); font-weight: 500;
@@ -384,7 +445,84 @@ a.srow:hover .t { text-decoration: underline; }
 .login .alt[open] summary { margin-bottom: 10px; }
 .login .alt > div { margin-bottom: 8px; }
 .login .error { font-size: 12.5px; color: var(--bad); }
+
+/* First run: the first thing anyone sees, so it teaches the model
+   rather than reporting an absence. Rows, not boxes — the same language
+   the rest of the product speaks. */
+.first { max-width: 560px; margin: 52px auto 0; }
+.first h2 { font-size: 19px; font-weight: 600; margin: 0 0 8px; letter-spacing: -0.01em; }
+.first > p { font-size: 13.5px; color: var(--ink2); line-height: 1.6; margin: 0 0 26px; }
+.first .do {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline;
+  gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--hair);
+}
+.first .do:first-of-type { border-top: 1px solid var(--hair); }
+.first .do:hover { background: var(--hover); }
+.first .do b { font-size: 13.5px; font-weight: 500; }
+.first .do span { font-size: 12.5px; color: var(--ink3); text-align: right; }
+
+/* Home sections. Every row is one line: a list scanned for what to do
+   next loses its rhythm the moment rows differ in height. */
+.block { margin-bottom: 28px; }
+.homeneed .trow { grid-template-columns: minmax(0, 132px) minmax(0, 1fr) minmax(0, 20rem); }
+.homeneed .trow > span:first-child,
+.homemine .trow > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.homeneed .reasons { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.homemine .trow { grid-template-columns: minmax(0, 132px) minmax(0, 1fr) 96px; }
+.homefeed .trow { grid-template-columns: minmax(0, 132px) minmax(0, 1fr) 84px; }
+.lesson {
+  font-size: 12.5px; color: var(--ink2); padding: 8px 0;
+  border-bottom: 1px solid var(--hair); line-height: 1.45;
+}
 .plain { color: var(--ink3); font-size: 14px; }
+
+/* Forms outside the sign-in page: search, and creating a repository. */
+.narrowcol { max-width: 520px; }
+.stack { display: flex; flex-direction: column; gap: 16px; margin-top: 14px; }
+.stack label { font-size: 12.5px; color: var(--ink2); display: block; margin-bottom: 5px; }
+.stack input {
+  width: 100%; font: inherit; font-size: 13px; color: var(--ink);
+  border: 1px solid var(--hair); border-radius: 6px; padding: 8px 10px; background: var(--raise);
+}
+.stack input:focus { outline: none; border-color: var(--ink2); }
+.stack .hint { font-size: 12px; color: var(--ink3); margin: 7px 0 0; line-height: 1.5; }
+.stack .btn { align-self: flex-start; }
+.searchbig { margin: 12px 0 20px; max-width: 520px; }
+.searchbig input {
+  width: 100%; font: inherit; font-size: 13.5px; color: var(--ink);
+  border: 1px solid var(--hair); border-radius: 7px; padding: 9px 12px; background: var(--raise);
+}
+.searchbig input:focus { outline: none; border-color: var(--ink2); }
+.error { font-size: 12.5px; color: var(--bad); }
+
+/* First run: the first thing anyone sees, so it teaches the model
+   rather than reporting an absence. Rows, not boxes — the same language
+   the rest of the product speaks. */
+.first { max-width: 560px; margin: 52px auto 0; }
+.first h2 { font-size: 19px; font-weight: 600; margin: 0 0 8px; letter-spacing: -0.01em; }
+.first > p { font-size: 13.5px; color: var(--ink2); line-height: 1.6; margin: 0 0 26px; }
+.first .do {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline;
+  gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--hair);
+}
+.first .do:first-of-type { border-top: 1px solid var(--hair); }
+.first .do:hover { background: var(--hover); }
+.first .do b { font-size: 13.5px; font-weight: 500; }
+.first .do span { font-size: 12.5px; color: var(--ink3); text-align: right; }
+
+/* Home sections. Every row is one line: a list scanned for what to do
+   next loses its rhythm the moment rows differ in height. */
+.block { margin-bottom: 28px; }
+.homeneed .trow { grid-template-columns: minmax(0, 132px) minmax(0, 1fr) minmax(0, 20rem); }
+.homeneed .trow > span:first-child,
+.homemine .trow > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.homeneed .reasons { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.homemine .trow { grid-template-columns: minmax(0, 132px) minmax(0, 1fr) 96px; }
+.homefeed .trow { grid-template-columns: minmax(0, 132px) minmax(0, 1fr) 84px; }
+.lesson {
+  font-size: 12.5px; color: var(--ink2); padding: 8px 0;
+  border-bottom: 1px solid var(--hair); line-height: 1.45;
+}
 
 /* Home: what wants a person, then where things live. The two lists read
    as one column so the eye runs straight down rather than hunting. */

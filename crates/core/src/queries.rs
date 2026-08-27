@@ -761,6 +761,17 @@ pub(crate) mod raw {
             .collect()
     }
 
+    /// Everyone the forge knows about, humans and agents alike.
+    pub fn principals(conn: &Connection) -> CoreResult<Vec<Principal>> {
+        let rows = conn
+            .prepare_cached("SELECT id FROM principals ORDER BY id")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .filter_map(|id| principal(conn, &id).transpose())
+            .collect()
+    }
+
     pub fn principal_count(conn: &Connection) -> CoreResult<i64> {
         Ok(conn.query_row("SELECT COUNT(*) FROM principals", [], |r| r.get(0))?)
     }
@@ -814,6 +825,10 @@ impl Store {
     /// Resolve a presented token secret to its live owner.
     pub fn principal_for_token(&self, secret: &str) -> CoreResult<Option<PrincipalId>> {
         raw::principal_for_token_hash(&self.conn, &crate::commands::token_hash(secret))
+    }
+
+    pub fn principals(&self) -> CoreResult<Vec<Principal>> {
+        raw::principals(&self.conn)
     }
 
     pub fn tokens_of(&self, principal: &PrincipalId) -> CoreResult<Vec<TokenInfo>> {

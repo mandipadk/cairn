@@ -45,6 +45,18 @@ pub enum Event {
         harness: Option<String>,
     },
 
+    /// A human set a password, theirs or (as an admin) someone's.
+    ///
+    /// The stored value is an argon2id PHC string, never the password.
+    /// Like a token's hash it lives in the log forever, which is the
+    /// honest cost of a log that explains everything: setting a new
+    /// password supersedes the old hash but cannot unwrite it, so an old
+    /// backup carries old hashes exactly as a password database would.
+    PasswordSet {
+        principal: PrincipalId,
+        hash: String,
+    },
+
     TokenMinted {
         token: TokenId,
         principal: PrincipalId,
@@ -247,6 +259,7 @@ impl Event {
     pub fn kind(&self) -> &'static str {
         match self {
             Event::PrincipalRegistered { .. } => "principal_registered",
+            Event::PasswordSet { .. } => "password_set",
             Event::TokenMinted { .. } => "token_minted",
             Event::TokenRevoked { .. } => "token_revoked",
             Event::GrantIssued { .. } => "grant_issued",

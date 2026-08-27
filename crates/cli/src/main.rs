@@ -116,6 +116,14 @@ enum AdminCommand {
         #[arg(long)]
         label: Option<String>,
     },
+    /// Set a human's password. The password is read from stdin, never
+    /// from the command line, where it would sit in shell history and in
+    /// the process list for anyone on the machine to read.
+    SetPassword {
+        #[arg(long, default_value = "cairn.db")]
+        db: PathBuf,
+        principal: String,
+    },
     /// Check that current state is exactly the log applied, by replaying
     /// it into empty projections and comparing. Exits non-zero on any
     /// divergence, so it can be run from cron or a health check.
@@ -231,6 +239,19 @@ async fn main() -> anyhow::Result<()> {
                     .with_context(|| format!("{principal:?} is not a valid principal slug"))?;
                 let (_, secret, _) = store.mint_token(&id, &id, label.as_deref())?;
                 println!("token (shown once, store it safely): {secret}");
+            }
+            AdminCommand::SetPassword { db, principal } => {
+                let mut store = Store::open(&db)
+                    .with_context(|| format!("opening forge database at {}", db.display()))?;
+                let id = PrincipalId::new(&principal)
+                    .with_context(|| format!("{principal:?} is not a valid principal slug"))?;
+                eprint!("New password for {principal} (input is not echoed): ");
+                let password = rpassword::read_password().context("reading the password")?;
+                // File access to the database is the root authority, so
+                // this acts as the principal itself rather than needing
+                // someone else's admin capability to already exist.
+                store.set_password(&id, &id, &password)?;
+                println!("password set for {principal}");
             }
             AdminCommand::Fsck { db, repos } => {
                 let store = Store::open(&db)

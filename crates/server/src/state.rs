@@ -9,6 +9,11 @@ use tokio::sync::broadcast;
 /// than any receive-pack, far shorter than mattering if leaked.
 const PUSH_TOKEN_TTL: Duration = Duration::from_secs(600);
 
+/// How long a browser stays signed in. Sessions live in memory, so a
+/// restart signs everyone out — which costs a sign-in on deploy and
+/// means a stolen cookie cannot outlive the process that issued it.
+const SESSION_TTL: Duration = Duration::from_secs(14 * 24 * 60 * 60);
+
 /// One change the log says landed, and where.
 struct Landed {
     repo: String,
@@ -53,6 +58,8 @@ pub struct AppState {
     /// Branches whose advance failed after the merge was recorded, so
     /// the next tick can replay the decision the log already holds.
     refs_needing_advancing: Arc<Mutex<Vec<(String, String)>>>,
+    /// Browser sessions: an opaque id to whoever signed in.
+    sessions: Arc<Mutex<HashMap<String, (PrincipalId, Instant)>>>,
 }
 
 impl AppState {
@@ -68,7 +75,56 @@ impl AppState {
             login_limiter: crate::guard::LoginLimiter::default(),
             push_tokens: Arc::new(Mutex::new(HashMap::new())),
             refs_needing_advancing: Arc::new(Mutex::new(Vec::new())),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Begin a browser session for someone who has just proved who they
+    /// are. The id is the credential, so it is random and opaque; the
+    /// principal is never derivable from it.
+    pub(crate) fn start_session(&self, principal: &PrincipalId) -> String {
+        let id = format!(
+            "{:032x}{:032x}",
+            rand::random::<u128>(),
+            rand::random::<u128>()
+        );
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        sessions.retain(|_, (_, started)| started.elapsed() < SESSION_TTL);
+        sessions.insert(id.clone(), (principal.clone(), Instant::now()));
+        id
+    }
+
+    pub(crate) fn resolve_session(&self, id: &str) -> Option<PrincipalId> {
+        let sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        sessions
+            .get(id)
+            .filter(|(_, started)| started.elapsed() < SESSION_TTL)
+            .map(|(principal, _)| principal.clone())
+    }
+
+    pub(crate) fn end_session(&self, id: &str) {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        sessions.remove(id);
+    }
+
+    /// Drop every session belonging to a principal. Used when their
+    /// password changes: a password change that leaves old sessions
+    /// alive has not actually locked anyone out.
+    pub fn end_sessions_of(&self, principal: &PrincipalId) {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        sessions.retain(|_, (owner, _)| owner != principal);
     }
 
     /// Remember a branch that did not move after its merge was recorded.

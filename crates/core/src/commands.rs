@@ -92,6 +92,36 @@ fn valid_branch(name: &str) -> bool {
         && !name.contains(|c: char| c.is_whitespace() || c == '\\' || c == ':' || c == '~')
 }
 
+/// An argon2id hash of a password nobody has, so an unknown principal
+/// costs the same to reject as a known one with the wrong password.
+const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHRzYWx0c2E$\
+                          Gg3AaAVKu1SLGmpQr2WPuoYSJKM9C8pTVWKFGRZuq1o";
+
+fn hash_password(password: &str) -> CoreResult<String> {
+    use argon2::password_hash::{PasswordHasher, SaltString};
+    // The salt is random per password; `rand` is already a dependency,
+    // so take it from there rather than enabling another RNG feature.
+    let mut bytes = [0u8; 16];
+    rand::fill(&mut bytes);
+    let salt = SaltString::encode_b64(&bytes)
+        .map_err(|e| CoreError::Invalid(format!("salt encoding failed: {e}")))?;
+    argon2::Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|hash| hash.to_string())
+        .map_err(|e| CoreError::Invalid(format!("hashing failed: {e}")))
+}
+
+fn verify_password(password: &str, hash: &str) -> bool {
+    use argon2::password_hash::{PasswordHash, PasswordVerifier};
+    PasswordHash::new(hash)
+        .map(|parsed| {
+            argon2::Argon2::default()
+                .verify_password(password.as_bytes(), &parsed)
+                .is_ok()
+        })
+        .unwrap_or(false)
+}
+
 fn valid_commit_oid(oid: &str) -> bool {
     matches!(oid.len(), 40 | 64) && oid.chars().all(|c| c.is_ascii_hexdigit())
 }
@@ -164,6 +194,74 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(env)
+    }
+
+    /// Set a password for a human principal.
+    ///
+    /// A human sets their own; an admin sets anyone's, which is how
+    /// somebody locked out gets back in without an email round trip this
+    /// forge has no way to make. Agents never get one: they authenticate
+    /// with tokens, and a password would be a second, weaker way in.
+    ///
+    /// Hashing happens here so the plaintext never leaves this call.
+    pub fn set_password(
+        &mut self,
+        actor: &PrincipalId,
+        principal: &PrincipalId,
+        password: &str,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        let acting = ensure_actor(&tx, actor)?;
+        let target = raw::principal(&tx, principal.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("principal {principal}")))?;
+        require(target.kind == PrincipalKind::Human, || {
+            format!("{principal} is an agent; agents authenticate with tokens")
+        })?;
+        if acting.id != target.id {
+            // Setting someone else's password is an authority question,
+            // not a malformed request, so it answers like one.
+            if acting.kind != PrincipalKind::Human {
+                return Err(CoreError::Forbidden(format!(
+                    "{actor} may not set another principal's password"
+                )));
+            }
+            authorize(&tx, actor, Capability::Admin, None)?;
+        }
+        // Long enough to resist guessing, short enough that a password
+        // manager's output always fits.
+        require((12..=1024).contains(&password.len()), || {
+            "a password must be between 12 and 1024 bytes".into()
+        })?;
+        let hash = hash_password(password)?;
+        let env = append(
+            &tx,
+            actor,
+            Event::PasswordSet {
+                principal: principal.clone(),
+                hash,
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
+    /// Check a password. Returns false for an unknown principal, one
+    /// with no password, or a wrong password — and takes the same work
+    /// to say so in the first two cases as the third, so the answer
+    /// cannot be read off the clock.
+    pub fn password_matches(&self, principal: &PrincipalId, password: &str) -> bool {
+        let stored = raw::password_hash(&self.conn, principal.as_str())
+            .ok()
+            .flatten();
+        match stored {
+            Some(hash) => verify_password(password, &hash),
+            None => {
+                // Verify against a fixed hash so a missing principal
+                // costs the same as a wrong password.
+                verify_password(password, DUMMY_HASH);
+                false
+            }
+        }
     }
 
     /// Everything that must be true before a repository may exist,

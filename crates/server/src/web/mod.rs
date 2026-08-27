@@ -36,6 +36,7 @@ const MAX_RENDERED_BLOB: u64 = 2 * 1024 * 1024;
 /// diff is parsed into per-file structures before it is displayed.
 const MAX_RENDERED_DIFF: usize = 1024 * 1024;
 
+const SESSION_COOKIE: &str = "cairn_session";
 const TOKEN_COOKIE: &str = "cairn_token";
 const DEV_COOKIE: &str = "cairn_dev";
 const THEME_COOKIE: &str = "cairn_theme";
@@ -136,6 +137,14 @@ impl FromRequestParts<AppState> for Viewer {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
+        // A signed-in browser, the ordinary case.
+        if let Some(id) = cookie(&parts.headers, SESSION_COOKIE)
+            && let Some(principal) = state.resolve_session(&id)
+        {
+            return Ok(Viewer(principal));
+        }
+        // A pasted API token still works, for anyone driving the UI the
+        // way a script would.
         if let Some(token) = cookie(&parts.headers, TOKEN_COOKIE)
             && let Ok(principal) = resolve_bearer(state, &token)
         {
@@ -181,6 +190,8 @@ struct LoginForm {
     token: String,
     #[serde(default)]
     principal: String,
+    #[serde(default)]
+    password: Option<String>,
 }
 
 async fn login_submit(
@@ -194,6 +205,24 @@ async fn login_submit(
     {
         return crate::guard::too_many_attempts();
     }
+    // A name and password: the ordinary way a person signs in.
+    let name = form.principal.trim();
+    let password = form.password.unwrap_or_default();
+    if !name.is_empty() && !password.is_empty() {
+        let Some(principal) = PrincipalId::new(name) else {
+            // Same answer as a wrong password: which names exist is not
+            // something a sign-in form should be willing to confirm.
+            return Redirect::to("/login?error=That+name+and+password+do+not+match")
+                .into_response();
+        };
+        return if app.with_store(|s| s.password_matches(&principal, &password)) {
+            let session = app.start_session(&principal);
+            signed_in(&app, SESSION_COOKIE, &session)
+        } else {
+            Redirect::to("/login?error=That+name+and+password+do+not+match").into_response()
+        };
+    }
+
     let token = form.token.trim();
     if !token.is_empty() {
         return match app.with_store(|s| s.principal_for_token(token)) {
@@ -204,11 +233,11 @@ async fn login_submit(
             Err(err) => oops(err),
         };
     }
-    let name = form.principal.trim();
     if app.dev_identity() && PrincipalId::new(name).is_some() {
         return signed_in(&app, DEV_COOKIE, name);
     }
-    Redirect::to("/login?error=Paste+an+API+token+to+sign+in").into_response()
+    Redirect::to("/login?error=Enter+your+name+and+password%2C+or+paste+an+API+token")
+        .into_response()
 }
 
 fn signed_in(app: &AppState, name: &str, value: &str) -> Response {
@@ -217,8 +246,14 @@ fn signed_in(app: &AppState, name: &str, value: &str) -> Response {
     ([(header::SET_COOKIE, cookie)], Redirect::to("/")).into_response()
 }
 
-async fn logout() -> Response {
+async fn logout(State(app): State<AppState>, headers: HeaderMap) -> Response {
+    // Forget the session server-side too. Clearing the cookie alone
+    // would leave a credential that still works if it was ever copied.
+    if let Some(id) = cookie(&headers, SESSION_COOKIE) {
+        app.end_session(&id);
+    }
     let clear = [
+        format!("{SESSION_COOKIE}=; Path=/; HttpOnly; Max-Age=0"),
         format!("{TOKEN_COOKIE}=; Path=/; HttpOnly; Max-Age=0"),
         format!("{DEV_COOKIE}=; Path=/; HttpOnly; Max-Age=0"),
     ];
@@ -226,6 +261,7 @@ async fn logout() -> Response {
         [
             (header::SET_COOKIE, clear[0].clone()),
             (header::SET_COOKIE, clear[1].clone()),
+            (header::SET_COOKIE, clear[2].clone()),
         ],
         Redirect::to("/login"),
     )

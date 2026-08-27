@@ -35,6 +35,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/principals", post(routes::register_principal))
         .route("/api/principals/{id}", get(routes::get_principal))
+        .route("/api/principals/{id}/password", post(routes::set_password))
         .route("/api/repos", post(routes::create_repo))
         .route("/api/repos/{name}", get(routes::get_repo))
         .route("/api/repos/{name}/import", post(routes::import_history))

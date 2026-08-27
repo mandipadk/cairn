@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS principals (
   kind    TEXT NOT NULL,
   display TEXT NOT NULL,
   model   TEXT,
-  harness TEXT
+  harness TEXT,
+  password TEXT
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS tokens (
@@ -541,6 +542,12 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             tx.execute(
                 "UPDATE grants SET revoked = 1 WHERE id = ?",
                 params![grant.as_str()],
+            )?;
+        }
+        Event::PasswordSet { principal, hash } => {
+            tx.execute(
+                "UPDATE principals SET password = ? WHERE id = ?",
+                params![hash, principal.as_str()],
             )?;
         }
         Event::RepoCreated {

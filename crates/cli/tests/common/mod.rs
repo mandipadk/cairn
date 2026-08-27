@@ -197,6 +197,72 @@ pub async fn api_with_token(
     .await
 }
 
+/// Post the sign-in form. Returns the status and the Set-Cookie header,
+/// which is what actually matters about a successful sign-in.
+pub async fn sign_in(
+    app: &Router,
+    principal: &str,
+    password: &str,
+) -> (StatusCode, Option<String>) {
+    let body = format!(
+        "principal={}&password={}",
+        urlencode(principal),
+        urlencode(password)
+    );
+    let request = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let cookie = response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find(|v| v.starts_with("cairn_session="))
+        .map(str::to_owned);
+    (status, cookie)
+}
+
+/// Where a failed sign-in sends you, which is the whole message a
+/// visitor gets and therefore the thing that must not vary by account.
+pub async fn redirect_of(app: &Router, principal: &str, password: &str) -> String {
+    let body = format!(
+        "principal={}&password={}",
+        urlencode(principal),
+        urlencode(password)
+    );
+    let request = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    response
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_owned()
+}
+
+fn urlencode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            b' ' => "+".to_owned(),
+            other => format!("%{other:02X}"),
+        })
+        .collect()
+}
+
 /// Fetch a page carrying a raw Cookie header, for asserting what the
 /// browser half does with a credential. Returns the status only: these
 /// callers care whether they were let in, not what was rendered.

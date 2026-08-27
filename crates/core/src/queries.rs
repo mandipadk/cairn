@@ -28,6 +28,19 @@ fn parsed<T>(at: &str, value: &str, parse: impl Fn(&str) -> Option<T>) -> CoreRe
 pub(crate) mod raw {
     use super::*;
 
+    /// A principal's stored password hash.
+    ///
+    /// Deliberately not a field on [`Principal`]: that struct is
+    /// serialised straight into API responses, and a hash that is never
+    /// in the type cannot leak through one.
+    pub fn password_hash(conn: &Connection, id: &str) -> CoreResult<Option<String>> {
+        Ok(conn
+            .prepare_cached("SELECT password FROM principals WHERE id = ?")?
+            .query_row(params![id], |row| row.get::<_, Option<String>>(0))
+            .optional()?
+            .flatten())
+    }
+
     pub fn principal(conn: &Connection, id: &str) -> CoreResult<Option<Principal>> {
         conn.prepare_cached(
             "SELECT id, kind, display, model, harness FROM principals WHERE id = ?",

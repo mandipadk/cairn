@@ -75,6 +75,29 @@ pub async fn register_principal(
     Ok(committed(Some(id.0), &env))
 }
 
+#[derive(Deserialize)]
+pub struct SetPassword {
+    pub password: String,
+}
+
+/// Set a password: your own, or anyone's if you are an admin.
+///
+/// Every existing session of that principal ends, because a password
+/// change that leaves old sessions alive has not locked anybody out —
+/// which is usually the entire reason for changing it.
+pub async fn set_password(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Json(body): Json<SetPassword>,
+) -> ApiResult<Json<Value>> {
+    let principal = PrincipalId(id);
+    let env = app.with_store(|s| s.set_password(&actor.0, &principal, &body.password))?;
+    app.end_sessions_of(&principal);
+    app.publish(&env);
+    Ok(committed(Some(principal.0), &env))
+}
+
 pub async fn get_principal(
     State(app): State<AppState>,
     _actor: Actor,

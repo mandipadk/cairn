@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+argon2 = "0.5.3"
 jiff = "0.2.35"
 rand = "0.10.2"
 rusqlite = { version = "0.40.2", features = ["bundled"] }

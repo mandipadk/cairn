@@ -158,17 +158,27 @@ pub fn login(theme: Theme, dev: bool, error: Option<&str>) -> Markup {
                         p class="error" { (error) }
                     }
                     div {
-                        label for="token" { "API token" }
-                        input id="token" name="token" type="password" autocomplete="off" autofocus;
+                        label for="principal" { "Name" }
+                        input id="principal" name="principal" type="text"
+                            autocomplete="username" autocapitalize="none" autofocus;
                     }
-                    @if dev {
-                        div {
-                            label for="principal" { "Or a principal name — dev mode accepts asserted identity" }
-                            input id="principal" name="principal" type="text" autocomplete="off";
-                        }
+                    div {
+                        label for="password" { "Password" }
+                        input id="password" name="password" type="password"
+                            autocomplete="current-password";
                     }
                     button class="btn" type="submit" { "Sign in" }
-                    p class="hint" { "Mint a token with " code { "cairn admin mint-token" } }
+                    details class="alt" {
+                        summary { "Sign in with a token" }
+                        div {
+                            label for="token" { "API token" }
+                            input id="token" name="token" type="password" autocomplete="off";
+                        }
+                        p class="hint" { "Mint one with " code { "cairn admin mint-token" } }
+                    }
+                    @if dev {
+                        p class="hint" { "Dev mode: a name alone is accepted as asserted identity." }
+                    }
                 }
             }
         },
@@ -999,6 +1009,10 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
         ),
         Event::GrantRevoked { .. } => ("dot idle", html! { b { (actor) } " revoked a grant" }),
         Event::RepoCreated { repo, .. } => ("dot idle", html! { b { (actor) } " created " (repo) }),
+        Event::PasswordSet { principal, .. } => (
+            "dot idle",
+            html! { b { (actor) } " set the password for " (principal.as_str()) },
+        ),
         Event::HistoryImported {
             branch,
             commits,

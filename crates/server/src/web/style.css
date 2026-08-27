@@ -373,5 +373,15 @@ a.srow:hover .t { text-decoration: underline; }
 }
 .login input:focus { outline: none; border-color: var(--ink2); }
 .login .hint { font-size: 12px; color: var(--ink3); }
+/* The token path is still there for anyone driving the UI like a
+   script, but it should not compete with the ordinary way in. */
+.login .alt { border-top: 1px solid var(--hair); padding-top: 12px; }
+.login .alt summary {
+  font-size: 12.5px; color: var(--ink3); cursor: pointer; list-style: none;
+}
+.login .alt summary::-webkit-details-marker { display: none; }
+.login .alt summary:hover { color: var(--ink2); }
+.login .alt[open] summary { margin-bottom: 10px; }
+.login .alt > div { margin-bottom: 8px; }
 .login .error { font-size: 12.5px; color: var(--bad); }
 .plain { color: var(--ink3); font-size: 14px; }

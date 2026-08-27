@@ -124,10 +124,23 @@ async fn web_ui_full_journey() {
     ada.post_form("/login", &[("principal", "ada")]);
     assert!(ada.jar.contains_key("cairn_dev"));
 
-    // Home redirects into the only repo; the tree is empty pre-merge.
-    let (status, _, location) = ada.get("/");
-    assert_eq!(status, 303);
-    assert_eq!(location.as_deref(), Some("/demo"));
+    // Home answers the question someone actually arrives with — what
+    // wants me — and lists the repositories underneath.
+    let (status, body, _) = ada.get("/");
+    assert_eq!(status, 200);
+    assert!(
+        body.contains("Needs you"),
+        "home should lead with attention"
+    );
+    assert!(
+        body.contains("Nothing is waiting on a human"),
+        "an empty queue should say so rather than showing a bare list"
+    );
+    assert!(
+        body.contains("demo"),
+        "and the repositories are still there"
+    );
+
     let (_, body, _) = ada.get("/demo");
     assert!(body.contains("Empty repository"));
 

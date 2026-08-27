@@ -165,15 +165,64 @@ struct FlashQuery {
     error: Option<String>,
 }
 
+/// One repository as the home lists it: the name, and what is in flight.
+pub struct HomeRepo {
+    pub repo: cairn_core::Repo,
+    pub open: usize,
+    pub queued: usize,
+}
+
+/// A change wanting judgment, and which repository it lives in.
+pub struct HomeAttention {
+    pub repo: String,
+    pub item: cairn_core::AttentionItem,
+}
+
+/// The page someone lands on after signing in.
+///
+/// Deliberately not an inventory of repositories. The question a person
+/// arrives with is what wants them, and that does not care which
+/// repository it happens to live in — so attention is gathered across
+/// all of them and ranked as one list. The repositories are underneath,
+/// where you go when you already know where you are going.
 async fn home(State(app): State<AppState>, Palette(theme): Palette, viewer: Viewer) -> Response {
     let repos = match app.with_store(|s| s.repos()) {
         Ok(repos) => repos,
         Err(err) => return oops(err),
     };
-    match repos.as_slice() {
-        [only] => Redirect::to(&format!("/{}", only.name)).into_response(),
-        _ => views::home(theme, &viewer, &repos).into_response(),
+
+    let mut needs_you: Vec<HomeAttention> = Vec::new();
+    let mut listed: Vec<HomeRepo> = Vec::new();
+    for repo in repos {
+        let items = match app.with_store(|s| s.attention_for(&repo.name)) {
+            Ok(items) => items,
+            Err(err) => return oops(err),
+        };
+        let changes = match app.with_store(|s| s.changes_in_repo(&repo.name)) {
+            Ok(changes) => changes,
+            Err(err) => return oops(err),
+        };
+        let queued = match app.with_store(|s| s.queue_for(&repo.name, &repo.default_branch)) {
+            Ok(queue) => queue.len(),
+            Err(err) => return oops(err),
+        };
+        listed.push(HomeRepo {
+            open: changes
+                .iter()
+                .filter(|c| c.state == cairn_core::ChangeState::Open)
+                .count(),
+            queued,
+            repo,
+        });
+        needs_you.extend(items.into_iter().map(|item| HomeAttention {
+            repo: listed.last().expect("just pushed").repo.name.clone(),
+            item,
+        }));
     }
+    needs_you.sort_by_key(|entry| std::cmp::Reverse(entry.item.score));
+    needs_you.truncate(12);
+
+    views::home(theme, &viewer, &listed, &needs_you).into_response()
 }
 
 async fn login_page(

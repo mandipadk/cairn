@@ -5,8 +5,8 @@
 use super::diff::{FileDiff, LineKind};
 use super::{Brief, LandingData, Sidebar, Viewer};
 use cairn_core::{
-    Change, ChangeState, Claim, Disposition, Envelope, Event, PolicyTrace, Repo, Revision, Task,
-    Verdict, Verification,
+    Change, ChangeState, Claim, Disposition, Envelope, Event, PolicyTrace, Revision, Task, Verdict,
+    Verification,
 };
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 use std::collections::HashMap;
@@ -185,22 +185,67 @@ pub fn login(theme: Theme, dev: bool, error: Option<&str>) -> Markup {
     )
 }
 
-pub fn home(theme: Theme, viewer: &Viewer, repos: &[Repo]) -> Markup {
+pub fn home(
+    theme: Theme,
+    viewer: &Viewer,
+    repos: &[super::HomeRepo],
+    needs_you: &[super::HomeAttention],
+) -> Markup {
     layout(
         theme,
         Some(viewer),
         None,
         None,
-        "Repositories",
+        "Home",
         html! {
-            div class="sechead" { b { "Repositories" } span { (repos.len()) } }
-            @if repos.is_empty() {
-                p class="empty" { "No repositories yet. Create one over the API: POST /api/repos" }
+            div class="need homeneed" {
+                div class="sechead" { b { "Needs you" } span { (needs_you.len()) } }
+                @if needs_you.is_empty() {
+                    div class="trow sec3" {
+                        span {}
+                        span { "Nothing is waiting on a human." }
+                        span {}
+                    }
+                }
+                @for entry in needs_you {
+                    a class="trow" href={ "/" (entry.repo) "/changes/" (entry.item.change.number) }
+                      title=(attention_evidence(&entry.item)) {
+                        span class="sec3" { (entry.repo) " #" (entry.item.change.number) }
+                        span style="font-weight: 500;" { (entry.item.change.title) }
+                        span class="reasons" {
+                            // The two heaviest reasons, so every row is
+                            // one line and the list keeps its rhythm.
+                            // The rest are in the hover evidence and in
+                            // full on the change itself.
+                            @for (index, signal) in entry.item.signals.iter().take(2).enumerate() {
+                                @if index > 0 { span class="sec3" { " · " } }
+                                span class={ @if index == 0 { "lead" } @else { "sec3" } } {
+                                    (signal.description)
+                                }
+                            }
+                            @if entry.item.signals.len() > 2 {
+                                span class="sec3" { " · +" (entry.item.signals.len() - 2) }
+                            }
+                        }
+                    }
+                }
             }
-            @for repo in repos {
-                a class="trow" href={ "/" (repo.name) } style="grid-template-columns: minmax(0,1fr) auto;" {
-                    span style="font-weight: 500;" { (repo.name) }
-                    span class="sec3" { (repo.default_branch) }
+
+            div class="homerepos" {
+                div class="sechead" { b { "Repositories" } span { (repos.len()) } }
+                @if repos.is_empty() {
+                    p class="empty" { "No repositories yet." }
+                }
+                @for entry in repos {
+                    a class="trow" href={ "/" (entry.repo.name) } {
+                        span style="font-weight: 500;" { (entry.repo.name) }
+                        span class="sec3" { (entry.repo.default_branch) }
+                        span class="sec3" {
+                            @if entry.open > 0 { (entry.open) " open" }
+                            @if entry.open > 0 && entry.queued > 0 { " · " }
+                            @if entry.queued > 0 { (entry.queued) " landing" }
+                        }
+                    }
                 }
             }
         },

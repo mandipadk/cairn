@@ -38,7 +38,42 @@ pub struct Runner<'a> {
 /// speaks: fetch what a change actually proposes, re-run what it
 /// claims, and record what happened. Nothing here is specific to any
 /// CI product — a workflow file just calls this.
+/// Confirm this machine can actually run a check before claiming to
+/// have run one.
+///
+/// A runner that cannot write to disk will watch every command fail and
+/// record that the claims were false. They were not: the machine was
+/// broken. A false dispute blocks a change for a reason that has
+/// nothing to do with the change, and it costs somebody an afternoon to
+/// work out why — so refuse to start instead, loudly, and record
+/// nothing.
+fn can_actually_run(workdir: &Path) -> anyhow::Result<()> {
+    let probe = std::env::temp_dir().join(format!("cairn-verify-{}", std::process::id()));
+    std::fs::write(&probe, b"probe").with_context(|| {
+        format!(
+            "cannot write to the temporary directory ({}). Set TMPDIR somewhere \
+             with space; a runner that cannot write would report every claim as \
+             false when the truth is that it could not check",
+            std::env::temp_dir().display()
+        )
+    })?;
+    let _ = std::fs::remove_file(&probe);
+
+    std::fs::create_dir_all(workdir)
+        .with_context(|| format!("cannot create the working directory {}", workdir.display()))?;
+    let probe = workdir.join(".cairn-verify-probe");
+    std::fs::write(&probe, b"probe").with_context(|| {
+        format!(
+            "cannot write in the working directory {}",
+            workdir.display()
+        )
+    })?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
+}
+
 pub fn run_all(runner: Runner) -> anyhow::Result<()> {
+    can_actually_run(runner.workdir)?;
     let agent = build_agent();
     let base = runner.server.trim_end_matches('/');
     let numbers = match runner.change {

@@ -445,6 +445,32 @@ a.srow:hover .t { text-decoration: underline; }
 .login .alt[open] summary { margin-bottom: 10px; }
 .login .alt > div { margin-bottom: 8px; }
 .login .error { font-size: 12.5px; color: var(--bad); }
+.done { font-size: 12.5px; color: var(--ok); }
+
+/* A secret shown exactly once. Loud enough that nobody scrolls past it,
+   quiet enough that it is still this product. */
+.once { border: 1px solid var(--hair); border-radius: 8px; padding: 14px 16px; margin: 14px 0 22px; }
+.once p { font-size: 13px; color: var(--ink2); margin: 0 0 10px; }
+.once .secret {
+  display: block; font-size: 12.5px; word-break: break-all; color: var(--ink);
+  background: var(--raise); border-radius: 6px; padding: 10px 12px;
+}
+.inline { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin: 14px 0 20px; }
+.inline input[type=text] {
+  font: inherit; font-size: 13px; color: var(--ink); min-width: 220px;
+  border: 1px solid var(--hair); border-radius: 6px; padding: 7px 10px; background: var(--raise);
+}
+.inline input:focus, .inline select:focus { outline: none; border-color: var(--ink2); }
+.inline select {
+  font: inherit; font-size: 12.5px; color: var(--ink2);
+  border: 1px solid var(--hair); border-radius: 6px; padding: 7px 9px; background: var(--raise);
+}
+.check { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--ink2); }
+.agent { padding: 10px 0 16px; border-bottom: 1px solid var(--hair); }
+.grant {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 5px 0 5px 14px; font-size: 12.5px;
+}
 
 /* First run: the first thing anyone sees, so it teaches the model
    rather than reporting an absence. Rows, not boxes — the same language
@@ -530,6 +556,32 @@ a.srow:hover .t { text-decoration: underline; }
 }
 .searchbig input:focus { outline: none; border-color: var(--ink2); }
 .error { font-size: 12.5px; color: var(--bad); }
+.done { font-size: 12.5px; color: var(--ok); }
+
+/* A secret shown exactly once. Loud enough that nobody scrolls past it,
+   quiet enough that it is still this product. */
+.once { border: 1px solid var(--hair); border-radius: 8px; padding: 14px 16px; margin: 14px 0 22px; }
+.once p { font-size: 13px; color: var(--ink2); margin: 0 0 10px; }
+.once .secret {
+  display: block; font-size: 12.5px; word-break: break-all; color: var(--ink);
+  background: var(--raise); border-radius: 6px; padding: 10px 12px;
+}
+.inline { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin: 14px 0 20px; }
+.inline input[type=text] {
+  font: inherit; font-size: 13px; color: var(--ink); min-width: 220px;
+  border: 1px solid var(--hair); border-radius: 6px; padding: 7px 10px; background: var(--raise);
+}
+.inline input:focus, .inline select:focus { outline: none; border-color: var(--ink2); }
+.inline select {
+  font: inherit; font-size: 12.5px; color: var(--ink2);
+  border: 1px solid var(--hair); border-radius: 6px; padding: 7px 9px; background: var(--raise);
+}
+.check { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--ink2); }
+.agent { padding: 10px 0 16px; border-bottom: 1px solid var(--hair); }
+.grant {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 5px 0 5px 14px; font-size: 12.5px;
+}
 
 /* First run: the first thing anyone sees, so it teaches the model
    rather than reporting an absence. Rows, not boxes — the same language

@@ -197,6 +197,28 @@ pub async fn api_with_token(
     .await
 }
 
+/// Give a principal a password, sign in, and hand back the session
+/// cookie — the shape most account tests need before they can start.
+pub async fn sign_in_as(forge: &Forge, who: &str) -> (StatusCode, String) {
+    const PASSWORD: &str = "a perfectly ordinary password";
+    api_with_token(
+        &forge.app,
+        "POST",
+        &format!("/api/principals/{who}/password"),
+        &forge.ada_token,
+        Some(json!({ "password": PASSWORD })),
+    )
+    .await;
+    let (status, cookie) = sign_in(&forge.app, who, PASSWORD).await;
+    let cookie = cookie
+        .expect("signing in should set a session")
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    (status, cookie)
+}
+
 /// Post the sign-in form. Returns the status and the Set-Cookie header,
 /// which is what actually matters about a successful sign-in.
 pub async fn sign_in(

@@ -52,7 +52,9 @@ pub fn routes() -> Router<AppState> {
         .route("/search", get(search_page))
         .route("/new", get(new_page).post(create_from_form))
         .route("/you", get(you_page))
-        .route("/you/tokens", get(tokens_page))
+        .route("/you/settings", get(settings_page).post(change_password))
+        .route("/you/tokens", get(tokens_page).post(token_action))
+        .route("/agents", get(agents_page).post(agent_action))
         .route("/{repo}", get(repo_page))
         .route("/{repo}/tree/{*path}", get(tree_page))
         .route("/{repo}/blame/{*path}", get(blame_page))
@@ -277,28 +279,298 @@ async fn you_page(
     }
 }
 
-/// Your tokens, and the agents acting under grants you can see.
+#[derive(Deserialize)]
+struct Flash {
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    done: Option<String>,
+    /// A freshly minted token, shown once and never stored anywhere we
+    /// could show it again.
+    #[serde(default)]
+    secret: Option<String>,
+}
+
+async fn settings_page(
+    Palette(theme): Palette,
+    viewer: Viewer,
+    Query(flash): Query<Flash>,
+) -> Response {
+    views::settings(theme, &viewer, flash.error.as_deref(), flash.done.is_some()).into_response()
+}
+
+#[derive(Deserialize)]
+struct PasswordForm {
+    #[serde(default)]
+    password: String,
+    #[serde(default)]
+    confirm: String,
+}
+
+async fn change_password(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Form(form): Form<PasswordForm>,
+) -> Response {
+    if form.password != form.confirm {
+        return Redirect::to("/you/settings?error=Those+two+did+not+match").into_response();
+    }
+    match app.with_store(|s| s.set_password(&viewer.0, &viewer.0, &form.password)) {
+        Ok(env) => {
+            // Changing a password ends every session it protected —
+            // including this one, which is the correct and slightly
+            // surprising consequence, so say so on the way out.
+            app.end_sessions_of(&viewer.0);
+            app.publish(&env);
+            Redirect::to("/login?error=Password+changed.+Sign+in+again.").into_response()
+        }
+        Err(err) => Redirect::to(&format!(
+            "/you/settings?error={}",
+            urlencode(&err.to_string())
+        ))
+        .into_response(),
+    }
+}
+
+/// Your tokens: what exists, and the two things you can do to them.
 async fn tokens_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
     viewer: Viewer,
+    Query(flash): Query<Flash>,
 ) -> Response {
-    let data = app.with_store(|store| {
-        let tokens = store.tokens_of(&viewer.0)?;
-        let agents: Vec<_> = store
-            .principals()?
-            .into_iter()
-            .filter(|p| p.kind == cairn_core::PrincipalKind::Agent)
-            .collect();
-        Ok::<_, cairn_core::CoreError>((tokens, agents))
-    });
-    match data {
-        Ok((tokens, agents)) => views::tokens(theme, &viewer, &tokens, &agents).into_response(),
+    match app.with_store(|s| s.tokens_of(&viewer.0)) {
+        Ok(tokens) => views::tokens(
+            theme,
+            &viewer,
+            &tokens,
+            flash.secret.as_deref(),
+            flash.error.as_deref(),
+        )
+        .into_response(),
         Err(err) => oops(err),
     }
 }
 
-/// Everything the chrome needs, in one pass over the store.
+#[derive(Deserialize)]
+struct TokenForm {
+    #[serde(default)]
+    action: String,
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    token: String,
+}
+
+async fn token_action(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Form(form): Form<TokenForm>,
+) -> Response {
+    let outcome = match form.action.as_str() {
+        "revoke" => app
+            .with_store(|s| s.revoke_token(&viewer.0, &cairn_core::TokenId(form.token.clone())))
+            .map(|env| {
+                app.publish(&env);
+                None
+            }),
+        _ => {
+            let label = form.label.trim();
+            let label = (!label.is_empty()).then_some(label);
+            app.with_store(|s| s.mint_token(&viewer.0, &viewer.0, label))
+                .map(|(_, secret, env)| {
+                    app.publish(&env);
+                    Some(secret)
+                })
+        }
+    };
+    match outcome {
+        // The secret exists exactly once. It rides back in the redirect
+        // because there is nowhere else it could come from later.
+        Ok(Some(secret)) => {
+            Redirect::to(&format!("/you/tokens?secret={}", urlencode(&secret))).into_response()
+        }
+        Ok(None) => Redirect::to("/you/tokens").into_response(),
+        Err(err) => Redirect::to(&format!(
+            "/you/tokens?error={}",
+            urlencode(&err.to_string())
+        ))
+        .into_response(),
+    }
+}
+
+/// An agent and everything it is allowed to do.
+pub struct AgentRow {
+    pub principal: cairn_core::Principal,
+    pub grants: Vec<cairn_core::Grant>,
+}
+
+async fn agents_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    viewer: Viewer,
+    Query(flash): Query<Flash>,
+) -> Response {
+    let data = app.with_store(|store| {
+        let mut agents = Vec::new();
+        for principal in store.principals()? {
+            if principal.kind != cairn_core::PrincipalKind::Agent {
+                continue;
+            }
+            let grants = store.grants_of(&principal.id)?;
+            agents.push(AgentRow { principal, grants });
+        }
+        let repos: Vec<String> = store.repos()?.into_iter().map(|r| r.name).collect();
+        Ok::<_, cairn_core::CoreError>((agents, repos))
+    });
+    match data {
+        Ok((agents, repos)) => views::agents(
+            theme,
+            &viewer,
+            &agents,
+            &repos,
+            flash.secret.as_deref(),
+            flash.error.as_deref(),
+        )
+        .into_response(),
+        Err(err) => oops(err),
+    }
+}
+
+#[derive(Deserialize)]
+struct AgentForm {
+    #[serde(default)]
+    action: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    display: String,
+    #[serde(default)]
+    model: String,
+    #[serde(default)]
+    grantee: String,
+    #[serde(default)]
+    repo: String,
+    // One field per capability rather than a repeated `actions` key:
+    // the form encoding axum uses cannot deserialise a sequence, and a
+    // checkbox group that silently arrives empty is the worst kind of
+    // bug — the grant looks issued and grants nothing.
+    #[serde(default)]
+    task: Option<String>,
+    #[serde(default)]
+    push: Option<String>,
+    #[serde(default)]
+    review: Option<String>,
+    #[serde(default)]
+    merge: Option<String>,
+    #[serde(default)]
+    verify: Option<String>,
+    #[serde(default)]
+    grant: String,
+    #[serde(default)]
+    reason: String,
+}
+
+async fn agent_action(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Form(form): Form<AgentForm>,
+) -> Response {
+    let back = |error: Option<String>, secret: Option<String>| match (error, secret) {
+        (Some(error), _) => {
+            Redirect::to(&format!("/agents?error={}", urlencode(&error))).into_response()
+        }
+        (None, Some(secret)) => {
+            Redirect::to(&format!("/agents?secret={}", urlencode(&secret))).into_response()
+        }
+        _ => Redirect::to("/agents").into_response(),
+    };
+
+    match form.action.as_str() {
+        "register" => {
+            let Some(id) = PrincipalId::new(form.id.trim()) else {
+                return back(Some(format!("{:?} is not a valid name", form.id)), None);
+            };
+            let model = form.model.trim();
+            let registered = app.with_store(|s| {
+                s.register_principal(
+                    &viewer.0,
+                    &id,
+                    cairn_core::PrincipalKind::Agent,
+                    form.display.trim(),
+                    (!model.is_empty()).then_some(model),
+                    None,
+                )
+            });
+            match registered {
+                Ok(env) => {
+                    app.publish(&env);
+                    // A registered agent with no token cannot do
+                    // anything, so mint one here rather than making
+                    // somebody find the second form.
+                    match app.with_store(|s| s.mint_token(&viewer.0, &id, Some("created here"))) {
+                        Ok((_, secret, env)) => {
+                            app.publish(&env);
+                            back(None, Some(secret))
+                        }
+                        Err(err) => back(Some(err.to_string()), None),
+                    }
+                }
+                Err(err) => back(Some(err.to_string()), None),
+            }
+        }
+        "grant" => {
+            let actions: Vec<cairn_core::Capability> = [
+                (form.task.is_some(), cairn_core::Capability::Task),
+                (form.push.is_some(), cairn_core::Capability::Push),
+                (form.review.is_some(), cairn_core::Capability::Review),
+                (form.merge.is_some(), cairn_core::Capability::Merge),
+                (form.verify.is_some(), cairn_core::Capability::Verify),
+            ]
+            .into_iter()
+            .filter_map(|(ticked, capability)| ticked.then_some(capability))
+            .collect();
+            if actions.is_empty() {
+                return back(Some("pick at least one capability".to_owned()), None);
+            }
+            let repo = form.repo.trim();
+            let issued = app.with_store(|s| {
+                s.issue_grant(
+                    &viewer.0,
+                    &PrincipalId(form.grantee.clone()),
+                    (!repo.is_empty()).then_some(repo),
+                    actions,
+                    None,
+                )
+            });
+            match issued {
+                Ok((_, env)) => {
+                    app.publish(&env);
+                    back(None, None)
+                }
+                Err(err) => back(Some(err.to_string()), None),
+            }
+        }
+        "revoke" => {
+            let reason = match form.reason.trim() {
+                "" => "revoked from the agents page".to_owned(),
+                given => given.to_owned(),
+            };
+            match app.with_store(|s| {
+                s.revoke_grant(&viewer.0, &cairn_core::GrantId(form.grant.clone()), &reason)
+            }) {
+                Ok(env) => {
+                    app.publish(&env);
+                    back(None, None)
+                }
+                Err(err) => back(Some(err.to_string()), None),
+            }
+        }
+        other => back(Some(format!("unknown action {other:?}")), None),
+    }
+}
+
+/// Everything the chrome needs, in one pass over the store./// Everything the chrome needs, in one pass over the store.
 fn chrome_for(app: &AppState, who: &PrincipalId) -> Result<Chrome, cairn_core::CoreError> {
     app.with_store(|store| {
         let mut repos = Vec::new();

@@ -189,7 +189,9 @@ fn sidebar(viewer: &Viewer, current: Option<&str>) -> Markup {
             div class="sep" {}
             h4 { "You" }
             a href="/you" { span { "Your changes" } span class="n" { @if chrome.yours > 0 { (chrome.yours) } } }
-            a href="/you/tokens" { span { "Tokens & agents" } span class="n" {} }
+            a href="/agents" { span { "Agents" } span class="n" {} }
+            a href="/you/tokens" { span { "Tokens" } span class="n" {} }
+            a href="/you/settings" { span { "Settings" } span class="n" {} }
         }
     }
 }
@@ -592,43 +594,194 @@ pub fn you(theme: Theme, viewer: &Viewer, mine: &[(String, Change)]) -> Markup {
     )
 }
 
+pub fn settings(theme: Theme, viewer: &Viewer, error: Option<&str>, done: bool) -> Markup {
+    layout(
+        theme,
+        Some(viewer),
+        None,
+        None,
+        "Settings",
+        html! {
+            div class="narrowcol" {
+                div class="sechead" { b { "Settings" } span { (viewer.0.as_str()) } }
+                @if let Some(error) = error { p class="error" { (error) } }
+                @if done { p class="done" { "Saved." } }
+
+                form class="stack" method="post" action="/you/settings" {
+                    div {
+                        label for="password" { "New password" }
+                        input id="password" name="password" type="password"
+                              autocomplete="new-password" minlength="12";
+                    }
+                    div {
+                        label for="confirm" { "Again" }
+                        input id="confirm" name="confirm" type="password"
+                              autocomplete="new-password" minlength="12";
+                    }
+                    p class="hint" {
+                        "Changing this signs out everywhere, including here — a password \
+                         change that leaves old sessions alive has not locked anyone out."
+                    }
+                    button class="btn" type="submit" { "Change password" }
+                }
+            }
+        },
+    )
+}
+
 pub fn tokens(
     theme: Theme,
     viewer: &Viewer,
     tokens: &[cairn_core::TokenInfo],
-    agents: &[cairn_core::Principal],
+    fresh: Option<&str>,
+    error: Option<&str>,
+) -> Markup {
+    let live = tokens.iter().filter(|t| !t.revoked).count();
+    layout(
+        theme,
+        Some(viewer),
+        None,
+        None,
+        "Tokens",
+        html! {
+            div class="sechead" { b { "Your tokens" } span { (live) } }
+            @if let Some(error) = error { p class="error" { (error) } }
+
+            @if let Some(secret) = fresh {
+                div class="once" {
+                    p { b { "Copy this now." } " It is stored only as a hash, so this is the one time it can be shown." }
+                    code class="secret" { (secret) }
+                }
+            }
+
+            form class="inline" method="post" action="/you/tokens" {
+                input type="hidden" name="action" value="mint";
+                input name="label" type="text" placeholder="what it is for" autocomplete="off";
+                button class="btn" type="submit" { "Mint a token" }
+            }
+
+            @if tokens.is_empty() {
+                p class="empty" { "None yet." }
+            }
+            @for token in tokens {
+                div class="trow" style="grid-template-columns: minmax(0,1fr) 130px 90px;" {
+                    span { (token.label.as_deref().unwrap_or("unlabelled")) }
+                    span class="sec3" { (token.id.0) }
+                    span {
+                        @if token.revoked {
+                            span class="sec3" { "revoked" }
+                        } @else {
+                            form method="post" action="/you/tokens" {
+                                input type="hidden" name="action" value="revoke";
+                                input type="hidden" name="token" value=(token.id.0);
+                                button class="quiet" type="submit" { "Revoke" }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    )
+}
+
+pub fn agents(
+    theme: Theme,
+    viewer: &Viewer,
+    agents: &[super::AgentRow],
+    repos: &[String],
+    fresh: Option<&str>,
+    error: Option<&str>,
 ) -> Markup {
     layout(
         theme,
         Some(viewer),
         None,
         None,
-        "Tokens & agents",
+        "Agents",
         html! {
-            div class="sechead" { b { "Your tokens" } span { (tokens.len()) } }
-            @if tokens.is_empty() {
-                p class="empty" {
-                    "None yet. Mint one with " code { "cairn admin mint-token" } "."
-                }
-            }
-            @for token in tokens {
-                div class="trow" style="grid-template-columns: minmax(0,1fr) auto auto;" {
-                    span { (token.label.as_deref().unwrap_or("unlabelled")) }
-                    span class="sec3" { (token.id.0) }
-                    span class="sec3" { @if token.revoked { "revoked" } @else { "live" } }
+            div class="sechead" { b { "Agents" } span { (agents.len()) } }
+            @if let Some(error) = error { p class="error" { (error) } }
+
+            @if let Some(secret) = fresh {
+                div class="once" {
+                    p { b { "Copy this now." } " It is the agent's only credential, and it is stored as a hash." }
+                    code class="secret" { (secret) }
                 }
             }
 
-            div class="sechead" style="margin-top: 26px;" { b { "Agents" } span { (agents.len()) } }
             @if agents.is_empty() {
-                p class="empty" { "No agents registered." }
+                p class="empty" { "None yet. An agent needs a name, a token, and a grant narrow enough to be worth trusting." }
             }
-            @for agent in agents {
-                div class="trow" style="grid-template-columns: 150px minmax(0,1fr) auto;" {
-                    span style="font-weight: 500;" { (agent.id.as_str()) }
-                    span class="sec3" { (agent.display) }
-                    span class="sec3" { (agent.model.as_deref().unwrap_or("")) }
+            @for row in agents {
+                div class="agent" {
+                    div class="trow" style="grid-template-columns: 150px minmax(0,1fr) auto;" {
+                        span style="font-weight: 500;" { (row.principal.id.as_str()) }
+                        span class="sec3" { (row.principal.display) }
+                        span class="sec3" { (row.principal.model.as_deref().unwrap_or("")) }
+                    }
+                    @for grant in row.grants.iter().filter(|g| !g.revoked) {
+                        div class="grant" {
+                            span class="sec3" {
+                                @for (index, action) in grant.actions.iter().enumerate() {
+                                    @if index > 0 { ", " }
+                                    (action.as_str())
+                                }
+                                @match &grant.repo {
+                                    Some(repo) => { " on " (repo) }
+                                    None => { " everywhere" }
+                                }
+                            }
+                            form method="post" action="/agents" {
+                                input type="hidden" name="action" value="revoke";
+                                input type="hidden" name="grant" value=(grant.id.0);
+                                button class="quiet" type="submit" { "Revoke" }
+                            }
+                        }
+                    }
+                    @if row.grants.iter().all(|g| g.revoked) {
+                        p class="grant sec3" { "No live grant — this agent can do nothing yet." }
+                    }
+
+                    form class="inline" method="post" action="/agents" {
+                        input type="hidden" name="action" value="grant";
+                        input type="hidden" name="grantee" value=(row.principal.id.as_str());
+                        @for capability in ["task", "push", "review", "merge", "verify"] {
+                            label class="check" {
+                                input type="checkbox" name=(capability) value="on";
+                                (capability)
+                            }
+                        }
+                        select name="repo" {
+                            option value="" { "every repository" }
+                            @for repo in repos { option value=(repo) { (repo) } }
+                        }
+                        button class="btn" type="submit" { "Grant" }
+                    }
                 }
+            }
+
+            div class="sechead" style="margin-top: 30px;" { b { "Add an agent" } span {} }
+            form class="stack narrowcol" method="post" action="/agents" {
+                input type="hidden" name="action" value="register";
+                div {
+                    label for="id" { "Name" }
+                    input id="id" name="id" type="text" autocomplete="off"
+                          placeholder="lowercase, digits and hyphens";
+                }
+                div {
+                    label for="display" { "Display name" }
+                    input id="display" name="display" type="text" autocomplete="off";
+                }
+                div {
+                    label for="model" { "Model" }
+                    input id="model" name="model" type="text" autocomplete="off"
+                          placeholder="policy can require judgment from distinct models";
+                }
+                p class="hint" {
+                    "A token is minted at the same time, because an agent without one \
+                     cannot do anything. It grants no capability by itself."
+                }
+                button class="btn" type="submit" { "Add" }
             }
         },
     )

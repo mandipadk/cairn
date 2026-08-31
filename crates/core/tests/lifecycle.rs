@@ -31,6 +31,9 @@ fn seeded() -> (Store, PrincipalId, PrincipalId, PrincipalId) {
     store
         .register_principal(&human, &human, PrincipalKind::Human, "Ada", None, None)
         .unwrap();
+    // Whoever runs the forge holds the grant that says so. Being human
+    // is no longer authority on its own.
+    store.grant_bootstrap_admin(&human).unwrap();
     store
         .register_principal(
             &human,
@@ -212,6 +215,8 @@ fn full_lifecycle_intent_to_merge() {
         kinds,
         [
             "principal_registered",
+            // Whoever runs the forge is granted that, on the record.
+            "grant_issued",
             "principal_registered",
             "principal_registered",
             "repo_created",
@@ -483,7 +488,7 @@ fn protocol_misuse_is_rejected_with_typed_errors() {
 fn event_cursor_pagination_resumes_cleanly() {
     let (store, ..) = seeded();
     let all = store.events_after(EventSeq(0), 100).unwrap();
-    assert_eq!(all.len(), 6);
+    assert_eq!(all.len(), 7);
 
     let first_two = store.events_after(EventSeq(0), 2).unwrap();
     let rest = store
@@ -538,6 +543,9 @@ fn capability_law_scopes_expires_and_revokes() {
     store
         .register_principal(&human, &human, PrincipalKind::Human, "Ada", None, None)
         .unwrap();
+    // Whoever runs the forge holds the grant that says so. Being human
+    // is no longer authority on its own.
+    store.grant_bootstrap_admin(&human).unwrap();
     store
         .register_principal(
             &human,
@@ -1567,6 +1575,7 @@ fn projections_rebuild_themselves_from_the_log() {
         store
             .register_principal(&human, &human, PrincipalKind::Human, "Ada", None, None)
             .unwrap();
+        store.grant_bootstrap_admin(&human).unwrap();
         store
             .register_principal(
                 &human,
@@ -1648,5 +1657,5 @@ fn projections_rebuild_themselves_from_the_log() {
     assert_eq!(store.grants_of(&principal("scout")).unwrap().len(), 1);
 
     // And the log itself was never touched.
-    assert_eq!(store.events_after(EventSeq(0), 100).unwrap().len(), 10);
+    assert_eq!(store.events_after(EventSeq(0), 100).unwrap().len(), 11);
 }

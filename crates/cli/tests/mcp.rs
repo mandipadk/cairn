@@ -91,6 +91,7 @@ async fn full_agent_workflow_over_mcp() {
     store
         .register_principal(&ada, &ada, PrincipalKind::Human, "Ada", None, None)
         .unwrap();
+    store.grant_bootstrap_admin(&ada).unwrap();
     store
         .register_principal(
             &ada,

@@ -233,8 +233,13 @@ async fn main() -> anyhow::Result<()> {
                     .with_context(|| format!("{principal:?} is not a valid principal slug"))?;
                 let display = display.unwrap_or_else(|| principal.clone());
                 store.register_principal(&id, &id, PrincipalKind::Human, &display, None, None)?;
+                // Somebody has to be able to run the forge, and nobody
+                // is sovereign by virtue of being human any more. The
+                // first person gets an unscoped admin grant — recorded
+                // like any other, and revocable like any other.
+                store.grant_bootstrap_admin(&id)?;
                 let (_, secret, _) = store.mint_token(&id, &id, Some("bootstrap"))?;
-                println!("registered human {principal}");
+                println!("registered human {principal} with an admin grant");
                 println!("token (shown once, store it safely): {secret}");
             }
             AdminCommand::MintToken {

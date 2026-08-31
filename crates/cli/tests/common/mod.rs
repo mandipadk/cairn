@@ -61,6 +61,10 @@ async fn boot_inner(object_format: &str, dev: bool) -> Forge {
     store
         .register_principal(&ada, &ada, PrincipalKind::Human, "Ada", None, None)
         .unwrap();
+    // Ada runs this forge. Nobody is sovereign for being human any more,
+    // so somebody has to hold the grant that running it consists of —
+    // exactly as `cairn admin bootstrap` arranges in production.
+    store.grant_bootstrap_admin(&ada).unwrap();
     store
         .register_principal(
             &ada,

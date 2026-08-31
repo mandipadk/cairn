@@ -65,10 +65,16 @@ databases.
 
 Identity and authority are real: API tokens (secrets shown once at
 mint, only hashes stored — recorded via the event log itself), and
-capability grants. Humans hold every capability; agents act only under
-grants — typed verbs (`task`, `push`, `review`, `merge`, `admin`),
-optionally repo-scoped and time-boxed, revocable with immediate
-effect. A refusal names the missing capability and the exact grant
+capability grants. Authority is explicit for everyone. You hold every
+capability on repositories you own — creating one is how you come to own
+it — and everywhere else you hold precisely what somebody granted you:
+typed verbs (`task`, `push`, `review`, `merge`, `verify`, `admin`),
+optionally repo-scoped and time-boxed, revocable with immediate effect.
+The same rules apply to people and to agents, which is the point: a
+forge where signing in made you an administrator of everyone else's work
+would not be one anybody could share. Running the forge is itself a
+grant — an unscoped `admin` — held by whoever `cairn admin bootstrap`
+set up, and grantable onward like any other. A refusal names the missing capability and the exact grant
 that would fix it. Git pushes authenticate with a token as the
 Basic-auth password. An asserted-identity dev header exists behind an
 explicit `--dev` flag, off by default.

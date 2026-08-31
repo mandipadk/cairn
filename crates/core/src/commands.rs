@@ -46,17 +46,37 @@ fn authorize(
     repo: Option<&str>,
 ) -> CoreResult<Principal> {
     let principal = ensure_actor(tx, actor)?;
-    if principal.kind == PrincipalKind::Human {
+
+    // Ownership is the one authority nobody is granted: it comes with
+    // having made the thing. Everything else — for humans exactly as for
+    // agents — is a grant somebody issued and can take back.
+    //
+    // This used to read "if the principal is a human, allow it", which
+    // is right for a forge with one operator and wrong the moment there
+    // are two: it made every person who could sign in an administrator
+    // of everybody else's work. "Human" was standing in for "the person
+    // running this", and those stopped being the same thing.
+    if let Some(name) = repo
+        && let Some(record) = raw::repo(tx, name)?
+        && record.owner == *actor
+    {
         return Ok(principal);
     }
+
     let grants = raw::grants_of(tx, actor.as_str())?;
     let now = jiff::Timestamp::now().to_string();
     if raw::grants_cover(&grants, action, repo, &now) {
         return Ok(principal);
     }
+    // An unscoped admin grant is what running the forge looks like:
+    // registering people, and reaching into repositories you do not own.
+    if raw::grants_cover(&grants, Capability::Admin, None, &now) {
+        return Ok(principal);
+    }
+
     let scope = repo.map_or_else(|| "all repos".to_owned(), |r| format!("repo {r}"));
     Err(CoreError::Forbidden(format!(
-        "{actor} holds no '{}' capability for {scope}; a human can issue one: \
+        "{actor} holds no '{}' capability for {scope}; someone who does can issue one: \
          POST /api/grants {{\"grantee\": \"{actor}\", \"actions\": [\"{}\"]}}",
         action.as_str(),
         action.as_str()
@@ -143,6 +163,28 @@ fn valid_email(value: &str) -> bool {
 
 fn valid_commit_oid(oid: &str) -> bool {
     matches!(oid.len(), 40 | 64) && oid.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Who may start a repository.
+///
+/// Any person may, and becomes its owner — the same bargain every forge
+/// offers, and the thing that makes ownership meaningful rather than a
+/// label an administrator assigns. An agent needs an admin grant,
+/// because an agent creating repositories on its own initiative is not
+/// something to allow by default.
+fn may_create_repo(tx: &Transaction, actor: &PrincipalId) -> CoreResult<()> {
+    let principal = ensure_actor(tx, actor)?;
+    if principal.kind == PrincipalKind::Human {
+        return Ok(());
+    }
+    let grants = raw::grants_of(tx, actor.as_str())?;
+    let now = jiff::Timestamp::now().to_string();
+    if raw::grants_cover(&grants, Capability::Admin, None, &now) {
+        return Ok(());
+    }
+    Err(CoreError::Forbidden(format!(
+        "{actor} may not create repositories: that needs an 'admin' grant"
+    )))
 }
 
 /// The rules a new repository name must satisfy. One definition, used
@@ -424,7 +466,7 @@ impl Store {
         default_branch: &str,
     ) -> CoreResult<()> {
         let tx = self.conn.transaction()?;
-        authorize(&tx, actor, Capability::Admin, None)?;
+        may_create_repo(&tx, actor)?;
         new_repo_is_allowed(&tx, name, default_branch)
         // The transaction is dropped, so nothing here is kept.
     }
@@ -437,7 +479,7 @@ impl Store {
         object_format: ObjectFormat,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        authorize(&tx, actor, Capability::Admin, None)?;
+        may_create_repo(&tx, actor)?;
         new_repo_is_allowed(&tx, name, default_branch)?;
         let env = append(
             &tx,
@@ -511,6 +553,45 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(env)
+    }
+
+    /// Whether this principal may read this repository at all.
+    ///
+    /// Public is public. Otherwise it is the same question as any other
+    /// authority: you own it, or somebody granted you something on it.
+    /// Holding a grant of any kind is enough — there is no separate
+    /// "read" capability, because being trusted to push to a repository
+    /// you cannot read would be a strange thing to arrange.
+    pub fn may_read(&self, actor: &PrincipalId, repo: &str) -> bool {
+        let Ok(Some(record)) = raw::repo(&self.conn, repo) else {
+            return false;
+        };
+        if record.visibility == Visibility::Public {
+            return true;
+        }
+        if record.owner == *actor {
+            return true;
+        }
+        let Ok(grants) = raw::grants_of(&self.conn, actor.as_str()) else {
+            return false;
+        };
+        let now = jiff::Timestamp::now().to_string();
+        grants.iter().any(|grant| {
+            !grant.revoked
+                && grant
+                    .until
+                    .as_deref()
+                    .is_none_or(|until| until > now.as_str())
+                && grant.repo.as_deref().is_none_or(|scope| scope == repo)
+        })
+    }
+
+    /// Every repository this principal may see, in name order.
+    pub fn readable_repos(&self, actor: &PrincipalId) -> CoreResult<Vec<crate::types::Repo>> {
+        Ok(raw::repos(&self.conn)?
+            .into_iter()
+            .filter(|repo| self.may_read(actor, &repo.name))
+            .collect())
     }
 
     /// Decide whether a repository can be read without credentials.
@@ -1388,6 +1469,10 @@ impl Store {
                 "{actor} may not issue grants: delegation is a human act"
             )));
         }
+        // You cannot hand out what you do not hold. Owning the
+        // repository is enough for a grant scoped to it; anything wider
+        // needs the admin grant that running the forge consists of.
+        authorize(&tx, actor, Capability::Admin, repo)?;
         raw::principal(&tx, grantee.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("principal {grantee}")))?;
         if let Some(repo) = repo {
@@ -1421,6 +1506,33 @@ impl Store {
         )?;
         tx.commit()?;
         Ok((grant, env))
+    }
+
+    /// Give somebody the unscoped admin grant that running the forge
+    /// consists of, without asking anyone's permission.
+    ///
+    /// This exists for exactly one caller: the offline admin path, where
+    /// having the database file is already the root authority. It is the
+    /// answer to the obvious circularity — nobody can grant admin until
+    /// somebody holds it — and it is deliberately not reachable over the
+    /// API, where that circle should stay unbroken.
+    pub fn grant_bootstrap_admin(&mut self, id: &PrincipalId) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        ensure_actor(&tx, id)?;
+        let grant = GrantId::generate();
+        let env = append(
+            &tx,
+            id,
+            Event::GrantIssued {
+                grant,
+                grantee: id.clone(),
+                repo: None,
+                actions: vec![Capability::Admin],
+                until: None,
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
     }
 
     /// Revoke a grant, effective immediately. The grantor or any human.

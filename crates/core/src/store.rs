@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -112,7 +112,8 @@ CREATE TABLE IF NOT EXISTS repos (
   object_format  TEXT NOT NULL DEFAULT 'sha1',
   policy         TEXT NOT NULL DEFAULT '{}',
   mirror         TEXT,
-  visibility     TEXT NOT NULL DEFAULT 'private'
+  visibility     TEXT NOT NULL DEFAULT 'private',
+  owner          TEXT NOT NULL DEFAULT ''
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS imports (
@@ -598,14 +599,18 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             default_branch,
             object_format,
         } => {
+            // Ownership is not a field on the event: whoever created a
+            // repository is already recorded as the envelope's actor, and
+            // deriving it keeps one fact in one place.
             tx.execute(
-                "INSERT INTO repos (name, default_branch, object_format, policy)
-                 VALUES (?, ?, ?, ?)",
+                "INSERT INTO repos (name, default_branch, object_format, policy, owner)
+                 VALUES (?, ?, ?, ?, ?)",
                 params![
                     repo,
                     default_branch,
                     object_format.as_str(),
-                    serde_json::to_string(&Policy::default()).expect("policy serializes")
+                    serde_json::to_string(&Policy::default()).expect("policy serializes"),
+                    actor
                 ],
             )?;
         }

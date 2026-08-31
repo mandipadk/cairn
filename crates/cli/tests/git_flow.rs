@@ -324,6 +324,9 @@ async fn push_requires_a_live_token_without_dev_mode() {
     store
         .register_principal(&ada, &ada, PrincipalKind::Human, "Ada", None, None)
         .unwrap();
+    // This test stands its own forge up, so it also has to say who runs
+    // it: being human is no longer authority by itself.
+    store.grant_bootstrap_admin(&ada).unwrap();
     store
         .register_principal(&ada, &scout, PrincipalKind::Agent, "Scout", Some("m"), None)
         .unwrap();

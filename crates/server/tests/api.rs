@@ -15,7 +15,25 @@ use tower::ServiceExt;
 fn test_router() -> Router {
     // Dev identity is explicit here: these tests exercise the protocol,
     // not credentials. Token enforcement has its own test below.
-    router(AppState::new(cairn_core::Store::open_in_memory().unwrap()).with_dev_identity())
+    //
+    // Somebody has to hold the grant that running a forge consists of,
+    // and it is deliberately not reachable over the API — the circle of
+    // "you need admin to grant admin" should stay unbroken there, which
+    // leaves the offline path as the only way in.
+    let mut store = cairn_core::Store::open_in_memory().unwrap();
+    let ada = cairn_core::PrincipalId::new("ada").unwrap();
+    store
+        .register_principal(
+            &ada,
+            &ada,
+            cairn_core::PrincipalKind::Human,
+            "Ada",
+            None,
+            None,
+        )
+        .unwrap();
+    store.grant_bootstrap_admin(&ada).unwrap();
+    router(AppState::new(store).with_dev_identity())
 }
 
 async fn call(
@@ -59,7 +77,8 @@ async fn seed(app: &Router) {
         })),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    // Already registered when the forge was stood up.
+    assert_eq!(status, StatusCode::CONFLICT);
     for (id, model) in [("scout", "claude-fable-5"), ("arbiter", "gpt-6")] {
         let (status, _) = call(
             app,
@@ -489,7 +508,7 @@ async fn concurrent_writers_keep_the_stream_gapless() {
         writer.await.unwrap();
     }
 
-    let expected = 6 + WRITERS as i64;
+    let expected = 7 + WRITERS as i64;
     let mut buffer = String::new();
     read_until(&mut stream, &mut buffer, |b| {
         parse_sse(b).0.len() >= expected as usize
@@ -600,7 +619,7 @@ async fn sustained_concurrent_writes_keep_stream_and_pages_consistent() {
     const WRITERS: usize = 50;
     const PER_WRITER: usize = 30;
     let app = test_router();
-    seed(&app).await; // events 1..=4
+    seed(&app).await; // the bootstrap grant, then the seeded world
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -641,7 +660,7 @@ async fn sustained_concurrent_writes_keep_stream_and_pages_consistent() {
         writer.await.unwrap();
     }
 
-    let expected = (6 + WRITERS * PER_WRITER) as i64;
+    let expected = (7 + WRITERS * PER_WRITER) as i64;
     let mut buffer = String::new();
     read_until_within(&mut stream, &mut buffer, Duration::from_secs(60), |b| {
         parse_sse(b).0.len() >= expected as usize
@@ -699,6 +718,7 @@ async fn tokens_and_grants_enforce_without_dev_identity() {
             None,
         )
         .unwrap();
+    store.grant_bootstrap_admin(&ada).unwrap();
     let (_, ada_token, _) = store.mint_token(&ada, &ada, Some("bootstrap")).unwrap();
     let app = router(AppState::new(store));
 

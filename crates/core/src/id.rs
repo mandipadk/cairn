@@ -93,7 +93,7 @@ pub(crate) fn random_token_secret() -> String {
 
 /// Principals are named by chosen slug, not random id: identity that
 /// humans grant authority to should be identity humans can read.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct PrincipalId(pub String);
 

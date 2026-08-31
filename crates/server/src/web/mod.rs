@@ -122,7 +122,7 @@ async fn search_page(
     }
     let hits = app.with_store(|store| -> Result<Vec<Hit>, cairn_core::CoreError> {
         let mut hits = Vec::new();
-        for repo in store.repos()? {
+        for repo in store.readable_repos(&viewer.0)? {
             if repo.name.to_lowercase().contains(&needle) {
                 hits.push(Hit {
                     kind: "repository",
@@ -576,7 +576,7 @@ fn chrome_for(app: &AppState, who: &PrincipalId) -> Result<Chrome, cairn_core::C
         let mut repos = Vec::new();
         let mut yours = 0;
         let mut leases = Vec::new();
-        for repo in store.repos()? {
+        for repo in store.readable_repos(who)? {
             leases.extend(store.live_leases(&repo.name)?);
             let changes = store.changes_in_repo(&repo.name)?;
             let open: Vec<_> = changes
@@ -835,7 +835,7 @@ fn gather_home(app: &AppState, who: &PrincipalId) -> Result<HomeData, cairn_core
         let mut needs_you = Vec::new();
         let mut mine = Vec::new();
         let mut lanes = Vec::new();
-        for repo in store.repos()? {
+        for repo in store.readable_repos(who)? {
             for item in store.attention_for(&repo.name)? {
                 needs_you.push(HomeAttention {
                     repo: repo.name.clone(),

@@ -174,3 +174,128 @@ async fn making_a_repository_public_takes_authority() {
         "an agent must not open a repository to the world: {body}"
     );
 }
+
+/// Being signed in is not the same as being allowed. Two people on one
+/// forge should not see each other's private work by default.
+#[tokio::test(flavor = "multi_thread")]
+async fn one_person_cannot_read_another_persons_private_repository() {
+    let forge = boot_token_only().await;
+    let app = &forge.app;
+
+    // A second human, with their own credential and no grants at all.
+    api_with_token(
+        app,
+        "POST",
+        "/api/principals",
+        &forge.ada_token,
+        Some(json!({ "id": "bee", "kind": "human", "display": "Bee" })),
+    )
+    .await;
+    let (_, minted) = api_with_token(
+        app,
+        "POST",
+        "/api/principals/bee/tokens",
+        &forge.ada_token,
+        Some(json!({ "label": "test" })),
+    )
+    .await;
+    let bee = minted["token"].as_str().unwrap().to_owned();
+
+    // `demo` belongs to ada, who created it when the forge was seeded.
+    let (_, repo) = api_with_token(app, "GET", "/api/repos/demo", &forge.ada_token, None).await;
+    assert_eq!(
+        repo["owner"], "ada",
+        "creating something makes you its owner"
+    );
+
+    // Bee can sign in and see nothing of ada's.
+    let addr = forge.addr;
+    assert!(
+        !git_raw(
+            &forge.work,
+            &[
+                "clone",
+                "-q",
+                &format!("http://token:{bee}@{addr}/git/demo"),
+                "not-yours"
+            ],
+        )
+        .status
+        .success(),
+        "a signed-in stranger is still a stranger"
+    );
+
+    // Ada grants bee something on it, and now bee can read it.
+    api_with_token(
+        app,
+        "POST",
+        "/api/grants",
+        &forge.ada_token,
+        Some(json!({ "grantee": "bee", "repo": "demo", "actions": ["review"] })),
+    )
+    .await;
+    assert!(
+        git_raw(
+            &forge.work,
+            &[
+                "clone",
+                "-q",
+                &format!("http://token:{bee}@{addr}/git/demo"),
+                "now-mine"
+            ],
+        )
+        .status
+        .success(),
+        "a grant on the repository is enough to read it"
+    );
+}
+
+/// Ownership is not sovereignty over the whole forge: what bee makes is
+/// bee's, and ada is not automatically its administrator.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_second_human_owns_what_they_create() {
+    let forge = boot_token_only().await;
+    let app = &forge.app;
+
+    api_with_token(
+        app,
+        "POST",
+        "/api/principals",
+        &forge.ada_token,
+        Some(json!({ "id": "bee", "kind": "human", "display": "Bee" })),
+    )
+    .await;
+    let (_, minted) = api_with_token(
+        app,
+        "POST",
+        "/api/principals/bee/tokens",
+        &forge.ada_token,
+        Some(json!({ "label": "test" })),
+    )
+    .await;
+    let bee = minted["token"].as_str().unwrap().to_owned();
+
+    // Any person may start a repository, and owns what they start.
+    let (status, body) = api_with_token(
+        app,
+        "POST",
+        "/api/repos",
+        &bee,
+        Some(json!({ "name": "bees-work" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, repo) = api_with_token(app, "GET", "/api/repos/bees-work", &bee, None).await;
+    assert_eq!(repo["owner"], "bee");
+
+    // Bee decides its policy, because bee owns it.
+    let (status, _) = api_with_token(
+        app,
+        "POST",
+        "/api/repos/bees-work/visibility",
+        &bee,
+        Some(json!({ "visibility": "public" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "an owner governs what they own");
+}

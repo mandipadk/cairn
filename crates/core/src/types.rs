@@ -129,6 +129,10 @@ pub struct Repo {
     pub default_branch: String,
     #[serde(default)]
     pub visibility: Visibility,
+    /// Whoever created it. Ownership is the one authority nobody has to
+    /// be granted: it comes with having made the thing.
+    #[serde(default)]
+    pub owner: PrincipalId,
     pub object_format: ObjectFormat,
     pub policy: Policy,
     /// Set when landed branches are copied somewhere else.

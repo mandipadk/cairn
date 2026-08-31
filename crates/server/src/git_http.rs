@@ -196,9 +196,9 @@ fn may_read(app: &AppState, name: &str, headers: &HeaderMap) -> ApiResult<()> {
         return Ok(());
     }
     // Private, or not there at all — the caller learns which only by
-    // authenticating first.
-    reader(app, headers)?;
-    if repo.is_some() {
+    // authenticating first, and then only if it is theirs to see.
+    let who = reader(app, headers)?;
+    if repo.is_some() && app.with_store(|s| s.may_read(&who, name)) {
         Ok(())
     } else {
         Err(ApiError::new(

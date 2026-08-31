@@ -124,6 +124,15 @@ enum AdminCommand {
         db: PathBuf,
         principal: String,
     },
+    /// Give somebody the unscoped admin grant that running the forge
+    /// consists of. Offline, because over the API you would already need
+    /// admin to grant admin — which is the right rule there and an
+    /// impossible one here.
+    GrantAdmin {
+        #[arg(long, default_value = "cairn.db")]
+        db: PathBuf,
+        principal: String,
+    },
     /// Show who has asked to be told when this is ready, or remove
     /// someone who has asked to be forgotten.
     Waitlist {
@@ -266,6 +275,14 @@ async fn main() -> anyhow::Result<()> {
                 // someone else's admin capability to already exist.
                 store.set_password(&id, &id, &password)?;
                 println!("password set for {principal}");
+            }
+            AdminCommand::GrantAdmin { db, principal } => {
+                let mut store = Store::open(&db)
+                    .with_context(|| format!("opening forge database at {}", db.display()))?;
+                let id = PrincipalId::new(&principal)
+                    .with_context(|| format!("{principal:?} is not a valid principal slug"))?;
+                store.grant_bootstrap_admin(&id)?;
+                println!("{principal} now holds an unscoped admin grant");
             }
             AdminCommand::Waitlist { db, remove } => {
                 let mut store = Store::open(&db)

@@ -332,7 +332,7 @@ async fn many_changes_landing_at_once_each_land_once_and_the_refs_agree() {
             &wc,
             &[
                 "ls-remote",
-                &format!("http://{addr}/git/demo"),
+                &format!("http://scout:x@{addr}/git/demo"),
                 &format!("refs/heads/branch{lane}"),
             ],
         );

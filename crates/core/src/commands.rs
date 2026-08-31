@@ -18,7 +18,7 @@ use crate::queries::raw;
 use crate::store::{Store, append};
 use crate::types::{
     Capability, ChangeSpec, ChangeState, ClaimSpec, Disposition, Mirror, ObjectFormat, Policy,
-    Principal, PrincipalKind, ReviewDomain, SessionState, TaskState,
+    Principal, PrincipalKind, ReviewDomain, SessionState, TaskState, Visibility,
 };
 use rusqlite::Transaction;
 use sha2::{Digest, Sha256};
@@ -507,6 +507,31 @@ impl Store {
                 source: source.to_owned(),
                 tip_oid: tip_oid.to_owned(),
                 commits,
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
+    /// Decide whether a repository can be read without credentials.
+    ///
+    /// Admin authority, and recorded: making a repository public is a
+    /// decision with consequences that someone will want to date later.
+    pub fn set_visibility(
+        &mut self,
+        actor: &PrincipalId,
+        repo: &str,
+        visibility: Visibility,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        authorize(&tx, actor, Capability::Admin, Some(repo))?;
+        raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
+        let env = append(
+            &tx,
+            actor,
+            Event::VisibilitySet {
+                repo: repo.to_owned(),
+                visibility,
             },
         )?;
         tx.commit()?;

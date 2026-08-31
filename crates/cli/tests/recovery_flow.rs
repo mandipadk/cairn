@@ -140,7 +140,7 @@ async fn a_branch_left_behind_by_a_crash_is_restored() {
         &wc,
         &[
             "ls-remote",
-            &format!("http://{}/git/demo", forge.addr),
+            &format!("http://scout:x@{}/git/demo", forge.addr),
             "refs/heads/main",
         ],
     );
@@ -167,7 +167,7 @@ async fn recovery_is_idempotent_and_does_nothing_when_healthy() {
         &wc,
         &[
             "ls-remote",
-            &format!("http://{}/git/demo", forge.addr),
+            &format!("http://scout:x@{}/git/demo", forge.addr),
             "refs/heads/main",
         ],
     );
@@ -249,7 +249,7 @@ async fn a_branch_that_moved_elsewhere_is_reported_not_overwritten() {
         &wc,
         &[
             "ls-remote",
-            &format!("http://{}/git/demo", forge.addr),
+            &format!("http://scout:x@{}/git/demo", forge.addr),
             "refs/heads/main",
         ],
     );

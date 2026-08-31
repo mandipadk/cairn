@@ -52,7 +52,7 @@ async fn single_change_flow(forge: Forge, oid_len: usize) {
     // Clone (anonymous reads), commit with a Change-Id trailer.
     git(
         &forge.work,
-        &["clone", &format!("http://{addr}/git/demo"), "wc"],
+        &["clone", &format!("http://scout:x@{addr}/git/demo"), "wc"],
     );
     let wc = forge.work.join("wc");
     commit_file(
@@ -68,8 +68,18 @@ async fn single_change_flow(forge: Forge, oid_len: usize) {
         "object format should determine oid width"
     );
 
-    // Anonymous pushes are refused before touching receive-pack.
-    git_expect_fail(&wc, &["push", "origin", "HEAD:refs/for/main"]);
+    // Anonymous pushes are refused before touching receive-pack. Named
+    // explicitly rather than via `origin`, whose URL carries the
+    // credentials the clone needed — a private repository cannot be
+    // read anonymously either, which is the point of the next test.
+    git_expect_fail(
+        &wc,
+        &[
+            "push",
+            &format!("http://{addr}/git/demo"),
+            "HEAD:refs/for/main",
+        ],
+    );
 
     // The transport IS the API: push with scout's real token as the
     // Basic password (dev mode would also accept it; the strict path
@@ -163,7 +173,11 @@ async fn single_change_flow(forge: Forge, oid_len: usize) {
     // A fresh clone sees the merged history — the loop is closed.
     git(
         &forge.work,
-        &["clone", &format!("http://{addr}/git/demo"), "verify"],
+        &[
+            "clone",
+            &format!("http://scout:x@{addr}/git/demo"),
+            "verify",
+        ],
     );
     let contents = std::fs::read_to_string(forge.work.join("verify/greeting.txt")).unwrap();
     assert_eq!(contents, "hello, forge\n");
@@ -330,13 +344,21 @@ async fn push_requires_a_live_token_without_dev_mode() {
     let app = router(AppState::new(store).with_git(git_store, format!("http://{addr}")));
     tokio::spawn(axum::serve(listener, app.clone()).into_future());
 
-    git(&work, &["clone", &format!("http://{addr}/git/demo"), "wc"]);
+    // Reading a private repository needs a credential too, so the clone
+    // that sets this test up carries one.
+    git(
+        &work,
+        &[
+            "clone",
+            &format!("http://scout:{token}@{addr}/git/demo"),
+            "wc",
+        ],
+    );
     let wc = work.join("wc");
     commit_file(&wc, "f.txt", "x\n", "Add f\n\nChange-Id: Itok01");
 
     // No credentials, wrong password, and a bare username are all
-    // refused. The anonymous case matters most: reads are open here, and
-    // nothing about that may spill into write access.
+    // refused for writing.
     for bad in [
         format!("http://{addr}/git/demo"),
         format!("http://scout:wrong@{addr}/git/demo"),
@@ -358,7 +380,13 @@ async fn push_requires_a_live_token_without_dev_mode() {
             "HEAD:refs/for/main",
         ],
     );
-    let refs = git(&wc, &["ls-remote", &format!("http://{addr}/git/demo")]);
+    let refs = git(
+        &wc,
+        &[
+            "ls-remote",
+            &format!("http://scout:{token}@{addr}/git/demo"),
+        ],
+    );
     assert!(
         refs.contains("refs/changes/1/1"),
         "missing change ref:\n{refs}"
@@ -488,7 +516,12 @@ async fn merge_queue_lands_trains_and_reports_conflicts() {
     assert!(git(&wc, &["rev-list", "FETCH_HEAD"]).contains(&left_oid));
     git(
         &forge.work,
-        &["clone", "-q", &format!("http://{addr}/git/demo"), "train"],
+        &[
+            "clone",
+            "-q",
+            &format!("http://scout:x@{addr}/git/demo"),
+            "train",
+        ],
     );
     assert!(forge.work.join("train/left.txt").exists());
     assert!(forge.work.join("train/right.txt").exists());

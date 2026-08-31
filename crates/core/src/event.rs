@@ -11,7 +11,7 @@ use crate::id::{
 use crate::policy::PolicyTrace;
 use crate::types::{
     Capability, ClaimKind, Disposition, Mirror, ObjectFormat, Policy, PrincipalKind, ReviewDomain,
-    SessionState, TaskState,
+    SessionState, TaskState, Visibility,
 };
 use serde::{Deserialize, Serialize};
 
@@ -109,6 +109,15 @@ pub enum Event {
         tip_oid: String,
         /// How many commits arrived without ever facing a policy.
         commits: i64,
+    },
+
+    /// A repository became readable without credentials, or stopped
+    /// being so. Recorded like every other decision, because who may
+    /// read a repository is exactly the kind of thing someone will need
+    /// to reconstruct later.
+    VisibilitySet {
+        repo: String,
+        visibility: Visibility,
     },
 
     /// A repository set the rules everything on it must meet.
@@ -274,6 +283,7 @@ impl Event {
             Event::GrantRevoked { .. } => "grant_revoked",
             Event::RepoCreated { .. } => "repo_created",
             Event::HistoryImported { .. } => "history_imported",
+            Event::VisibilitySet { .. } => "visibility_set",
             Event::PolicySet { .. } => "policy_set",
             Event::MirrorSet { .. } => "mirror_set",
             Event::MirrorPushed { .. } => "mirror_pushed",

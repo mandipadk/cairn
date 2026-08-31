@@ -10,7 +10,7 @@ use crate::store::Store;
 use crate::types::{
     Capability, Change, ChangeState, Claim, ClaimKind, Disposition, Grant, Lease, Lesson, Mirror,
     ObjectFormat, Policy, Principal, PrincipalKind, Provenance, QueueEntry, Repo, ReviewDomain,
-    Revision, Session, SessionState, Task, TaskState, TokenInfo, Verdict, Verification,
+    Revision, Session, SessionState, Task, TaskState, TokenInfo, Verdict, Verification, Visibility,
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
@@ -69,7 +69,7 @@ pub(crate) mod raw {
     pub fn repos(conn: &Connection) -> CoreResult<Vec<Repo>> {
         let rows = conn
             .prepare_cached(
-                "SELECT name, default_branch, object_format, policy, mirror
+                "SELECT name, default_branch, object_format, policy, mirror, visibility
                  FROM repos ORDER BY name",
             )?
             .query_map([], |row| {
@@ -79,19 +79,31 @@ pub(crate) mod raw {
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
-            .map(|(name, default_branch, format, policy, mirror)| {
-                Ok(Repo {
-                    object_format: parsed(&format!("repo {name}"), &format, ObjectFormat::parse)?,
-                    policy: read_policy(&name, &policy)?,
-                    mirror: read_mirror(&name, mirror.as_deref())?,
-                    name,
-                    default_branch,
-                })
-            })
+            .map(
+                |(name, default_branch, format, policy, mirror, visibility)| {
+                    Ok(Repo {
+                        object_format: parsed(
+                            &format!("repo {name}"),
+                            &format,
+                            ObjectFormat::parse,
+                        )?,
+                        policy: read_policy(&name, &policy)?,
+                        mirror: read_mirror(&name, mirror.as_deref())?,
+                        visibility: parsed(
+                            &format!("repo {name}"),
+                            &visibility,
+                            Visibility::parse,
+                        )?,
+                        name,
+                        default_branch,
+                    })
+                },
+            )
             .collect()
     }
 
@@ -114,7 +126,7 @@ pub(crate) mod raw {
 
     pub fn repo(conn: &Connection, name: &str) -> CoreResult<Option<Repo>> {
         conn.prepare_cached(
-            "SELECT name, default_branch, object_format, policy, mirror
+            "SELECT name, default_branch, object_format, policy, mirror, visibility
              FROM repos WHERE name = ?",
         )?
         .query_row(params![name], |row| {
@@ -124,18 +136,22 @@ pub(crate) mod raw {
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, Option<String>>(4)?,
+                row.get::<_, String>(5)?,
             ))
         })
         .optional()?
-        .map(|(name, default_branch, format, policy, mirror)| {
-            Ok(Repo {
-                object_format: parsed(&format!("repo {name}"), &format, ObjectFormat::parse)?,
-                policy: read_policy(&name, &policy)?,
-                mirror: read_mirror(&name, mirror.as_deref())?,
-                name,
-                default_branch,
-            })
-        })
+        .map(
+            |(name, default_branch, format, policy, mirror, visibility)| {
+                Ok(Repo {
+                    object_format: parsed(&format!("repo {name}"), &format, ObjectFormat::parse)?,
+                    policy: read_policy(&name, &policy)?,
+                    mirror: read_mirror(&name, mirror.as_deref())?,
+                    visibility: parsed(&format!("repo {name}"), &visibility, Visibility::parse)?,
+                    name,
+                    default_branch,
+                })
+            },
+        )
         .transpose()
     }
 

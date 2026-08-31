@@ -1452,6 +1452,12 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
                 " from " (source) ", unreviewed here"
             },
         ),
+        Event::VisibilitySet { repo, visibility } => (
+            "dot idle",
+            html! {
+                b { (actor) } " made " (repo) " " (visibility.as_str())
+            },
+        ),
         Event::PolicySet { repo, .. } => (
             "dot idle",
             html! {

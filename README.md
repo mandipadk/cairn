@@ -174,9 +174,21 @@ and again escaped into HTML. Binary files are named rather than shown. A
 database with no room left fails the write whole: every command is one
 transaction, so a full disk costs the write and not the log.
 
-What is not here yet: request-rate limiting beyond sign-in, quotas on
-repository or push size, and any protection against a principal that
-holds legitimate capabilities and abuses them. Grants are the tool for
+Repositories are private unless someone says otherwise, and that is
+enforced at the transport rather than only in the interface: a private
+repository cannot be cloned without a token, and it answers a stranger
+exactly as a repository that does not exist does, so which private
+repositories are here is not public either. Making one public is an
+admin decision and is recorded like any other. Reading authenticates on
+the token alone — the username in Basic auth is decoration, as it is
+everywhere else — while a push still requires the two to agree, because
+a mismatch there is usually somebody's mistake worth catching.
+
+What is not here yet: per-user visibility within a forge, so everyone
+signed in can see every repository they are told about; request-rate
+limiting beyond sign-in and the waitlist; quotas on repository or push
+size; and any protection against a principal that holds legitimate
+capabilities and abuses them. Grants are the tool for
 that, and they are only as narrow as whoever issues them.
 
 ## Requirements

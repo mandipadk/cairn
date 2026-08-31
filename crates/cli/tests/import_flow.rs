@@ -112,7 +112,7 @@ async fn history_from_elsewhere_arrives_and_is_recorded_as_unreviewed() {
         &[
             "clone",
             "-q",
-            &format!("http://ada:{}@{addr}/git/imported", forge.scout_token),
+            &format!("http://ada:{}@{addr}/git/imported", forge.ada_token),
             "check",
         ],
     );

@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -111,7 +111,8 @@ CREATE TABLE IF NOT EXISTS repos (
   default_branch TEXT NOT NULL,
   object_format  TEXT NOT NULL DEFAULT 'sha1',
   policy         TEXT NOT NULL DEFAULT '{}',
-  mirror         TEXT
+  mirror         TEXT,
+  visibility     TEXT NOT NULL DEFAULT 'private'
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS imports (
@@ -619,6 +620,12 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                 "INSERT OR REPLACE INTO imports (repo, branch, source, tip_oid, commits)
                  VALUES (?, ?, ?, ?, ?)",
                 params![repo, branch, source, tip_oid, commits],
+            )?;
+        }
+        Event::VisibilitySet { repo, visibility } => {
+            tx.execute(
+                "UPDATE repos SET visibility = ? WHERE name = ?",
+                params![visibility.as_str(), repo],
             )?;
         }
         Event::MirrorSet { repo, mirror } => {

@@ -51,5 +51,5 @@ pub use types::{
     Capability, Change, ChangeSpec, ChangeState, Claim, ClaimKind, ClaimSpec, Disposition, Grant,
     Independence, Lease, Lesson, Mirror, ObjectFormat, Policy, Principal, PrincipalKind,
     Provenance, QueueEntry, Repo, ReviewDomain, Revision, Session, SessionState, Task, TaskState,
-    TokenInfo, Verdict, Verification,
+    TokenInfo, Verdict, Verification, Visibility,
 };

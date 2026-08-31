@@ -134,6 +134,81 @@ fn push_principal(app: &AppState, headers: &HeaderMap) -> ApiResult<PrincipalId>
     Err(unauthorized())
 }
 
+/// Who is reading, if they can prove it.
+///
+/// Unlike a push, the username in Basic auth carries no weight here: the
+/// token is the identity, and every client that stores credentials puts
+/// something arbitrary in that field. A push checks the two agree
+/// because a mismatch there is usually somebody's mistake worth
+/// catching; refusing a *read* over it would only mean a valid
+/// credential is rejected for being labelled oddly.
+fn reader(app: &AppState, headers: &HeaderMap) -> ApiResult<PrincipalId> {
+    let unauthorized = || {
+        ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "this repository is private: read it with an API token",
+        )
+    };
+    let basic = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Basic "))
+        .and_then(|b64| BASE64_STANDARD.decode(b64).ok())
+        .and_then(|raw| String::from_utf8(raw).ok())
+        .and_then(|creds| {
+            creds
+                .split_once(':')
+                .map(|(user, pass)| (user.to_owned(), pass.to_owned()))
+        });
+    if let Some((_, password)) = &basic
+        && let Some(owner) = app.with_store(|s| s.principal_for_token(password))?
+    {
+        return Ok(owner);
+    }
+    if app.dev_identity() {
+        return push_principal(app, headers);
+    }
+    Err(unauthorized())
+}
+
+/// Reading a repository over git requires identity unless the
+/// repository is public.
+///
+/// This is the door everything else was guarding a window next to: the
+/// web pages ask who you are, but `git clone` speaks to the transport
+/// directly and never did, so every repository was readable by anyone
+/// no matter what the interface implied.
+///
+/// Two details decide the shape of this. A client only sends
+/// credentials after being challenged, so an unauthenticated reader has
+/// to get 401 with a `WWW-Authenticate` header — answer 404 and git
+/// gives up without ever trying to authenticate. And which private
+/// repositories exist is itself worth not telling strangers, so a
+/// missing repository and a private one answer identically: challenge
+/// first, and only once someone has proved who they are does the
+/// difference between "no such repository" and "here it is" appear.
+fn may_read(app: &AppState, name: &str, headers: &HeaderMap) -> ApiResult<()> {
+    let repo = app.with_store(|s| s.repo(name))?;
+    if let Some(repo) = &repo
+        && repo.visibility == cairn_core::Visibility::Public
+    {
+        return Ok(());
+    }
+    // Private, or not there at all — the caller learns which only by
+    // authenticating first.
+    reader(app, headers)?;
+    if repo.is_some() {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            format!("repo {name} not found"),
+        ))
+    }
+}
+
 fn challenge_basic(err: ApiError) -> Response {
     let mut response = err.into_response();
     if response.status() == StatusCode::UNAUTHORIZED {
@@ -159,7 +234,7 @@ pub async fn info_refs(
     let result: ApiResult<Response> = async {
         let git = git_enabled(&app)?;
         let name = repo_name(&repo);
-        ensure_repo(&app, &name)?;
+        may_read(&app, &name, &headers)?;
         let service = Service::parse(&query.service)
             .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "invalid", "unknown service"))?;
         let body = git
@@ -176,7 +251,9 @@ pub async fn info_refs(
             .into_response())
     }
     .await;
-    result.unwrap_or_else(IntoResponse::into_response)
+    // Carry the challenge: a client only sends credentials once it
+    // has been asked for them.
+    result.unwrap_or_else(challenge_basic)
 }
 
 pub async fn upload_pack(
@@ -188,7 +265,9 @@ pub async fn upload_pack(
     let result: ApiResult<Response> = async {
         let git = git_enabled(&app)?;
         let name = repo_name(&repo);
-        ensure_repo(&app, &name)?;
+        // Advertising refs and serving the pack are two requests; both
+        // have to ask, or the second is an open door.
+        may_read(&app, &name, &headers)?;
         let input = request_body(&headers, body)?;
         let output = git
             .store
@@ -210,7 +289,9 @@ pub async fn upload_pack(
             .into_response())
     }
     .await;
-    result.unwrap_or_else(IntoResponse::into_response)
+    // Carry the challenge: a client only sends credentials once it
+    // has been asked for them.
+    result.unwrap_or_else(challenge_basic)
 }
 
 pub async fn receive_pack(

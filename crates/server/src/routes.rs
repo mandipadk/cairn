@@ -207,6 +207,22 @@ pub async fn import_history(
     Ok(committed(Some(name), &env))
 }
 
+#[derive(Deserialize)]
+pub struct SetVisibility {
+    pub visibility: cairn_core::Visibility,
+}
+
+pub async fn set_visibility(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(name): Path<String>,
+    Json(body): Json<SetVisibility>,
+) -> ApiResult<Json<Value>> {
+    let env = app.with_store(|s| s.set_visibility(&actor.0, &name, body.visibility))?;
+    app.publish(&env);
+    Ok(committed(Some(name), &env))
+}
+
 pub async fn get_repo(
     State(app): State<AppState>,
     _actor: Actor,

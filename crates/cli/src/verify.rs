@@ -143,7 +143,9 @@ fn checkout_revision(base: &str, runner: Runner, number: i64, into: &Path) -> an
     let revision = change["latest_revision"].as_i64().unwrap_or(1);
     let git_url = format!("{base}/git/{}", runner.repo);
     // The token authenticates the fetch the same way it does the API.
-    let authenticated = git_url.replacen("://", &format!("://runner:{}@", runner.token), 1);
+    // The username is decoration — the forge reads identity from the
+    // token — but git insists on the field being there.
+    let authenticated = git_url.replacen("://", &format!("://token:{}@", runner.token), 1);
 
     std::fs::create_dir_all(into).context("preparing a place to check out")?;
     for args in [

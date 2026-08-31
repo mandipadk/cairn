@@ -56,6 +56,20 @@ str_enum!(SessionState {
 
 str_enum!(ChangeState { Open => "open", Merged => "merged", Abandoned => "abandoned" });
 
+str_enum!(
+    /// Who may read a repository without proving who they are.
+    ///
+    /// Private is the default, and deliberately: a repository readable
+    /// by accident is worse than one that is awkward to share, so
+    /// "nobody said" has to mean "closed".
+    #[derive(Default)]
+    Visibility {
+        #[default]
+        Private => "private",
+        Public => "public",
+    }
+);
+
 str_enum!(ClaimKind {
     Test => "test",
     Lint => "lint",
@@ -113,6 +127,8 @@ pub struct Principal {
 pub struct Repo {
     pub name: String,
     pub default_branch: String,
+    #[serde(default)]
+    pub visibility: Visibility,
     pub object_format: ObjectFormat,
     pub policy: Policy,
     /// Set when landed branches are copied somewhere else.

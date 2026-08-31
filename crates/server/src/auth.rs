@@ -155,8 +155,10 @@ mod tests {
         );
 
         // The browser half reads the same credential out of a cookie.
+        // `/` is public now, so this asks a page that still requires
+        // somebody to be signed in.
         let request = Request::builder()
-            .uri("/")
+            .uri("/you")
             .header("cookie", format!("cairn_token={push_token}"))
             .body(Body::empty())
             .unwrap();

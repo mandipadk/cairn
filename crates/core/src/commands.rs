@@ -122,6 +122,25 @@ fn verify_password(password: &str, hash: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Deliberately loose. Address syntax is far stranger than any regex
+/// people write for it, and the only real proof is sending mail — so
+/// this rejects what is obviously not an address and accepts the rest.
+fn valid_email(value: &str) -> bool {
+    let bytes = value.len();
+    if !(3..=320).contains(&bytes) || value.chars().any(char::is_whitespace) {
+        return false;
+    }
+    match value.split_once('@') {
+        Some((local, domain)) => {
+            !local.is_empty()
+                && domain.contains('.')
+                && !domain.starts_with('.')
+                && !domain.ends_with('.')
+        }
+        None => false,
+    }
+}
+
 fn valid_commit_oid(oid: &str) -> bool {
     matches!(oid.len(), 40 | 64) && oid.chars().all(|c| c.is_ascii_hexdigit())
 }
@@ -324,6 +343,50 @@ impl Store {
             rusqlite::params![principal.as_str()],
         )?;
         Ok(())
+    }
+
+    /// Record someone asking to be told when this is ready.
+    ///
+    /// Returns whether they were new, so the page can say something
+    /// truthful either way without leaking whether an address is
+    /// already on the list to whoever guesses it.
+    pub fn join_waitlist(&mut self, email: &str, note: Option<&str>) -> CoreResult<bool> {
+        let email = email.trim();
+        require(valid_email(email), || {
+            "that does not look like an email address".into()
+        })?;
+        if let Some(note) = note {
+            bounded("note", note, MAX_TITLE)?;
+        }
+        let changed = self.conn.execute(
+            "INSERT INTO waitlist (email, joined, note) VALUES (?, ?, ?)
+             ON CONFLICT(email) DO NOTHING",
+            rusqlite::params![
+                email.to_lowercase(),
+                jiff::Timestamp::now().to_string(),
+                note.filter(|n| !n.trim().is_empty())
+            ],
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// The waitlist, oldest first.
+    pub fn waitlist(&self) -> CoreResult<Vec<(String, String, Option<String>)>> {
+        Ok(self
+            .conn
+            .prepare("SELECT email, joined, note FROM waitlist ORDER BY joined")?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Remove someone, because they asked. The whole reason this is not
+    /// in the log.
+    pub fn leave_waitlist(&mut self, email: &str) -> CoreResult<bool> {
+        let removed = self.conn.execute(
+            "DELETE FROM waitlist WHERE email = ?",
+            rusqlite::params![email.trim().to_lowercase()],
+        )?;
+        Ok(removed == 1)
     }
 
     /// Check a password. Returns false for an unknown principal, one

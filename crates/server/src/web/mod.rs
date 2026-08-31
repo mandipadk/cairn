@@ -43,7 +43,8 @@ const THEME_COOKIE: &str = "cairn_theme";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/", get(home))
+        .route("/", get(root))
+        .route("/waitlist", post(join_waitlist))
         .route("/assets/app.css", get(stylesheet))
         .route("/login", get(login_page).post(login_submit))
         .route("/logout", post(logout))
@@ -409,6 +410,37 @@ pub struct Chrome {
 
 pub struct Viewer(pub PrincipalId, pub Chrome);
 
+/// Who is looking, if anyone.
+///
+/// Shared by the extractor and by the routes that serve both a
+/// signed-out and a signed-in page, so the two can never disagree about
+/// what counts as being signed in.
+fn viewer_from(headers: &HeaderMap, state: &AppState) -> Option<Viewer> {
+    // A signed-in browser, the ordinary case.
+    let who = if let Some(id) = cookie(headers, SESSION_COOKIE)
+        && let Some(principal) = state.resolve_session(&id)
+    {
+        principal
+    }
+    // A pasted API token still works, for anyone driving the UI the way
+    // a script would.
+    else if let Some(token) = cookie(headers, TOKEN_COOKIE)
+        && let Ok(principal) = resolve_bearer(state, &token)
+    {
+        principal
+    } else if state.dev_identity()
+        && let Some(name) = cookie(headers, DEV_COOKIE)
+        && let Some(principal) = PrincipalId::new(&name)
+    {
+        principal
+    } else {
+        return None;
+    };
+    chrome_for(state, &who)
+        .ok()
+        .map(|chrome| Viewer(who, chrome))
+}
+
 impl FromRequestParts<AppState> for Viewer {
     type Rejection = Response;
 
@@ -416,34 +448,8 @@ impl FromRequestParts<AppState> for Viewer {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        // A signed-in browser, the ordinary case.
-        let who = if let Some(id) = cookie(&parts.headers, SESSION_COOKIE)
-            && let Some(principal) = state.resolve_session(&id)
-        {
-            principal
-        }
-        // A pasted API token still works, for anyone driving the UI the
-        // way a script would.
-        else if let Some(token) = cookie(&parts.headers, TOKEN_COOKIE)
-            && let Ok(principal) = resolve_bearer(state, &token)
-        {
-            principal
-        } else if state.dev_identity()
-            && let Some(name) = cookie(&parts.headers, DEV_COOKIE)
-            && let Some(principal) = PrincipalId::new(&name)
-        {
-            principal
-        } else {
-            return Err(Redirect::to("/login").into_response());
-        };
-        let chrome = chrome_for(state, &who).map_err(oops)?;
-        Ok(Viewer(who, chrome))
+        viewer_from(&parts.headers, state).ok_or_else(|| Redirect::to("/login").into_response())
     }
-}
-
-#[derive(Deserialize)]
-struct FlashQuery {
-    error: Option<String>,
 }
 
 /// A change wanting judgment, and which repository it lives in.
@@ -474,13 +480,28 @@ pub struct HomeData {
     pub lessons: Vec<cairn_core::Lesson>,
 }
 
-/// The page someone lands on after signing in.
-///
-/// Deliberately not an inventory of repositories. The question a person
-/// arrives with is what wants them, then what they were in the middle
-/// of, then what happened while they were away — in that order, because
-/// that is the order the answers are useful in.
-async fn home(State(app): State<AppState>, Palette(theme): Palette, viewer: Viewer) -> Response {
+#[derive(Deserialize)]
+struct LandingQuery {
+    #[serde(default)]
+    joined: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+/// `/` is two pages. Signed in, it is the home; signed out, it is what
+/// this thing is and a way to be told when it is ready. Redirecting a
+/// visitor to a sign-in form tells them nothing and asks for something
+/// they do not have.
+async fn root(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    headers: HeaderMap,
+    Query(flash): Query<LandingQuery>,
+) -> Response {
+    let Some(viewer) = viewer_from(&headers, &app) else {
+        return views::welcome(theme, flash.joined.is_some(), flash.error.as_deref())
+            .into_response();
+    };
     if viewer.1.repos.is_empty() {
         return views::first_run(theme, &viewer).into_response();
     }
@@ -488,6 +509,53 @@ async fn home(State(app): State<AppState>, Palette(theme): Palette, viewer: View
         Ok(data) => views::home(theme, &viewer, &data).into_response(),
         Err(err) => oops(err),
     }
+}
+
+#[derive(Deserialize)]
+struct WaitlistForm {
+    #[serde(default)]
+    email: String,
+    #[serde(default)]
+    note: String,
+}
+
+/// Take an address from a stranger, which means assuming the worst about
+/// who is calling: rate limited by source, validated, and answered the
+/// same way whether or not the address was already on the list.
+async fn join_waitlist(
+    State(app): State<AppState>,
+    crate::guard::ClientIp(client): crate::guard::ClientIp,
+    Form(form): Form<WaitlistForm>,
+) -> Response {
+    if let Some(peer) = client
+        && !app.waitlist_limiter.accept(peer)
+    {
+        return crate::guard::too_many_attempts();
+    }
+    let note = form.note.trim().to_owned();
+    match app.with_store(|store| store.join_waitlist(&form.email, Some(&note))) {
+        // Whether they were already on it is not the visitor's business
+        // to learn, and not worth a different answer.
+        Ok(_) => Redirect::to("/?joined=1").into_response(),
+        Err(cairn_core::CoreError::Invalid(message)) => {
+            Redirect::to(&format!("/?error={}", urlencode(&message))).into_response()
+        }
+        Err(err) => oops(err),
+    }
+}
+
+/// Percent-encode for a query string. Small enough to own.
+fn urlencode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            b' ' => "+".to_owned(),
+            other => format!("%{other:02X}"),
+        })
+        .collect()
 }
 
 fn gather_home(app: &AppState, who: &PrincipalId) -> Result<HomeData, cairn_core::CoreError> {
@@ -576,6 +644,11 @@ fn describe(envelope: cairn_core::Envelope) -> Option<Recent> {
         }),
         _ => None,
     }
+}
+
+#[derive(Deserialize)]
+struct FlashQuery {
+    error: Option<String>,
 }
 
 async fn login_page(

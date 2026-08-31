@@ -124,6 +124,15 @@ enum AdminCommand {
         db: PathBuf,
         principal: String,
     },
+    /// Show who has asked to be told when this is ready, or remove
+    /// someone who has asked to be forgotten.
+    Waitlist {
+        #[arg(long, default_value = "cairn.db")]
+        db: PathBuf,
+        /// Remove this address instead of listing.
+        #[arg(long)]
+        remove: Option<String>,
+    },
     /// Check that current state is exactly the log applied, by replaying
     /// it into empty projections and comparing. Exits non-zero on any
     /// divergence, so it can be run from cron or a health check.
@@ -252,6 +261,30 @@ async fn main() -> anyhow::Result<()> {
                 // someone else's admin capability to already exist.
                 store.set_password(&id, &id, &password)?;
                 println!("password set for {principal}");
+            }
+            AdminCommand::Waitlist { db, remove } => {
+                let mut store = Store::open(&db)
+                    .with_context(|| format!("opening forge database at {}", db.display()))?;
+                match remove {
+                    Some(email) => {
+                        if store.leave_waitlist(&email)? {
+                            println!("removed {email}");
+                        } else {
+                            println!("{email} was not on the list");
+                        }
+                    }
+                    None => {
+                        let entries = store.waitlist()?;
+                        println!("{} on the waitlist", entries.len());
+                        for (email, joined, note) in entries {
+                            let when = joined.get(..10).unwrap_or(&joined);
+                            match note {
+                                Some(note) => println!("  {when}  {email}  {note}"),
+                                None => println!("  {when}  {email}"),
+                            }
+                        }
+                    }
+                }
             }
             AdminCommand::Fsck { db, repos } => {
                 let store = Store::open(&db)

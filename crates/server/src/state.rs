@@ -50,6 +50,9 @@ pub struct AppState {
     secure_cookies: bool,
     proxy_trust: crate::guard::ProxyTrust,
     pub(crate) login_limiter: crate::guard::LoginLimiter,
+    /// A public form anyone can post to needs its own allowance, kept
+    /// apart from sign-in so neither can exhaust the other.
+    pub(crate) waitlist_limiter: crate::guard::LoginLimiter,
     /// Ephemeral secrets handed to proc-receive hooks, mapped to the
     /// authenticated pusher. In-memory only, expiring, never logged.
     push_tokens: Arc<Mutex<HashMap<String, (PrincipalId, Instant)>>>,
@@ -69,6 +72,7 @@ impl AppState {
             secure_cookies: false,
             proxy_trust: crate::guard::ProxyTrust::Connection,
             login_limiter: crate::guard::LoginLimiter::default(),
+            waitlist_limiter: crate::guard::LoginLimiter::new(5, Duration::from_secs(300)),
             push_tokens: Arc::new(Mutex::new(HashMap::new())),
             refs_needing_advancing: Arc::new(Mutex::new(Vec::new())),
         }
@@ -208,6 +212,17 @@ impl AppState {
     /// not only of a database file at rest.
     pub fn fsck(&self) -> cairn_core::CoreResult<Vec<String>> {
         self.with_store(|store| store.fsck())
+    }
+
+    /// The waitlist, and removing someone from it. Exposed on the state
+    /// because it is operational data an operator asks a running forge
+    /// about, not part of the graph.
+    pub fn waitlist(&self) -> cairn_core::CoreResult<Vec<(String, String, Option<String>)>> {
+        self.with_store(|store| store.waitlist())
+    }
+
+    pub fn leave_waitlist(&self, email: &str) -> cairn_core::CoreResult<bool> {
+        self.with_store(|store| store.leave_waitlist(email))
     }
 
     /// Every change the log says landed must actually be on the branch

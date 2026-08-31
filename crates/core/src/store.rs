@@ -62,6 +62,16 @@ CREATE TABLE IF NOT EXISTS browser_sessions (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_browser_sessions_principal ON browser_sessions (principal);
 CREATE INDEX IF NOT EXISTS idx_browser_sessions_expires ON browser_sessions (expires);
+
+-- People who asked to be told when this is ready. Not a decision about
+-- software and not derived from anything, so it is not in the log —
+-- which also means someone can be removed when they ask to be, which an
+-- append-only log could never honour.
+CREATE TABLE IF NOT EXISTS waitlist (
+  email  TEXT PRIMARY KEY,
+  joined TEXT NOT NULL,
+  note   TEXT
+) STRICT;
 ";
 
 /// Everything derived. Dropping and replaying these is always safe:

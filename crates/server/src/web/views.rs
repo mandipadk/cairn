@@ -217,6 +217,105 @@ fn clock(ts: &str) -> &str {
     ts.get(11..16).unwrap_or(ts)
 }
 
+/// The public page: what this is, and a way to be told when it is
+/// ready. Signed-out visitors get this instead of a sign-in form,
+/// because a form asks for something they do not have and tells them
+/// nothing about why they would want it.
+pub fn welcome(theme: Theme, joined: bool, error: Option<&str>) -> Markup {
+    layout(
+        theme,
+        None,
+        None,
+        None,
+        "cairn",
+        html! {
+            div class="welcome" {
+                header {
+                    div class="mark" {
+                        span class="stones" aria-hidden="true" { span {} span {} span {} }
+                        b { "cairn" }
+                    }
+                    a class="quiet" href="/login" { "Sign in" }
+                }
+
+                section class="lede" {
+                    h1 { "A git forge that records how software came to exist." }
+                    p {
+                        "Not who typed which line — what was claimed about the code, who "
+                        "re-ran those claims, who judged it, and why anything was allowed "
+                        "to land. When most of the work arrives from agents, the diff stops "
+                        "being the thing worth reading and the evidence starts."
+                    }
+
+                    @if joined {
+                        p class="joined" { "You are on the list. We will be in touch." }
+                    } @else {
+                        form class="join" method="post" action="/waitlist" {
+                            input name="email" type="email" required
+                                  autocomplete="email" placeholder="you@example.com"
+                                  aria-label="Email";
+                            button class="btn" type="submit" { "Join the waitlist" }
+                        }
+                        @if let Some(error) = error {
+                            p class="error" { (error) }
+                        }
+                        p class="fineprint" {
+                            "One address, kept so we can tell you when this opens up. "
+                            "Ask and it is deleted — it is deliberately not written to the "
+                            "log, because a log that cannot forget is the wrong place for a "
+                            "person's details."
+                        }
+                    }
+                }
+
+                section class="what" {
+                    div class="pair" {
+                        h3 { "Claims are contracts, not comments" }
+                        p {
+                            "\"The tests pass\" is recorded with the command that produced it, "
+                            "so somebody else can run it and say whether they saw the same thing. "
+                            "A claim nobody could reproduce blocks the change until it is settled."
+                        }
+                    }
+                    div class="pair" {
+                        h3 { "Merges explain themselves" }
+                        p {
+                            "Every merge carries the full evaluation that allowed it — which "
+                            "requirements were met, and on what evidence. Months later the "
+                            "question \"why did this land?\" has an answer that does not depend "
+                            "on anyone remembering."
+                        }
+                    }
+                    div class="pair" {
+                        h3 { "Attention is routed, not scrolled" }
+                        p {
+                            "Open work is ranked by what human judgment is actually worth on "
+                            "it — reviewers disagreeing, a disputed claim, code resting on "
+                            "argument alone — and a fixed share of unreviewed work is sampled "
+                            "regardless, so agent output cannot quietly become unread output."
+                        }
+                    }
+                    div class="pair" {
+                        h3 { "Imported history says so" }
+                        p {
+                            "History that predates the forge is recorded as imported, never "
+                            "dressed up as reviewed. The log would rather admit a gap than "
+                            "invent a decision."
+                        }
+                    }
+                }
+
+                footer {
+                    p {
+                        "Early software, self-hosted, and currently hosting itself. "
+                        "It speaks ordinary git: clone and push with the client you already have."
+                    }
+                }
+            }
+        },
+    )
+}
+
 pub fn login(theme: Theme, dev: bool, error: Option<&str>) -> Markup {
     layout(
         theme,

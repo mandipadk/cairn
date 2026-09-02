@@ -144,6 +144,7 @@ fn topbar(theme: Theme, viewer: &Viewer) -> Markup {
             }
             div class="baractions" {
                 a class="quiet" href="/new" { "New" }
+                a class="quiet menu" href="#nav" { "Menu" }
                 form method="post" action="/theme" {
                     input type="hidden" name="to" value=(theme.other());
                     button class="quiet" type="submit" { (theme.switch_label()) }
@@ -162,7 +163,7 @@ fn topbar(theme: Theme, viewer: &Viewer) -> Markup {
 fn sidebar(viewer: &Viewer, current: Option<&str>) -> Markup {
     let chrome = &viewer.1;
     html! {
-        nav class="side" {
+        nav class="side" id="nav" {
             h4 { "Repositories" }
             @if chrome.repos.is_empty() {
                 div class="row" { span class="n" { "None yet" } span {} }

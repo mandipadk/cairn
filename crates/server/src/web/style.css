@@ -647,3 +647,50 @@ a.srow:hover .t { text-decoration: underline; }
 .composer.claim input[type="text"] { width: 100%; box-sizing: border-box; }
 
 .tabs.filters { margin: -8px 0 8px 22px; }
+
+/* Narrower screens. No script runs here, so the layout reflows with
+   CSS alone: the rail drops under the page, then the sidebar drops
+   under the rail and becomes the foot of the page, reachable from a
+   Menu link in the bar. Rows that were laid out as columns stack. */
+.bar .menu { display: none; }
+pre { overflow-x: auto; }
+.tabs { overflow-x: auto; scrollbar-width: none; }
+
+@media (max-width: 1100px) {
+  .app { grid-template-columns: 232px minmax(0, 1fr); }
+  .rail { grid-column: 2; border-left: none; border-top: 1px solid var(--hair); }
+  .cols2 { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .cols2 > .colr { border-left: none; border-top: 1px solid var(--hair); }
+}
+
+@media (max-width: 760px) {
+  .app, .app.narrow { grid-template-columns: minmax(0, 1fr); }
+  .bar { grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; padding-right: 12px; }
+  .bar .brand { padding-left: 12px; }
+  .bar .search input { width: 100%; }
+  .bar .menu { display: inline; }
+  .baractions { gap: 10px; }
+  .baractions .avatar { display: none; }
+  .main { order: 2; padding: 14px 12px 40px; }
+  .rail { order: 3; grid-column: 1; padding: 16px 12px; }
+  .side {
+    order: 4; border-right: none; border-top: 1px solid var(--hair);
+    display: grid; grid-template-columns: 1fr 1fr; padding: 12px 0 24px;
+  }
+  .side h4, .side .sep { grid-column: 1 / -1; }
+  .side a, .side .row { padding: 8px 14px; }
+  .sechead { padding: 14px 6px 8px; }
+  .trow { padding: 10px 6px; }
+  .empty { padding: 28px 6px; }
+  .tabs.filters { margin-left: 6px; }
+  .composer { padding: 14px 6px 16px; }
+}
+
+@media (max-width: 600px) {
+  .trow, .notice { grid-template-columns: minmax(0, 1fr) !important; gap: 2px 8px; }
+  .notice .dot { display: none; }
+  .notice .when { text-align: left; }
+  .searchbig, .narrowcol { max-width: none; }
+  .bar .search { display: none; }
+  .bar { grid-template-columns: auto minmax(0, 1fr) auto; }
+}

@@ -15,12 +15,14 @@ mod auth;
 mod error;
 mod git_http;
 mod guard;
+pub mod mail;
 mod queue;
 mod routes;
 mod sse;
 mod state;
 mod web;
 
+pub use mail::Mailer;
 pub use queue::{reconcile_branches, spawn_queue_processor};
 pub use state::AppState;
 

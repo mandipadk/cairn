@@ -59,6 +59,25 @@ git push http://scout@127.0.0.1:6160/git/demo HEAD:refs/for/main
 Add `--dev` to accept asserted identity via the `x-cairn-principal`
 header, for local development only.
 
+## Mail
+
+The forge does not speak SMTP itself. Give it a command that accepts one
+message on stdin, and the address to send from:
+
+```sh
+cairn serve ... --mail-command "sendmail -t" --mail-from forge@example.org
+# or CAIRN_MAIL_COMMAND and CAIRN_MAIL_FROM
+```
+
+`msmtp -t`, or anything that behaves like `sendmail -t`, works the same
+way, and no credential has to live in the forge's process. With mail
+configured, a person who has put an email address on their settings
+page can reset a forgotten password from the sign-in page: the link
+works once, for thirty minutes, and the form answers everyone the same
+way whether or not it knows them. Without mail, the page says so, and
+whoever runs the forge makes a new sign-in link from the People page
+instead.
+
 ## Administration
 
 Having file access to the database is the root authority; these run

@@ -53,6 +53,11 @@ pub struct AppState {
     /// A public form anyone can post to needs its own allowance, kept
     /// apart from sign-in so neither can exhaust the other.
     pub(crate) waitlist_limiter: crate::guard::LoginLimiter,
+    /// Asking for a password reset is a public form too.
+    pub(crate) reset_limiter: crate::guard::LoginLimiter,
+    /// How the forge sends mail, if it can. None means it cannot, and
+    /// the pages that would need to say so.
+    mailer: Option<Arc<crate::mail::Mailer>>,
     /// Ephemeral secrets handed to proc-receive hooks, mapped to the
     /// authenticated pusher. In-memory only, expiring, never logged.
     push_tokens: Arc<Mutex<HashMap<String, (PrincipalId, Instant)>>>,
@@ -73,6 +78,8 @@ impl AppState {
             proxy_trust: crate::guard::ProxyTrust::Connection,
             login_limiter: crate::guard::LoginLimiter::default(),
             waitlist_limiter: crate::guard::LoginLimiter::new(5, Duration::from_secs(300)),
+            reset_limiter: crate::guard::LoginLimiter::new(5, Duration::from_secs(300)),
+            mailer: None,
             push_tokens: Arc::new(Mutex::new(HashMap::new())),
             refs_needing_advancing: Arc::new(Mutex::new(Vec::new())),
         }
@@ -192,6 +199,15 @@ impl AppState {
     }
 
     /// Supply the credential mirror pushes authenticate with.
+    pub fn with_mailer(mut self, mailer: crate::mail::Mailer) -> Self {
+        self.mailer = Some(Arc::new(mailer));
+        self
+    }
+
+    pub(crate) fn mailer(&self) -> Option<Arc<crate::mail::Mailer>> {
+        self.mailer.clone()
+    }
+
     pub fn with_mirror_credential(mut self, credential: impl Into<String>) -> Self {
         if let Some(git) = self.git.take() {
             self.git = Some(Arc::new(GitContext {

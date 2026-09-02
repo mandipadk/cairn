@@ -37,7 +37,20 @@ pub async fn boot() -> Forge {
 }
 
 pub async fn boot_with(object_format: &str) -> Forge {
-    boot_inner(object_format, true).await
+    boot_inner(object_format, true, None).await
+}
+
+/// A forge that can send mail, through a command of the test's choosing.
+pub async fn boot_mailing(command: &str) -> Forge {
+    boot_inner(
+        "sha1",
+        true,
+        Some(cairn_server::Mailer::command(
+            command,
+            "cairn@forge.example",
+        )),
+    )
+    .await
 }
 
 /// A forge with the dev identity header switched off — how a real
@@ -45,10 +58,10 @@ pub async fn boot_with(object_format: &str) -> Forge {
 /// asserting something about authentication has to use this, because the
 /// dev header bypasses tokens entirely.
 pub async fn boot_token_only() -> Forge {
-    boot_inner("sha1", false).await
+    boot_inner("sha1", false, None).await
 }
 
-async fn boot_inner(object_format: &str, dev: bool) -> Forge {
+async fn boot_inner(object_format: &str, dev: bool, mailer: Option<cairn_server::Mailer>) -> Forge {
     let tmp = tempfile::tempdir().unwrap();
     let repos = tmp.path().join("repos");
     let work = tmp.path().join("work");
@@ -103,6 +116,9 @@ async fn boot_inner(object_format: &str, dev: bool) -> Forge {
     let mut state = AppState::new(store).with_git(git_store, format!("http://{addr}"));
     if dev {
         state = state.with_dev_identity();
+    }
+    if let Some(mailer) = mailer {
+        state = state.with_mailer(mailer);
     }
     cairn_server::spawn_queue_processor(state.clone());
     let app = router(state.clone());

@@ -457,6 +457,95 @@ impl Store {
             .is_some()
     }
 
+    /// Where to reach this person, kept beside the credentials rather
+    /// than in the log: an address is changeable and is nobody else's
+    /// business, and a log that cannot forget is the wrong place for it.
+    pub fn set_contact(&mut self, who: &PrincipalId, email: &str) -> CoreResult<()> {
+        let email = email.trim();
+        require(valid_email(email), || {
+            "that does not look like an email address".into()
+        })?;
+        let now = jiff::Timestamp::now().to_string();
+        self.conn.execute(
+            "INSERT INTO contact (principal, email, set_at) VALUES (?, ?, ?)
+             ON CONFLICT (principal) DO UPDATE SET email = excluded.email, set_at = excluded.set_at",
+            rusqlite::params![who.as_str(), email, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn contact_of(&self, who: &PrincipalId) -> CoreResult<Option<String>> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT email FROM contact WHERE principal = ?")?
+            .query_row(rusqlite::params![who.as_str()], |row| row.get(0))
+            .optional()?)
+    }
+
+    /// Whose address this is, by exact match. Several people may share
+    /// one; the first registered wins, and a reset still only ever goes
+    /// to the address itself.
+    pub fn principal_by_email(&self, email: &str) -> CoreResult<Option<PrincipalId>> {
+        Ok(self
+            .conn
+            .prepare_cached(
+                "SELECT principal FROM contact WHERE email = ? ORDER BY set_at LIMIT 1",
+            )?
+            .query_row(rusqlite::params![email.trim()], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()?
+            .map(PrincipalId))
+    }
+
+    /// Begin a password reset: a secret that works once, for half an
+    /// hour, for one person. Earlier unused secrets for them die here,
+    /// so the newest link is the only one that works. Only the hash is
+    /// kept, as with every other secret.
+    pub fn begin_password_reset(&mut self, who: &PrincipalId) -> CoreResult<String> {
+        let target = raw::principal(&self.conn, who.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("principal {who}")))?;
+        require(target.kind == PrincipalKind::Human, || {
+            format!("{who} is not a person")
+        })?;
+        let secret = random_token_secret();
+        let expires = (jiff::Timestamp::now() + jiff::SignedDuration::from_mins(30)).to_string();
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "UPDATE password_resets SET used = 1 WHERE principal = ? AND used = 0",
+            rusqlite::params![who.as_str()],
+        )?;
+        tx.execute(
+            "INSERT INTO password_resets (token_hash, principal, expires) VALUES (?, ?, ?)",
+            rusqlite::params![token_hash(&secret), who.as_str(), expires],
+        )?;
+        tx.commit()?;
+        Ok(secret)
+    }
+
+    /// Spend a reset secret. Valid, unexpired and unused answers with
+    /// the person; anything else answers with nothing, and the caller
+    /// says the same thing either way.
+    pub fn redeem_password_reset(&mut self, secret: &str) -> CoreResult<Option<PrincipalId>> {
+        let now = jiff::Timestamp::now().to_string();
+        let tx = self.conn.transaction()?;
+        let who: Option<String> = tx
+            .prepare_cached(
+                "SELECT principal FROM password_resets
+                  WHERE token_hash = ? AND used = 0 AND expires > ?",
+            )?
+            .query_row(rusqlite::params![token_hash(secret), now], |row| row.get(0))
+            .optional()?;
+        if who.is_some() {
+            tx.execute(
+                "UPDATE password_resets SET used = 1 WHERE token_hash = ?",
+                rusqlite::params![token_hash(secret)],
+            )?;
+        }
+        tx.commit()?;
+        Ok(who.map(PrincipalId))
+    }
+
     pub fn password_matches(&self, principal: &PrincipalId, password: &str) -> bool {
         let stored = raw::credential(&self.conn, principal.as_str())
             .ok()

@@ -47,6 +47,8 @@ pub fn routes() -> Router<AppState> {
         .route("/waitlist", post(join_waitlist))
         .route("/assets/{file}", get(asset))
         .route("/login", get(login_page).post(login_submit))
+        .route("/forgot", get(forgot_page).post(forgot_submit))
+        .route("/reset", get(reset_page).post(reset_submit))
         .route("/logout", post(logout))
         .route("/theme", post(set_theme))
         .route("/search", get(search_page))
@@ -55,6 +57,7 @@ pub fn routes() -> Router<AppState> {
         .route("/inbox/read", post(inbox_read))
         .route("/you", get(you_page))
         .route("/you/settings", get(settings_page).post(change_password))
+        .route("/you/settings/email", post(change_email))
         .route("/you/tokens", get(tokens_page).post(token_action))
         .route("/agents", get(agents_page).post(agent_action))
         .route("/people", get(people_page).post(people_action))
@@ -362,18 +365,185 @@ struct Flash {
 }
 
 async fn settings_page(
+    State(app): State<AppState>,
     Palette(theme): Palette,
     viewer: Viewer,
     Query(flash): Query<Flash>,
 ) -> Response {
+    let email = app.with_store(|s| s.contact_of(&viewer.0)).unwrap_or(None);
     views::settings(
         theme,
         &viewer,
+        email.as_deref(),
         flash.error.as_deref(),
         flash.done.is_some(),
         flash.first.is_some(),
     )
     .into_response()
+}
+
+#[derive(Deserialize)]
+struct EmailForm {
+    #[serde(default)]
+    email: String,
+}
+
+async fn change_email(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Form(form): Form<EmailForm>,
+) -> Response {
+    match app.with_store(|s| s.set_contact(&viewer.0, &form.email)) {
+        Ok(()) => Redirect::to("/you/settings?done=1").into_response(),
+        Err(err) => Redirect::to(&format!(
+            "/you/settings?error={}",
+            urlencode(&err.to_string())
+        ))
+        .into_response(),
+    }
+}
+
+async fn forgot_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    Query(flash): Query<Flash>,
+) -> Response {
+    views::forgot(
+        theme,
+        app.mailer().is_some(),
+        flash.done.is_some(),
+        flash.error.as_deref(),
+    )
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct ForgotForm {
+    #[serde(default)]
+    who: String,
+}
+
+/// Ask for a reset. The answer is the same whether or not the name or
+/// address is known, so this form confirms nothing about who exists;
+/// the difference is a message that goes out, or does not.
+async fn forgot_submit(
+    State(app): State<AppState>,
+    crate::guard::ClientIp(client): crate::guard::ClientIp,
+    headers: HeaderMap,
+    Form(form): Form<ForgotForm>,
+) -> Response {
+    let Some(mailer) = app.mailer() else {
+        return Redirect::to("/forgot?error=This+forge+cannot+send+mail").into_response();
+    };
+    if let Some(peer) = client
+        && !app.reset_limiter.accept(peer)
+    {
+        return crate::guard::too_many_attempts();
+    }
+    let who = form.who.trim();
+    let found = if who.contains('@') {
+        app.with_store(|s| s.principal_by_email(who))
+            .unwrap_or(None)
+    } else {
+        PrincipalId::new(who)
+    };
+    if let Some(who) = found
+        && let Ok(Some(email)) = app.with_store(|s| s.contact_of(&who))
+        && let Ok(secret) = app.with_store(|s| s.begin_password_reset(&who))
+    {
+        let host = headers
+            .get(header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("localhost");
+        let scheme = headers
+            .get("x-forwarded-proto")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or(if app.secure_cookies() {
+                "https"
+            } else {
+                "http"
+            });
+        let link = format!("{scheme}://{host}/reset?token={}", urlencode(&secret));
+        let body = format!(
+            "Somebody asked to reset the password for {} on {host}.\n\n\
+             If that was you, open this link within thirty minutes; it works once:\n\n  {link}\n\n\
+             If it was not you, nothing has changed and you can ignore this.\n",
+            who.as_str()
+        );
+        // Sending happens off the async runtime: the mail command may
+        // take a moment, and a slow reset must not stall the forge.
+        let sent = tokio::task::spawn_blocking(move || {
+            mailer.send(&email, "Reset your cairn password", &body)
+        })
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
+        if let Err(err) = sent {
+            tracing::error!(%err, "password reset mail failed");
+        }
+    }
+    Redirect::to("/forgot?done=1").into_response()
+}
+
+#[derive(Deserialize)]
+struct ResetQuery {
+    #[serde(default)]
+    token: String,
+}
+
+async fn reset_page(
+    Palette(theme): Palette,
+    Query(query): Query<ResetQuery>,
+    Query(flash): Query<Flash>,
+) -> Response {
+    if query.token.trim().is_empty() {
+        return Redirect::to("/forgot").into_response();
+    }
+    views::reset(theme, &query.token, flash.error.as_deref()).into_response()
+}
+
+#[derive(Deserialize)]
+struct ResetForm {
+    #[serde(default)]
+    token: String,
+    #[serde(default)]
+    password: String,
+    #[serde(default)]
+    confirm: String,
+}
+
+async fn reset_submit(State(app): State<AppState>, Form(form): Form<ResetForm>) -> Response {
+    let back = |error: &str| {
+        Redirect::to(&format!(
+            "/reset?token={}&error={}",
+            urlencode(&form.token),
+            urlencode(error)
+        ))
+        .into_response()
+    };
+    if form.password != form.confirm {
+        return back("Those two did not match");
+    }
+    let who = match app.with_store(|s| s.redeem_password_reset(form.token.trim())) {
+        Ok(Some(who)) => who,
+        Ok(None) => {
+            return Redirect::to("/forgot?error=That+link+has+expired+or+been+used")
+                .into_response();
+        }
+        Err(err) => return oops(err),
+    };
+    match app.with_store(|s| s.set_password(&who, &who, &form.password)) {
+        Ok(env) => {
+            app.end_sessions_of(&who);
+            app.publish(&env);
+            Redirect::to("/login?error=Password+changed.+Sign+in.").into_response()
+        }
+        Err(err) => {
+            // The link was spent on a password the forge refused; give
+            // them a fresh one rather than a dead end.
+            let _ = app.with_store(|s| s.begin_password_reset(&who));
+            back(&err.to_string())
+        }
+    }
 }
 
 #[derive(Deserialize)]

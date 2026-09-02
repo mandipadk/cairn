@@ -47,6 +47,15 @@ enum Command {
         /// claim any address.
         #[arg(long)]
         trust_proxy: bool,
+        /// A command that accepts one mail message on stdin, such as
+        /// `sendmail -t` or `msmtp -t`. Enables password resets by
+        /// email. Read from CAIRN_MAIL_COMMAND when unset.
+        #[arg(long)]
+        mail_command: Option<String>,
+        /// The From address on mail the forge sends. Read from
+        /// CAIRN_MAIL_FROM when unset.
+        #[arg(long)]
+        mail_from: Option<String>,
     },
     /// Offline administration against the forge database. Having file
     /// access to the database is the root authority.
@@ -177,6 +186,8 @@ async fn main() -> anyhow::Result<()> {
             secure_cookies,
             mirror_token,
             trust_proxy,
+            mail_command,
+            mail_from,
         } => {
             let git_version = cairn_git::preflight().context("checking the git on PATH")?;
             let store = Store::open(&db)
@@ -201,6 +212,19 @@ async fn main() -> anyhow::Result<()> {
             }
             if trust_proxy {
                 state = state.trusting_proxy();
+            }
+            let mail_command = mail_command.or_else(|| std::env::var("CAIRN_MAIL_COMMAND").ok());
+            let mail_from = mail_from.or_else(|| std::env::var("CAIRN_MAIL_FROM").ok());
+            match (mail_command, mail_from) {
+                (Some(command), Some(from)) => {
+                    state = state.with_mailer(cairn_server::Mailer::command(command, from));
+                }
+                (Some(_), None) | (None, Some(_)) => {
+                    anyhow::bail!("mail needs both --mail-command and --mail-from");
+                }
+                (None, None) => {
+                    tracing::info!("no mail command configured: password resets are off");
+                }
             }
             if secure_cookies {
                 state = state.with_secure_cookies();

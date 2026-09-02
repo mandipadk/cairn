@@ -370,6 +370,78 @@ pub fn welcome(theme: Theme, joined: bool, error: Option<&str>) -> Markup {
     )
 }
 
+/// A page for somebody who is not signed in: the sign-in frame, a
+/// heading, and whatever the moment needs.
+fn outside(theme: Theme, title: &str, body: Markup) -> Markup {
+    layout(
+        theme,
+        None,
+        None,
+        None,
+        title,
+        html! {
+            div class="center" {
+                div class="login" {
+                    div class="mark" {
+                        span class="stones" aria-hidden="true" { span {} span {} span {} }
+                        b { "cairn" }
+                    }
+                    p style="font-weight: 500;" { (title) }
+                    (body)
+                }
+            }
+        },
+    )
+}
+
+pub fn forgot(theme: Theme, can_mail: bool, sent: bool, error: Option<&str>) -> Markup {
+    outside(
+        theme,
+        "Reset your password",
+        html! {
+            @if let Some(error) = error { p class="error" { (error) } }
+            @if sent {
+                p { "If that account has an email address on record, a link is on its way. It works once, for thirty minutes." }
+                p class="hint" { a href="/login" { "Back to sign in" } }
+            } @else if !can_mail {
+                p { "This forge cannot send mail, so it cannot reset a password by itself. Ask whoever runs it for a new sign-in link." }
+                p class="hint" { a href="/login" { "Back to sign in" } }
+            } @else {
+                form class="stack" method="post" action="/forgot" {
+                    div {
+                        label for="who" { "Your name or email" }
+                        input id="who" name="who" type="text" autocomplete="username" autofocus;
+                    }
+                    button class="btn" type="submit" { "Send a reset link" }
+                    p class="hint" { a href="/login" { "Back to sign in" } }
+                }
+            }
+        },
+    )
+}
+
+pub fn reset(theme: Theme, token: &str, error: Option<&str>) -> Markup {
+    outside(
+        theme,
+        "Choose a new password",
+        html! {
+            @if let Some(error) = error { p class="error" { (error) } }
+            form class="stack" method="post" action="/reset" {
+                input type="hidden" name="token" value=(token);
+                div {
+                    label for="password" { "New password" }
+                    input id="password" name="password" type="password" autocomplete="new-password" minlength="12" autofocus;
+                }
+                div {
+                    label for="confirm" { "Again" }
+                    input id="confirm" name="confirm" type="password" autocomplete="new-password" minlength="12";
+                }
+                button class="btn" type="submit" { "Set password" }
+            }
+        },
+    )
+}
+
 pub fn login(theme: Theme, dev: bool, error: Option<&str>) -> Markup {
     layout(
         theme,
@@ -398,6 +470,7 @@ pub fn login(theme: Theme, dev: bool, error: Option<&str>) -> Markup {
                             autocomplete="current-password";
                     }
                     button class="btn" type="submit" { "Sign in" }
+                    p class="hint" { a href="/forgot" { "Forgot your password?" } }
                     details class="alt" {
                         summary { "Sign in with a token" }
                         div {
@@ -852,6 +925,7 @@ pub fn transfer_offer(theme: Theme, viewer: &Viewer, repo: &Repo, error: Option<
 pub fn settings(
     theme: Theme,
     viewer: &Viewer,
+    email: Option<&str>,
     error: Option<&str>,
     done: bool,
     first: bool,
@@ -871,7 +945,17 @@ pub fn settings(
                     p class="note" { "You are signed in from an invitation, which worked once. Set a password to sign in next time." }
                 }
 
-                form class="stack" method="post" action="/you/settings" {
+                form class="stack" method="post" action="/you/settings/email" {
+                    div {
+                        label for="email" { "Email" }
+                        input id="email" name="email" type="email" autocomplete="email"
+                              value=[email] placeholder="where a password reset can reach you";
+                    }
+                    p class="hint" { "Kept beside your credentials, not in the log, and shown to nobody." }
+                    button class="btn" type="submit" { "Save email" }
+                }
+
+                form class="stack" method="post" action="/you/settings" style="margin-top: 28px;" {
                     div {
                         label for="password" { "New password" }
                         input id="password" name="password" type="password"

@@ -181,6 +181,15 @@ is itself a grant — an unscoped `admin` — held by whoever
 refusal names the missing capability and the exact grant that would fix
 it.
 
+A team is a principal that never acts: it holds grants, and its members
+act with them. Every authority check reads a principal's own grants and
+their teams' as one list, so joining a team is effective at once and
+leaving it is too. A team cannot sign in, cannot join a team, and cannot
+own a repository; only a person owns one. Ownership is offered rather
+than assigned — the owner offers, the person is told, and nothing moves
+until they accept, because owning carries every capability on the
+repository and whatever is in it.
+
 Repositories are private unless someone says otherwise, and that is
 enforced at the transport: a private repository cannot be cloned without
 a token, and it answers a stranger exactly as a repository that does not

@@ -133,6 +133,14 @@ pub enum Event {
     RepoTransferDeclined {
         repo: String,
     },
+    TeamMemberAdded {
+        team: PrincipalId,
+        member: PrincipalId,
+    },
+    TeamMemberRemoved {
+        team: PrincipalId,
+        member: PrincipalId,
+    },
 
     /// A repository set the rules everything on it must meet.
     PolicySet {
@@ -301,6 +309,8 @@ impl Event {
             Event::RepoTransferOffered { .. } => "repo_transfer_offered",
             Event::RepoTransferAccepted { .. } => "repo_transfer_accepted",
             Event::RepoTransferDeclined { .. } => "repo_transfer_declined",
+            Event::TeamMemberAdded { .. } => "team_member_added",
+            Event::TeamMemberRemoved { .. } => "team_member_removed",
             Event::PolicySet { .. } => "policy_set",
             Event::MirrorSet { .. } => "mirror_set",
             Event::MirrorPushed { .. } => "mirror_pushed",

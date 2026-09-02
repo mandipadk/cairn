@@ -90,6 +90,42 @@ fn layout_with(
     body: Markup,
     rail: Option<Markup>,
 ) -> Markup {
+    frame(theme, viewer, repo, None, active, title, body, rail)
+}
+
+/// A page that belongs to a section of the sidebar - the inbox, people,
+/// teams - rather than to a repository. It highlights its entry in the
+/// sidebar and renders no repository header, because it is not one.
+fn layout_section(
+    theme: Theme,
+    viewer: &Viewer,
+    section: &str,
+    title: &str,
+    body: Markup,
+) -> Markup {
+    frame(
+        theme,
+        Some(viewer),
+        None,
+        Some(section),
+        None,
+        title,
+        body,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn frame(
+    theme: Theme,
+    viewer: Option<&Viewer>,
+    repo: Option<&str>,
+    section: Option<&str>,
+    active: Option<Tab>,
+    title: &str,
+    body: Markup,
+    rail: Option<Markup>,
+) -> Markup {
     html! {
         (DOCTYPE)
         html lang="en" data-theme=(theme.attr()) {
@@ -104,7 +140,7 @@ fn layout_with(
                     Some(viewer) => {
                         div class={ "app" @if rail.is_none() { " narrow" } } {
                             (topbar(theme, viewer))
-                            (sidebar(viewer, repo))
+                            (sidebar(viewer, section.or(repo)))
                             main class="main" {
                                 @if let Some(repo) = repo {
                                     div class="repohead" {
@@ -201,6 +237,9 @@ fn sidebar(viewer: &Viewer, current: Option<&str>) -> Markup {
             @if chrome.admin {
                 a class={ @if current == Some("people") { "on" } @else { "" } } href="/people" {
                     span { "People" } span class="n" {}
+                }
+                a class={ @if current == Some("teams") { "on" } @else { "" } } href="/teams" {
+                    span { "Teams" } span class="n" {}
                 }
             }
             a href="/you/tokens" { span { "Tokens" } span class="n" {} }
@@ -652,11 +691,10 @@ pub fn you(theme: Theme, viewer: &Viewer, mine: &[(String, Change)]) -> Markup {
 /// row is a link to the thing itself, because a notice that cannot be
 /// acted on from where it is read is a to-do list somebody has to copy.
 pub fn inbox(theme: Theme, viewer: &Viewer, notices: &[Notice], unread: usize) -> Markup {
-    layout_with(
+    layout_section(
         theme,
-        Some(viewer),
-        Some("inbox"),
-        None,
+        viewer,
+        "inbox",
         "Inbox",
         html! {
             div class="sechead" {
@@ -690,7 +728,6 @@ pub fn inbox(theme: Theme, viewer: &Viewer, notices: &[Notice], unread: usize) -
                 }
             }
         },
-        None,
     )
 }
 
@@ -702,7 +739,7 @@ fn notice_href(notice: &Notice) -> String {
         (Some(repo), None) if notice.kind == "transfer" => format!("/{repo}/transfer"),
         (Some(repo), None) => format!("/{repo}"),
         (None, _) => match notice.kind.as_str() {
-            "granted" | "revoked" => "/you".to_owned(),
+            "team" => "/you".to_owned(),
             _ => "/you".to_owned(),
         },
     }
@@ -911,6 +948,90 @@ pub fn tokens(
     )
 }
 
+pub fn teams(
+    theme: Theme,
+    viewer: &Viewer,
+    teams: &[super::TeamRow],
+    repos: &[String],
+    error: Option<&str>,
+) -> Markup {
+    layout_section(
+        theme,
+        viewer,
+        "teams",
+        "Teams",
+        html! {
+            div class="sechead" { b { "Teams" } span { (teams.len()) } }
+            @if let Some(error) = error { p class="error" { (error) } }
+            @if teams.is_empty() {
+                p class="empty" { "None yet. A team holds authority; whoever is on it carries that authority, and loses it on leaving." }
+            }
+            @for row in teams {
+                div class="agent" {
+                    div class="trow" style="grid-template-columns: 150px minmax(0,1fr) auto;" {
+                        span style="font-weight: 500;" { (row.principal.id.as_str()) }
+                        span class="sec3" {
+                            @if row.members.is_empty() { "nobody yet" }
+                            @else { (row.members.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ")) }
+                        }
+                        span class="sec3" {
+                            @if row.grants.is_empty() { "holds nothing" }
+                            @else {
+                                (row.grants.iter().map(|g| format!("{} on {}",
+                                    g.actions.iter().map(|a| a.as_str()).collect::<Vec<_>>().join("/"),
+                                    g.repo.as_deref().unwrap_or("everything"))).collect::<Vec<_>>().join("; "))
+                            }
+                        }
+                    }
+                    div class="composer" {
+                        form class="inline" method="post" action="/teams" {
+                            input type="hidden" name="action" value="add";
+                            input type="hidden" name="team" value=(row.principal.id.as_str());
+                            input name="member" type="text" placeholder="add a person or agent" autocomplete="off";
+                            button class="vbtn" type="submit" { "Add" }
+                        }
+                        @for member in &row.members {
+                            form class="inline" method="post" action="/teams" {
+                                input type="hidden" name="action" value="remove";
+                                input type="hidden" name="team" value=(row.principal.id.as_str());
+                                input type="hidden" name="member" value=(member.as_str());
+                                button class="quiet" type="submit" { "remove " (member.as_str()) }
+                            }
+                        }
+                    }
+                    form class="composer" method="post" action="/teams" {
+                        input type="hidden" name="action" value="grant";
+                        input type="hidden" name="team" value=(row.principal.id.as_str());
+                        select name="repo" aria-label="Repository" {
+                            option value="" { "every repository" }
+                            @for repo in repos { option value=(repo) { (repo) } }
+                        }
+                        @for (name, label) in [("task", "task"), ("push", "push"), ("review", "review"), ("merge", "merge"), ("verify", "verify"), ("admin", "admin")] {
+                            label class="tick" { input type="checkbox" name=(name) value="1"; " " (label) }
+                        }
+                        button class="vbtn" type="submit" { "Grant" }
+                    }
+                }
+            }
+
+            div class="sechead" style="margin-top: 30px;" { b { "Add a team" } span {} }
+            form class="stack narrowcol" method="post" action="/teams" {
+                input type="hidden" name="action" value="create";
+                div {
+                    label for="id" { "Name" }
+                    input id="id" name="id" type="text" autocomplete="off"
+                          placeholder="lowercase, digits and hyphens";
+                }
+                div {
+                    label for="display" { "Display name" }
+                    input id="display" name="display" type="text" autocomplete="off";
+                }
+                button class="btn" type="submit" { "Add a team" }
+            }
+        },
+    )
+}
+
 pub fn people(
     theme: Theme,
     viewer: &Viewer,
@@ -918,11 +1039,10 @@ pub fn people(
     join_link: Option<&str>,
     error: Option<&str>,
 ) -> Markup {
-    layout_with(
+    layout_section(
         theme,
-        Some(viewer),
-        Some("people"),
-        None,
+        viewer,
+        "people",
         "People",
         html! {
             div class="sechead" { b { "People" } span { (people.len()) } }
@@ -961,7 +1081,6 @@ pub fn people(
                 button class="btn" type="submit" { "Add and make a link" }
             }
         },
-        None,
     )
 }
 
@@ -1930,6 +2049,18 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
             "dot idle",
             html! {
                 b { (actor) } " declined ownership of " (repo)
+            },
+        ),
+        Event::TeamMemberAdded { team, member } => (
+            "dot idle",
+            html! {
+                b { (actor) } " added " (member.as_str()) " to " (team.as_str())
+            },
+        ),
+        Event::TeamMemberRemoved { team, member } => (
+            "dot idle",
+            html! {
+                b { (actor) } " removed " (member.as_str()) " from " (team.as_str())
             },
         ),
         Event::PolicySet { repo, .. } => (

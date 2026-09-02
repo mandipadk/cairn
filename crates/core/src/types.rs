@@ -26,7 +26,10 @@ macro_rules! str_enum {
     };
 }
 
-str_enum!(PrincipalKind { Human => "human", Agent => "agent" });
+// A team is a principal that never acts: it holds grants, and its
+// members act with them. Authority given to a team is authority given
+// to whoever is on it today, and taken from whoever leaves.
+str_enum!(PrincipalKind { Human => "human", Agent => "agent", Team => "team" });
 
 str_enum!(
     /// Hash function of a repo's git object database.

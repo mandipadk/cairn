@@ -208,6 +208,9 @@ pub(crate) fn evaluate_against(
                     agent_models.push((model, verdict.by.as_str().to_owned()));
                 }
             }
+            // A team never acts, so it never gives a verdict; the arm
+            // exists so the compiler holds us to that if it changes.
+            PrincipalKind::Team => {}
         }
     }
     let (description, satisfied) = match policy.independence {

@@ -1952,3 +1952,62 @@ fn ownership_moves_only_when_the_other_side_says_yes() {
 
     assert!(store.fsck().unwrap().is_empty());
 }
+
+#[test]
+fn a_team_holds_authority_and_its_members_carry_it() {
+    let (mut store, human, _scout, _) = seeded();
+    let crew = principal("crew");
+    let bee = principal("bee");
+    store
+        .register_principal(&human, &crew, PrincipalKind::Team, "Crew", None, None)
+        .unwrap();
+    store
+        .register_principal(&human, &bee, PrincipalKind::Human, "Bee", None, None)
+        .unwrap();
+    store
+        .issue_grant(&human, &crew, Some("forge"), vec![Capability::Push], None)
+        .unwrap();
+
+    // Bee holds nothing of their own on forge.
+    assert!(matches!(
+        store
+            .open_change(&bee, ChangeSpec::new("forge", "main", "Bee's work"))
+            .unwrap_err(),
+        CoreError::Forbidden(_)
+    ));
+    assert!(!store.may_read(&bee, "forge"));
+
+    // On the team, bee carries its grant, at once.
+    store.add_team_member(&human, &crew, &bee).unwrap();
+    assert!(store.may_read(&bee, "forge"));
+    let (change, _, _) = store
+        .open_change(&bee, ChangeSpec::new("forge", "main", "Bee's work"))
+        .unwrap();
+    assert_eq!(store.inbox(&bee, 5).unwrap()[0].kind, "team");
+
+    // Off the team, gone at once; what bee already did stands.
+    store.remove_team_member(&human, &crew, &bee).unwrap();
+    assert!(!store.may_read(&bee, "forge"));
+    assert!(
+        store
+            .push_revision(&bee, &change, OID, None, "more")
+            .is_err()
+    );
+
+    // A team never acts, never signs in, never joins a team, never owns.
+    assert!(matches!(
+        store
+            .open_change(&crew, ChangeSpec::new("forge", "main", "x"))
+            .unwrap_err(),
+        CoreError::Forbidden(_)
+    ));
+    assert!(store.mint_token(&human, &crew, None).is_err());
+    let other = principal("other-team");
+    store
+        .register_principal(&human, &other, PrincipalKind::Team, "Other", None, None)
+        .unwrap();
+    assert!(store.add_team_member(&human, &other, &crew).is_err());
+    assert!(store.offer_transfer(&human, "forge", &crew).is_err());
+
+    assert!(store.fsck().unwrap().is_empty());
+}

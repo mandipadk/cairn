@@ -991,6 +991,54 @@ pub async fn lessons(
     Ok(Json(json!(lessons)))
 }
 
+// ---- teams ----
+
+#[derive(Deserialize)]
+pub struct Membership {
+    pub member: PrincipalId,
+}
+
+pub async fn list_members(
+    State(app): State<AppState>,
+    _actor: Actor,
+    Path(team): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let team = PrincipalId(team);
+    let record = found(app.with_store(|s| s.principal(&team))?, "team")?;
+    if record.kind != PrincipalKind::Team {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "team not found".to_owned(),
+        ));
+    }
+    let members = app.with_store(|s| s.members_of(&team))?;
+    Ok(Json(json!({ "team": team, "members": members })))
+}
+
+pub async fn add_member(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(team): Path<String>,
+    Json(body): Json<Membership>,
+) -> ApiResult<Json<Value>> {
+    let env = app.with_store(|s| s.add_team_member(&actor.0, &PrincipalId(team), &body.member))?;
+    app.publish(&env);
+    Ok(committed(None, &env))
+}
+
+pub async fn remove_member(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(team): Path<String>,
+    Json(body): Json<Membership>,
+) -> ApiResult<Json<Value>> {
+    let env =
+        app.with_store(|s| s.remove_team_member(&actor.0, &PrincipalId(team), &body.member))?;
+    app.publish(&env);
+    Ok(committed(None, &env))
+}
+
 // ---- search ----
 
 #[derive(Deserialize)]

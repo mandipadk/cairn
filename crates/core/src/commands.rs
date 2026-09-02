@@ -33,8 +33,15 @@ pub(crate) fn token_hash(secret: &str) -> String {
 }
 
 fn ensure_actor(tx: &Transaction, actor: &PrincipalId) -> CoreResult<Principal> {
-    raw::principal(tx, actor.as_str())?
-        .ok_or_else(|| CoreError::NotFound(format!("principal {actor}")))
+    let principal = raw::principal(tx, actor.as_str())?
+        .ok_or_else(|| CoreError::NotFound(format!("principal {actor}")))?;
+    // A team never acts. Its members do, carrying its grants.
+    if principal.kind == PrincipalKind::Team {
+        return Err(CoreError::Forbidden(format!(
+            "{actor} is a team; teams hold authority and their members act with it"
+        )));
+    }
+    Ok(principal)
 }
 
 /// The law: humans are sovereign; agents act only under a live grant
@@ -64,7 +71,7 @@ fn authorize(
         return Ok(principal);
     }
 
-    let grants = raw::grants_of(tx, actor.as_str())?;
+    let grants = raw::effective_grants(tx, actor.as_str())?;
     let now = jiff::Timestamp::now().to_string();
     if raw::grants_cover(&grants, action, repo, &now) {
         return Ok(principal);
@@ -178,7 +185,7 @@ fn may_create_repo(tx: &Transaction, actor: &PrincipalId) -> CoreResult<()> {
     if principal.kind == PrincipalKind::Human {
         return Ok(());
     }
-    let grants = raw::grants_of(tx, actor.as_str())?;
+    let grants = raw::effective_grants(tx, actor.as_str())?;
     let now = jiff::Timestamp::now().to_string();
     if raw::grants_cover(&grants, Capability::Admin, None, &now) {
         return Ok(());
@@ -587,7 +594,7 @@ impl Store {
         if record.owner == *actor {
             return true;
         }
-        let Ok(grants) = raw::grants_of(&self.conn, actor.as_str()) else {
+        let Ok(grants) = raw::effective_grants(&self.conn, actor.as_str()) else {
             return false;
         };
         let now = jiff::Timestamp::now().to_string();
@@ -616,7 +623,7 @@ impl Store {
     /// Whether this principal holds the unscoped admin grant that
     /// running the forge consists of.
     pub fn is_admin(&self, actor: &PrincipalId) -> bool {
-        let Ok(grants) = raw::grants_of(&self.conn, actor.as_str()) else {
+        let Ok(grants) = raw::effective_grants(&self.conn, actor.as_str()) else {
             return false;
         };
         let now = jiff::Timestamp::now().to_string();
@@ -724,6 +731,65 @@ impl Store {
             actor,
             Event::RepoTransferDeclined {
                 repo: repo.to_owned(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
+    /// Put somebody on a team. Running the forge is what this is, since
+    /// a team's grants become theirs at once; and a team cannot contain
+    /// a team, because authority should be readable in one step.
+    pub fn add_team_member(
+        &mut self,
+        actor: &PrincipalId,
+        team: &PrincipalId,
+        member: &PrincipalId,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        authorize(&tx, actor, Capability::Admin, None)?;
+        let team_record = raw::principal(&tx, team.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("principal {team}")))?;
+        require(team_record.kind == PrincipalKind::Team, || {
+            format!("{team} is not a team")
+        })?;
+        let who = raw::principal(&tx, member.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("principal {member}")))?;
+        require(who.kind != PrincipalKind::Team, || {
+            "a team cannot join a team".to_owned()
+        })?;
+        let env = append(
+            &tx,
+            actor,
+            Event::TeamMemberAdded {
+                team: team.clone(),
+                member: member.clone(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
+    pub fn remove_team_member(
+        &mut self,
+        actor: &PrincipalId,
+        team: &PrincipalId,
+        member: &PrincipalId,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        authorize(&tx, actor, Capability::Admin, None)?;
+        require(
+            raw::members_of(&tx, team.as_str())?
+                .iter()
+                .any(|m| m == member),
+            || format!("{member} is not on {team}"),
+        )?;
+        let env = append(
+            &tx,
+            actor,
+            Event::TeamMemberRemoved {
+                team: team.clone(),
+                member: member.clone(),
             },
         )?;
         tx.commit()?;
@@ -1533,8 +1599,11 @@ impl Store {
     ) -> CoreResult<(TokenId, String, Envelope)> {
         let tx = self.conn.transaction()?;
         let acting = ensure_actor(&tx, actor)?;
-        raw::principal(&tx, principal.as_str())?
+        let subject = raw::principal(&tx, principal.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("principal {principal}")))?;
+        require(subject.kind != PrincipalKind::Team, || {
+            format!("{principal} is a team, and a team never signs in")
+        })?;
         if actor != principal && acting.kind != PrincipalKind::Human {
             return Err(CoreError::Forbidden(format!(
                 "{actor} may not mint tokens for {principal}: only the principal itself or a human"

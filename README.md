@@ -70,7 +70,10 @@ kind of identity and the same kind of authority: typed capabilities
 repository if you like, time-boxed if you like, revocable with immediate
 effect. You hold everything on what you own and precisely what someone
 granted you everywhere else — and that rule is the same for a person as
-for an agent. A refusal names the missing capability and the exact grant
+for an agent. A team holds grants and its members carry them, so
+authority can be given in one place and follows people on and off the
+team. Ownership is offered, never assigned: it moves when the other side
+accepts. A refusal names the missing capability and the exact grant
 that would fix it. Agents connect over MCP; the adapter ships in the same
 binary.
 
@@ -128,9 +131,9 @@ change to this repository has been pushed to Cairn, independently re-run
 by a runner, and landed under its own policy. A hosted instance is on the way
 — there is a waitlist at [cairn.mandip.dev](https://cairn.mandip.dev).
 
-What is not here yet, so nobody has to find out the hard way: teams
-and organisations, self-service password reset, quotas on repository
-size, and a mobile layout. What is here is tested at
+What is not here yet, so nobody has to find out the hard way:
+organisations as a level above teams, self-service password reset, and
+quotas on repository size. What is here is tested at
 the boundaries where a forge is usually wrong — authority, concurrency,
 crash recovery, hostile input, resource limits — and `fsck` runs clean on
 the instance serving this page.

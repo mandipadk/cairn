@@ -58,6 +58,7 @@ pub fn routes() -> Router<AppState> {
         .route("/you/tokens", get(tokens_page).post(token_action))
         .route("/agents", get(agents_page).post(agent_action))
         .route("/people", get(people_page).post(people_action))
+        .route("/teams", get(teams_page).post(teams_action))
         .route("/join", get(join))
         .route("/{repo}", get(repo_page))
         .route("/{repo}/tree/{*path}", get(tree_page))
@@ -476,6 +477,157 @@ async fn token_action(
 }
 
 /// An agent and everything it is allowed to do.
+/// A team as the teams page shows it: its members and what it holds.
+pub struct TeamRow {
+    pub principal: cairn_core::Principal,
+    pub members: Vec<PrincipalId>,
+    pub grants: Vec<cairn_core::Grant>,
+}
+
+/// Teams: authority held in one place and carried by whoever is on the
+/// team today. Running the forge is what this page is for.
+async fn teams_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    viewer: Viewer,
+    Query(flash): Query<Flash>,
+) -> Response {
+    if !viewer.1.admin {
+        return not_found();
+    }
+    let data = app.with_store(|store| {
+        let mut teams = Vec::new();
+        for principal in store.principals()? {
+            if principal.kind != cairn_core::PrincipalKind::Team {
+                continue;
+            }
+            teams.push(TeamRow {
+                members: store.members_of(&principal.id)?,
+                grants: store.grants_of(&principal.id)?,
+                principal,
+            });
+        }
+        let repos: Vec<String> = store.repos()?.into_iter().map(|r| r.name).collect();
+        Ok::<_, cairn_core::CoreError>((teams, repos))
+    });
+    match data {
+        Ok((teams, repos)) => {
+            views::teams(theme, &viewer, &teams, &repos, flash.error.as_deref()).into_response()
+        }
+        Err(err) => oops(err),
+    }
+}
+
+#[derive(Deserialize)]
+struct TeamForm {
+    #[serde(default)]
+    action: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    display: String,
+    #[serde(default)]
+    team: String,
+    #[serde(default)]
+    member: String,
+    #[serde(default)]
+    repo: String,
+    task: Option<String>,
+    push: Option<String>,
+    review: Option<String>,
+    merge: Option<String>,
+    verify: Option<String>,
+    admin: Option<String>,
+}
+
+async fn teams_action(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Form(form): Form<TeamForm>,
+) -> Response {
+    if !viewer.1.admin {
+        return not_found();
+    }
+    let back = |error: Option<String>| match error {
+        Some(error) => Redirect::to(&format!("/teams?error={}", urlencode(&error))).into_response(),
+        None => Redirect::to("/teams").into_response(),
+    };
+    let result = match form.action.as_str() {
+        "create" => {
+            let Some(id) = PrincipalId::new(form.id.trim()) else {
+                return back(Some(format!("{:?} is not a valid name", form.id)));
+            };
+            let display = form.display.trim();
+            let display = if display.is_empty() {
+                id.as_str()
+            } else {
+                display
+            };
+            app.with_store(|s| {
+                s.register_principal(
+                    &viewer.0,
+                    &id,
+                    cairn_core::PrincipalKind::Team,
+                    display,
+                    None,
+                    None,
+                )
+            })
+        }
+        "add" | "remove" => {
+            let (Some(team), Some(member)) = (
+                PrincipalId::new(form.team.trim()),
+                PrincipalId::new(form.member.trim()),
+            ) else {
+                return back(Some("Say which team and who".to_owned()));
+            };
+            if form.action == "add" {
+                app.with_store(|s| s.add_team_member(&viewer.0, &team, &member))
+            } else {
+                app.with_store(|s| s.remove_team_member(&viewer.0, &team, &member))
+            }
+        }
+        "grant" => {
+            let Some(team) = PrincipalId::new(form.team.trim()) else {
+                return back(Some("Say which team".to_owned()));
+            };
+            let actions: Vec<cairn_core::Capability> = [
+                (form.task.is_some(), cairn_core::Capability::Task),
+                (form.push.is_some(), cairn_core::Capability::Push),
+                (form.review.is_some(), cairn_core::Capability::Review),
+                (form.merge.is_some(), cairn_core::Capability::Merge),
+                (form.verify.is_some(), cairn_core::Capability::Verify),
+                (form.admin.is_some(), cairn_core::Capability::Admin),
+            ]
+            .into_iter()
+            .filter_map(|(ticked, capability)| ticked.then_some(capability))
+            .collect();
+            if actions.is_empty() {
+                return back(Some("pick at least one capability".to_owned()));
+            }
+            let repo = form.repo.trim();
+            app.with_store(|s| {
+                s.issue_grant(
+                    &viewer.0,
+                    &team,
+                    (!repo.is_empty()).then_some(repo),
+                    actions,
+                    None,
+                )
+            })
+            .map(|(_, env)| env)
+        }
+        _ => return back(Some("Unknown action".to_owned())),
+    };
+    match result {
+        Ok(env) => {
+            app.publish(&env);
+            back(None)
+        }
+        Err(err) => back(Some(err.to_string())),
+    }
+}
+
 /// A person as the people page shows them: who they are, and whether
 /// they can sign in yet.
 pub struct PersonRow {

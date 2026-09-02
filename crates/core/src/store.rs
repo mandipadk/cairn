@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -159,6 +159,13 @@ CREATE TABLE IF NOT EXISTS notices (
   PRIMARY KEY (seq, recipient)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_notices_recipient ON notices (recipient, seq);
+
+CREATE TABLE IF NOT EXISTS team_members (
+  team   TEXT NOT NULL,
+  member TEXT NOT NULL,
+  PRIMARY KEY (team, member)
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_team_members_member ON team_members (member);
 CREATE INDEX IF NOT EXISTS idx_event_scope_subject ON event_scope (subject);
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -277,6 +284,7 @@ const PROJECTION_TABLES: &[&str] = &[
     "principals",
     "event_scope",
     "notices",
+    "team_members",
     "tokens",
     "grants",
     "repos",
@@ -743,8 +751,11 @@ fn record_scope(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             (repo.flatten(), None)
         }
 
-        // That a person exists is not a secret on the forge they are on.
-        PrincipalRegistered { .. } => (None, None),
+        // That a person exists is not a secret on the forge they are on,
+        // and neither is who is on which team: membership is authority.
+        PrincipalRegistered { .. } | TeamMemberAdded { .. } | TeamMemberRemoved { .. } => {
+            (None, None)
+        }
     };
 
     tx.execute(
@@ -1126,6 +1137,23 @@ fn record_notices(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             )
         }),
 
+        TeamMemberAdded { team, member } => Some((
+            member.as_str().to_owned(),
+            "team",
+            None,
+            None,
+            None,
+            format!("{actor} added you to {team}"),
+        )),
+        TeamMemberRemoved { team, member } => Some((
+            member.as_str().to_owned(),
+            "team",
+            None,
+            None,
+            None,
+            format!("{actor} removed you from {team}"),
+        )),
+
         MirrorPushed {
             repo,
             branch,
@@ -1322,6 +1350,18 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             tx.execute(
                 "UPDATE repos SET pending_owner = NULL WHERE name = ?",
                 params![repo],
+            )?;
+        }
+        Event::TeamMemberAdded { team, member } => {
+            tx.execute(
+                "INSERT OR IGNORE INTO team_members (team, member) VALUES (?, ?)",
+                params![team.as_str(), member.as_str()],
+            )?;
+        }
+        Event::TeamMemberRemoved { team, member } => {
+            tx.execute(
+                "DELETE FROM team_members WHERE team = ? AND member = ?",
+                params![team.as_str(), member.as_str()],
             )?;
         }
         Event::MirrorSet { repo, mirror } => {

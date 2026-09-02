@@ -603,6 +603,34 @@ pub(crate) mod raw {
         .collect()
     }
 
+    pub fn teams_of(conn: &Connection, member: &str) -> CoreResult<Vec<String>> {
+        Ok(conn
+            .prepare_cached("SELECT team FROM team_members WHERE member = ? ORDER BY team")?
+            .query_map(params![member], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn members_of(conn: &Connection, team: &str) -> CoreResult<Vec<PrincipalId>> {
+        Ok(conn
+            .prepare_cached("SELECT member FROM team_members WHERE team = ? ORDER BY member")?
+            .query_map(params![team], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(PrincipalId)
+            .collect())
+    }
+
+    /// What a principal may do: their own grants and their teams', as
+    /// one list. Every authority check reads this, so joining a team is
+    /// effective at once and leaving it is too.
+    pub fn effective_grants(conn: &Connection, principal: &str) -> CoreResult<Vec<Grant>> {
+        let mut grants = grants_of(conn, principal)?;
+        for team in teams_of(conn, principal)? {
+            grants.extend(grants_of(conn, &team)?);
+        }
+        Ok(grants)
+    }
+
     /// Does this grant list cover `action` on `repo` right now?
     pub fn grants_cover(
         grants: &[Grant],
@@ -874,6 +902,19 @@ impl Store {
                 })
             })
             .optional()?)
+    }
+
+    pub fn teams_of(&self, member: &PrincipalId) -> CoreResult<Vec<String>> {
+        raw::teams_of(&self.conn, member.as_str())
+    }
+
+    pub fn members_of(&self, team: &PrincipalId) -> CoreResult<Vec<PrincipalId>> {
+        raw::members_of(&self.conn, team.as_str())
+    }
+
+    /// Own grants plus every team's, which is what authority checks use.
+    pub fn effective_grants(&self, principal: &PrincipalId) -> CoreResult<Vec<Grant>> {
+        raw::effective_grants(&self.conn, principal.as_str())
     }
 
     pub fn principals(&self) -> CoreResult<Vec<Principal>> {

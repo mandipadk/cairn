@@ -144,6 +144,10 @@ async fn the_page_shows_the_count_and_the_words() {
     );
     assert!(page.contains("1 unread"));
     assert!(
+        !page.contains(r#"class="repohead""#),
+        "a section page is not a repository"
+    );
+    assert!(
         page.contains(r#"href="/demo/changes/1""#),
         "a notice links to its subject"
     );

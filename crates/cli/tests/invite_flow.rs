@@ -52,6 +52,10 @@ async fn an_invitation_signs_somebody_in_exactly_once() {
     let (_, page) = page_with_cookie(app, &location, &ada).await;
     assert!(page.contains("/join?token="), "{page}");
     assert!(page.contains("no password yet"));
+    assert!(
+        !page.contains(r#"class="repohead""#),
+        "a section page is not a repository"
+    );
 
     // Following it signs bee in and lands on settings, told to set a password.
     let response = tower::ServiceExt::oneshot(

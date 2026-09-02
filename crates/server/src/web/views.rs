@@ -96,7 +96,7 @@ fn layout_with(
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 title { (title) " · cairn" }
-                link rel="stylesheet" href="/assets/app.css";
+                link rel="stylesheet" href=(super::stylesheet_href());
             }
             body {
                 @match viewer {

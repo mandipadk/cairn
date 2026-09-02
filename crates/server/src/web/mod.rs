@@ -45,7 +45,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(root))
         .route("/waitlist", post(join_waitlist))
-        .route("/assets/app.css", get(stylesheet))
+        .route("/assets/{file}", get(asset))
         .route("/login", get(login_page).post(login_submit))
         .route("/logout", post(logout))
         .route("/theme", post(set_theme))
@@ -72,8 +72,42 @@ pub fn routes() -> Router<AppState> {
         .route("/{repo}/lessons", get(lessons_page))
 }
 
-async fn stylesheet() -> impl IntoResponse {
-    ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], STYLE)
+/// The stylesheet's content hash, fixed for the life of the binary.
+///
+/// The page links to `/assets/app.<hash>.css`, so a deploy that changes
+/// the CSS changes the URL, and the old one can be cached forever by
+/// browsers and by whatever sits in front of the forge. Without this a
+/// returning visitor gets last week's layout until some cache expires,
+/// and nobody can tell from the outside why the page looks wrong.
+static STYLE_HASH: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(STYLE.as_bytes());
+    digest.iter().take(6).map(|b| format!("{b:02x}")).collect()
+});
+
+pub(crate) fn stylesheet_href() -> String {
+    format!("/assets/app.{}.css", *STYLE_HASH)
+}
+
+/// Serve the stylesheet under its hashed name, immutable, or under its
+/// bare name for anything that still asks that way, uncached.
+async fn asset(Path(file): Path<String>) -> Response {
+    let hashed = format!("app.{}.css", *STYLE_HASH);
+    let cache = if file == hashed {
+        "public, max-age=31536000, immutable"
+    } else if file == "app.css" {
+        "no-cache"
+    } else {
+        return not_found();
+    };
+    (
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            (header::CACHE_CONTROL, cache),
+        ],
+        STYLE,
+    )
+        .into_response()
 }
 
 /// Sizes for people, not for machines.

@@ -63,6 +63,7 @@ pub fn routes() -> Router<AppState> {
         .route("/{repo}/changes", get(changes_page))
         .route("/{repo}/changes/{number}", get(change_page))
         .route("/{repo}/changes/{number}/verdict", post(submit_verdict))
+        .route("/{repo}/changes/{number}/claim", post(submit_claim))
         .route("/{repo}/changes/{number}/enqueue", post(submit_enqueue))
         .route("/{repo}/landing", get(landing_page))
         .route("/{repo}/log", get(log_page))
@@ -1431,6 +1432,69 @@ async fn change_page(
         error: query.error.as_deref(),
     })
     .into_response()
+}
+
+#[derive(Deserialize)]
+struct ClaimForm {
+    revision: i64,
+    kind: String,
+    #[serde(default)]
+    command: String,
+    passed: String,
+    summary: String,
+    #[serde(default)]
+    unchecked: String,
+}
+
+/// Attach a claim from the page. A person recording what they ran, or an
+/// agent driving the UI, gets the same contract the API offers: kind,
+/// the command that produced it, what was seen, and what was left
+/// unchecked - which is a comma-separated field here because a form
+/// cannot carry a list.
+async fn submit_claim(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Path((repo, number)): Path<(String, i64)>,
+    Form(form): Form<ClaimForm>,
+) -> Response {
+    let back = format!("/{repo}/changes/{number}");
+    let Some(kind) = cairn_core::ClaimKind::parse(&form.kind) else {
+        return flash(&back, "Pick a kind");
+    };
+    let passed = match form.passed.as_str() {
+        "yes" => true,
+        "no" => false,
+        _ => return flash(&back, "Say whether it passed"),
+    };
+    if let Err(response) = readable(&app, &viewer, &repo) {
+        return *response;
+    }
+    let change = match app.with_store(|s| s.change_by_number(&repo, number)) {
+        Ok(Some(change)) => change.id,
+        Ok(None) => return not_found(),
+        Err(err) => return oops(err),
+    };
+    let command = form.command.trim();
+    let spec = cairn_core::ClaimSpec {
+        kind,
+        command: (!command.is_empty()).then(|| command.to_owned()),
+        passed,
+        summary: form.summary.trim().to_owned(),
+        unchecked: form
+            .unchecked
+            .split(',')
+            .map(str::trim)
+            .filter(|gap| !gap.is_empty())
+            .map(str::to_owned)
+            .collect(),
+    };
+    match app.with_store(|s| s.attach_claim(&viewer.0, &change, form.revision, spec)) {
+        Ok((_, env)) => {
+            app.publish(&env);
+            Redirect::to(&back).into_response()
+        }
+        Err(err) => flash(&back, &err.to_string()),
+    }
 }
 
 #[derive(Deserialize)]

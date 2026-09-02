@@ -1808,13 +1808,7 @@ fn notices_go_to_whose_work_it_is_and_never_to_the_actor() {
 
     // Authority given to you is addressed to you.
     store
-        .issue_grant(
-            &human,
-            &scout,
-            Some("forge"),
-            vec![Capability::Merge],
-            None,
-        )
+        .issue_grant(&human, &scout, Some("forge"), vec![Capability::Merge], None)
         .unwrap();
     let scouts = store.inbox(&scout, 10).unwrap();
     assert_eq!(scouts[0].kind, "granted");

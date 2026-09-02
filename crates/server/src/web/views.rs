@@ -1263,6 +1263,28 @@ pub fn change(page: ChangePage) -> Markup {
                         @for claim in claims {
                             (claim_row(claim, verifications))
                         }
+                        @if change.state == ChangeState::Open {
+                            form class="composer claim" method="post" action={ "/" (repo) "/changes/" (change.number) "/claim" } {
+                                input type="hidden" name="revision" value=(shown);
+                                div class="line" {
+                                    select name="kind" aria-label="Kind" {
+                                        option value="test" { "test" }
+                                        option value="lint" { "lint" }
+                                        option value="typecheck" { "typecheck" }
+                                        option value="build" { "build" }
+                                        option value="manual" { "manual" }
+                                        option value="reasoning" { "reasoning" }
+                                    }
+                                    input type="text" name="command" placeholder="Command that produced it" autocomplete="off";
+                                }
+                                input type="text" name="summary" placeholder="What you saw — required" required;
+                                input type="text" name="unchecked" placeholder="What this did not check, comma-separated";
+                                div class="line" {
+                                    button class="vbtn" type="submit" name="passed" value="yes" { "Passed" }
+                                    button class="vbtn" type="submit" name="passed" value="no" { "Failed" }
+                                }
+                            }
+                        }
                     }
                     div class="rsec" {
                         span class="cap" { "Judgment" }

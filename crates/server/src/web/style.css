@@ -639,3 +639,9 @@ a.srow:hover .t { text-decoration: underline; }
 .day { padding: 16px 22px 4px; font-size: 11.5px; color: var(--ink3); }
 .sechead .act { margin-left: auto; color: var(--ink3); font-size: 12px; background: none; border: none; padding: 0; cursor: pointer; }
 .sechead .act:hover { color: var(--ink); }
+
+/* A claim is written in the rail, so its composer stacks rather than flows. */
+.composer.claim { display: grid; gap: 8px; padding: 10px 0 12px; border-top: none; }
+.composer.claim .line { display: flex; gap: 8px; align-items: center; }
+.composer.claim .line > * { flex: 1; min-width: 0; }
+.composer.claim input[type="text"] { width: 100%; box-sizing: border-box; }

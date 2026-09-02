@@ -744,7 +744,7 @@ pub(crate) mod raw {
         });
         let rows = conn
             .prepare_cached(
-                "SELECT s.id, s.agent, s.state, s.task, t.title, s.outcome
+                "SELECT s.id, s.agent, s.state, s.task, t.title, s.outcome, t.repo
                  FROM sessions s JOIN tasks t ON t.id = s.task
                  WHERE s.state != 'active' AND s.outcome IS NOT NULL
                    AND (?1 IS NULL OR t.repo = ?1)
@@ -763,18 +763,20 @@ pub(crate) mod raw {
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, String>(5)?,
+                        row.get::<_, Option<String>>(6)?,
                     ))
                 },
             )?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
-            .map(|(session, agent, state, task, task_title, outcome)| {
+            .map(|(session, agent, state, task, task_title, outcome, repo)| {
                 Ok(Lesson {
                     state: parsed(&format!("session {session}"), &state, SessionState::parse)?,
                     session: SessionId(session),
                     agent: PrincipalId(agent),
                     task: TaskId(task),
                     task_title,
+                    repo,
                     outcome,
                 })
             })

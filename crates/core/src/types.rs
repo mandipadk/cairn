@@ -390,6 +390,9 @@ pub struct Lesson {
     /// The intent the attempt was serving.
     pub task: TaskId,
     pub task_title: String,
+    /// The repository the task belonged to, if it belonged to one; a
+    /// lesson from forge-wide work has none and is everybody's.
+    pub repo: Option<String>,
     /// What the agent recorded on its way out.
     pub outcome: String,
 }

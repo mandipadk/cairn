@@ -13,9 +13,9 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use cairn_core::{
-    Capability, ChangeId, ChangeSpec, ClaimId, ClaimSpec, CoreError, Disposition, Envelope,
-    EventSeq, GrantId, ObjectFormat, PrincipalId, PrincipalKind, ReviewDomain, SessionId,
-    SessionState, TaskId, TaskState, TokenId,
+    Capability, Change, ChangeId, ChangeSpec, ChangeState, ClaimId, ClaimSpec, CoreError,
+    Disposition, Envelope, EventSeq, GrantId, ObjectFormat, PrincipalId, PrincipalKind, Repo,
+    ReviewDomain, SessionId, SessionState, Task, TaskId, TaskState, TokenId,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -36,6 +36,29 @@ fn found<T>(item: Option<T>, what: &str) -> ApiResult<T> {
             format!("{what} not found"),
         )
     })
+}
+
+/// A repository the caller may read, or "not found". Reads on the API
+/// are gated exactly as the git transport is: a private repository
+/// answers a stranger the way a missing one does, so the API gives away
+/// neither its contents nor its existence. Everything scoped to a
+/// repository - a change, a task, a session, a queue - goes through here.
+fn readable_repo(app: &AppState, actor: &Actor, name: &str) -> ApiResult<Repo> {
+    found(app.with_store(|s| s.readable(&actor.0, name))?, "repo")
+}
+
+fn readable_change(app: &AppState, actor: &Actor, id: &ChangeId) -> ApiResult<Change> {
+    let change = found(app.with_store(|s| s.change(id))?, "change")?;
+    readable_repo(app, actor, &change.repo)?;
+    Ok(change)
+}
+
+fn readable_task(app: &AppState, actor: &Actor, id: &TaskId) -> ApiResult<Task> {
+    let task = found(app.with_store(|s| s.task(id))?, "task")?;
+    if let Some(repo) = &task.repo {
+        readable_repo(app, actor, repo)?;
+    }
+    Ok(task)
 }
 
 // ---- principals ----
@@ -225,11 +248,10 @@ pub async fn set_visibility(
 
 pub async fn get_repo(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Path(name): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let repo = app.with_store(|s| s.repo(&name))?;
-    Ok(Json(json!(found(repo, "repo")?)))
+    Ok(Json(json!(readable_repo(&app, &actor, &name)?)))
 }
 
 // ---- tasks ----
@@ -267,20 +289,25 @@ pub struct TaskFilter {
 
 pub async fn list_tasks(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Query(filter): Query<TaskFilter>,
 ) -> ApiResult<Json<Value>> {
-    let tasks = app.with_store(|s| s.tasks(filter.state))?;
+    let mut tasks = app.with_store(|s| s.tasks(filter.state))?;
+    // A task with no repository is forge-wide work and everybody's.
+    tasks.retain(|task| {
+        task.repo
+            .as_deref()
+            .is_none_or(|repo| app.with_store(|s| s.may_read(&actor.0, repo)))
+    });
     Ok(Json(json!(tasks)))
 }
 
 pub async fn get_task(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let task = app.with_store(|s| s.task(&TaskId(id)))?;
-    Ok(Json(json!(found(task, "task")?)))
+    Ok(Json(json!(readable_task(&app, &actor, &TaskId(id))?)))
 }
 
 pub async fn claim_task(
@@ -323,11 +350,12 @@ pub async fn open_session(
 
 pub async fn get_session(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let session = app.with_store(|s| s.session(&SessionId(id)))?;
-    Ok(Json(json!(found(session, "session")?)))
+    let session = found(app.with_store(|s| s.session(&SessionId(id)))?, "session")?;
+    readable_task(&app, &actor, &session.task)?;
+    Ok(Json(json!(session)))
 }
 
 #[derive(Deserialize)]
@@ -364,28 +392,38 @@ pub async fn open_change(
 
 pub async fn get_change(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let change = app.with_store(|s| s.change(&ChangeId(id)))?;
-    Ok(Json(json!(found(change, "change")?)))
+    Ok(Json(json!(readable_change(&app, &actor, &ChangeId(id))?)))
 }
 
 pub async fn get_change_by_number(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Path((repo, number)): Path<(String, i64)>,
 ) -> ApiResult<Json<Value>> {
+    readable_repo(&app, &actor, &repo)?;
     let change = app.with_store(|s| s.change_by_number(&repo, number))?;
     Ok(Json(json!(found(change, "change")?)))
 }
 
+#[derive(Deserialize)]
+pub struct ChangesQuery {
+    pub state: Option<ChangeState>,
+}
+
 pub async fn list_changes(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Path(repo): Path<String>,
+    Query(query): Query<ChangesQuery>,
 ) -> ApiResult<Json<Value>> {
-    let changes = app.with_store(|s| s.changes_in_repo(&repo))?;
+    readable_repo(&app, &actor, &repo)?;
+    let mut changes = app.with_store(|s| s.changes_in_repo(&repo))?;
+    if let Some(state) = query.state {
+        changes.retain(|change| change.state == state);
+    }
     Ok(Json(json!(changes)))
 }
 
@@ -421,9 +459,10 @@ pub async fn push_revision(
 
 pub async fn list_revisions(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
+    readable_change(&app, &actor, &ChangeId(id.clone()))?;
     let revisions = app.with_store(|s| s.revisions(&ChangeId(id)))?;
     Ok(Json(json!(revisions)))
 }
@@ -468,11 +507,12 @@ pub async fn attach_claim(
 
 pub async fn list_claims(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Path(id): Path<String>,
     Query(query): Query<RevisionQuery>,
 ) -> ApiResult<Json<Value>> {
     let change = ChangeId(id);
+    readable_change(&app, &actor, &change)?;
     let revision = resolve_revision(&app, &change, query.revision)?;
     let claims = app.with_store(|s| s.claims_on(&change, revision))?;
     Ok(Json(json!(claims)))
@@ -510,11 +550,12 @@ pub async fn give_verdict(
 
 pub async fn list_verdicts(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Path(id): Path<String>,
     Query(query): Query<RevisionQuery>,
 ) -> ApiResult<Json<Value>> {
     let change = ChangeId(id);
+    readable_change(&app, &actor, &change)?;
     let revision = resolve_revision(&app, &change, query.revision)?;
     let verdicts = app.with_store(|s| s.verdicts_on(&change, revision))?;
     Ok(Json(json!(verdicts)))
@@ -522,10 +563,11 @@ pub async fn list_verdicts(
 
 pub async fn merge_readiness(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let trace = app.with_store(|s| s.merge_readiness(&ChangeId(id)))?;
+    let change = readable_change(&app, &actor, &ChangeId(id))?;
+    let trace = app.with_store(|s| s.merge_readiness(&change.id))?;
     Ok(Json(json!(trace)))
 }
 
@@ -623,9 +665,19 @@ pub async fn mint_token(
 
 pub async fn list_tokens(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
+    // Credentials stay with their subject. Only the hashes are stored,
+    // but which tokens somebody holds, and what they called them, is
+    // still theirs - and the forge's operator's, since revoking is.
+    if actor.0.as_str() != id && !app.with_store(|s| s.is_admin(&actor.0)) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "only the principal or an admin may list their tokens".to_owned(),
+        ));
+    }
     let tokens = app.with_store(|s| s.tokens_of(&PrincipalId(id)))?;
     Ok(Json(json!(tokens)))
 }
@@ -745,14 +797,12 @@ pub struct QueueQuery {
 
 pub async fn list_queue(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Path(repo): Path<String>,
     Query(query): Query<QueueQuery>,
 ) -> ApiResult<Json<Value>> {
-    let target = match query.target {
-        Some(target) => target,
-        None => found(app.with_store(|s| s.repo(&repo))?, "repo")?.default_branch,
-    };
+    let record = readable_repo(&app, &actor, &repo)?;
+    let target = query.target.unwrap_or(record.default_branch);
     let entries = app.with_store(|s| s.queue_for(&repo, &target))?;
     Ok(Json(json!(entries)))
 }
@@ -784,11 +834,12 @@ pub async fn verify_claim(
 
 pub async fn list_verifications(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Path(id): Path<String>,
     Query(query): Query<RevisionQuery>,
 ) -> ApiResult<Json<Value>> {
     let change = ChangeId(id);
+    readable_change(&app, &actor, &change)?;
     let revision = resolve_revision(&app, &change, query.revision)?;
     let verifications = app.with_store(|s| s.verifications_on(&change, revision))?;
     Ok(Json(json!(verifications)))
@@ -798,9 +849,10 @@ pub async fn list_verifications(
 /// and the evidence behind each ranking.
 pub async fn attention(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Path(repo): Path<String>,
 ) -> ApiResult<Json<Value>> {
+    readable_repo(&app, &actor, &repo)?;
     let items = app.with_store(|s| s.attention_for(&repo))?;
     Ok(Json(json!(items)))
 }
@@ -839,10 +891,11 @@ pub struct PathsQuery {
 /// Who is already working where, before you start.
 pub async fn path_conflicts(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Path(repo): Path<String>,
     Query(query): Query<PathsQuery>,
 ) -> ApiResult<Json<Value>> {
+    readable_repo(&app, &actor, &repo)?;
     let paths: Vec<String> = query
         .paths
         .split(',')
@@ -855,9 +908,10 @@ pub async fn path_conflicts(
 
 pub async fn list_leases(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Path(repo): Path<String>,
 ) -> ApiResult<Json<Value>> {
+    readable_repo(&app, &actor, &repo)?;
     let leases = app.with_store(|s| s.live_leases(&repo))?;
     Ok(Json(json!(leases)))
 }
@@ -876,10 +930,13 @@ pub struct LessonQuery {
 /// the protocol rather than something anyone has to maintain.
 pub async fn lessons(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Query(query): Query<LessonQuery>,
 ) -> ApiResult<Json<Value>> {
-    let found = app.with_store(|s| {
+    if let Some(repo) = &query.repo {
+        readable_repo(&app, &actor, repo)?;
+    }
+    let mut lessons = app.with_store(|s| {
         s.lessons(
             query.repo.as_deref(),
             query.q.as_deref().filter(|q| !q.trim().is_empty()),
@@ -887,7 +944,14 @@ pub async fn lessons(
             query.limit.unwrap_or(50),
         )
     })?;
-    Ok(Json(json!(found)))
+    // Searching across everything is searching across what you may see.
+    lessons.retain(|lesson| {
+        lesson
+            .repo
+            .as_deref()
+            .is_none_or(|repo| app.with_store(|s| s.may_read(&actor.0, repo)))
+    });
+    Ok(Json(json!(lessons)))
 }
 
 // ---- policy ----
@@ -907,10 +971,10 @@ pub struct PolicyBody {
 /// without committing to it.
 pub async fn get_policy(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Path(repo): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let record = found(app.with_store(|s| s.repo(&repo))?, "repo")?;
+    let record = readable_repo(&app, &actor, &repo)?;
     Ok(Json(json!(record.policy)))
 }
 
@@ -973,10 +1037,10 @@ pub async fn set_mirror(
 
 pub async fn get_mirror(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Path(repo): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let record = found(app.with_store(|s| s.repo(&repo))?, "repo")?;
+    let record = readable_repo(&app, &actor, &repo)?;
     Ok(Json(json!(record.mirror)))
 }
 
@@ -1001,9 +1065,10 @@ pub async fn health(State(app): State<AppState>) -> Response {
 /// command nobody has re-run.
 pub async fn awaiting_verification(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Path(repo): Path<String>,
 ) -> ApiResult<Json<Value>> {
+    readable_repo(&app, &actor, &repo)?;
     let waiting = app.with_store(|s| s.awaiting_verification(&repo))?;
     Ok(Json(json!(waiting)))
 }

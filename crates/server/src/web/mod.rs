@@ -21,7 +21,7 @@ use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
-use cairn_core::{Disposition, PrincipalId, ReviewDomain};
+use cairn_core::{Disposition, PrincipalId, Repo, ReviewDomain};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -1022,6 +1022,17 @@ fn oops(err: impl std::fmt::Display) -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, views::error_page()).into_response()
 }
 
+/// The repository if the viewer may read it. A page for a private
+/// repository answers a stranger exactly as a missing one does, which is
+/// the same rule the API and the git transport apply.
+fn readable(app: &AppState, viewer: &Viewer, repo: &str) -> Result<Repo, Box<Response>> {
+    match app.with_store(|s| s.readable(&viewer.0, repo)) {
+        Ok(Some(record)) => Ok(record),
+        Ok(None) => Err(Box::new(not_found())),
+        Err(err) => Err(Box::new(oops(err))),
+    }
+}
+
 fn not_found() -> Response {
     (StatusCode::NOT_FOUND, views::not_found_page()).into_response()
 }
@@ -1054,10 +1065,9 @@ async fn render_tree(
     let Some(git) = app.git() else {
         return not_found();
     };
-    let record = match app.with_store(|s| s.repo(&repo)) {
-        Ok(Some(record)) => record,
-        Ok(None) => return not_found(),
-        Err(err) => return oops(err),
+    let record = match readable(&app, &viewer, &repo) {
+        Ok(record) => record,
+        Err(response) => return *response,
     };
     let branch = record.default_branch.clone();
     let rev = format!("refs/heads/{branch}");
@@ -1227,10 +1237,9 @@ async fn blame_page(
     let Some(git) = app.git() else {
         return not_found();
     };
-    let record = match app.with_store(|s| s.repo(&repo)) {
-        Ok(Some(record)) => record,
-        Ok(None) => return not_found(),
-        Err(err) => return oops(err),
+    let record = match readable(&app, &viewer, &repo) {
+        Ok(record) => record,
+        Err(response) => return *response,
     };
     let rev = format!("refs/heads/{}", record.default_branch);
     let text = match git.store.show_file(&repo, &rev, &path).await {
@@ -1276,8 +1285,8 @@ async fn changes_page(
     viewer: Viewer,
     Path(repo): Path<String>,
 ) -> Response {
-    if let Ok(None) | Err(_) = app.with_store(|s| s.repo(&repo)) {
-        return not_found();
+    if let Err(response) = readable(&app, &viewer, &repo) {
+        return *response;
     }
     match app.with_store(|s| s.changes_in_repo(&repo)) {
         Ok(mut changes) => {
@@ -1301,6 +1310,9 @@ async fn change_page(
     Path((repo, number)): Path<(String, i64)>,
     Query(query): Query<ChangeQuery>,
 ) -> Response {
+    if let Err(response) = readable(&app, &viewer, &repo) {
+        return *response;
+    }
     let change = match app.with_store(|s| s.change_by_number(&repo, number)) {
         Ok(Some(change)) => change,
         Ok(None) => return not_found(),
@@ -1399,6 +1411,9 @@ async fn submit_verdict(
     let Some(disposition) = Disposition::parse(&form.disposition) else {
         return flash(&back, "Pick a disposition");
     };
+    if let Err(response) = readable(&app, &viewer, &repo) {
+        return *response;
+    }
     let change = match app.with_store(|s| s.change_by_number(&repo, number)) {
         Ok(Some(change)) => change.id,
         Ok(None) => return not_found(),
@@ -1428,6 +1443,9 @@ async fn submit_enqueue(
     Path((repo, number)): Path<(String, i64)>,
 ) -> Response {
     let back = format!("/{repo}/changes/{number}");
+    if let Err(response) = readable(&app, &viewer, &repo) {
+        return *response;
+    }
     let change = match app.with_store(|s| s.change_by_number(&repo, number)) {
         Ok(Some(change)) => change.id,
         Ok(None) => return not_found(),
@@ -1460,10 +1478,9 @@ async fn landing_page(
     viewer: Viewer,
     Path(repo): Path<String>,
 ) -> Response {
-    let record = match app.with_store(|s| s.repo(&repo)) {
-        Ok(Some(record)) => record,
-        Ok(None) => return not_found(),
-        Err(err) => return oops(err),
+    let record = match readable(&app, &viewer, &repo) {
+        Ok(record) => record,
+        Err(response) => return *response,
     };
     let data = match landing_data(&app, &repo, &record.default_branch) {
         Ok(data) => data,
@@ -1585,8 +1602,8 @@ async fn lessons_page(
     Path(repo): Path<String>,
     Query(query): Query<LessonQuery>,
 ) -> Response {
-    if let Ok(None) | Err(_) = app.with_store(|s| s.repo(&repo)) {
-        return not_found();
+    if let Err(response) = readable(&app, &viewer, &repo) {
+        return *response;
     }
     let search = query.q.as_deref().filter(|q| !q.trim().is_empty());
     match app.with_store(|s| s.lessons(Some(&repo), search, false, 100)) {
@@ -1607,8 +1624,8 @@ async fn log_page(
     Path(repo): Path<String>,
     Query(query): Query<LogQuery>,
 ) -> Response {
-    if let Ok(None) | Err(_) = app.with_store(|s| s.repo(&repo)) {
-        return not_found();
+    if let Err(response) = readable(&app, &viewer, &repo) {
+        return *response;
     }
     let after = query.after.unwrap_or(0);
     let numbers: HashMap<String, (i64, String)> = match app.with_store(|s| s.changes_in_repo(&repo))

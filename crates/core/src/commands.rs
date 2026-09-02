@@ -586,6 +586,28 @@ impl Store {
         })
     }
 
+    /// The repository, if it exists and this principal may read it. One
+    /// answer to both questions on purpose: a private repository has to
+    /// look exactly like a missing one to anybody outside it, or which
+    /// private repositories exist becomes public by enumeration.
+    pub fn readable(
+        &self,
+        actor: &PrincipalId,
+        name: &str,
+    ) -> CoreResult<Option<crate::types::Repo>> {
+        Ok(raw::repo(&self.conn, name)?.filter(|_| self.may_read(actor, name)))
+    }
+
+    /// Whether this principal holds the unscoped admin grant that
+    /// running the forge consists of.
+    pub fn is_admin(&self, actor: &PrincipalId) -> bool {
+        let Ok(grants) = raw::grants_of(&self.conn, actor.as_str()) else {
+            return false;
+        };
+        let now = jiff::Timestamp::now().to_string();
+        raw::grants_cover(&grants, Capability::Admin, None, &now)
+    }
+
     /// Every repository this principal may see, in name order.
     pub fn readable_repos(&self, actor: &PrincipalId) -> CoreResult<Vec<crate::types::Repo>> {
         Ok(raw::repos(&self.conn)?

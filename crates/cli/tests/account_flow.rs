@@ -143,9 +143,10 @@ async fn a_new_agent_gets_a_token_but_no_capability() {
     );
     let secret = percent_decode(location.split("secret=").nth(1).unwrap());
 
-    // It can authenticate, and do nothing.
+    // It can authenticate - its own record is the one thing a credential
+    // with no authority may read - and do nothing else.
     assert_eq!(
-        api_with_token(app, "GET", "/api/repos/demo", &secret, None)
+        api_with_token(app, "GET", "/api/principals/helper", &secret, None)
             .await
             .0,
         StatusCode::OK,

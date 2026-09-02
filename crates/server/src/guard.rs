@@ -10,7 +10,7 @@
 //! to pass through it.
 
 use axum::extract::Request;
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use std::collections::HashMap;
@@ -39,6 +39,51 @@ pub async fn security_headers(request: Request, next: Next) -> Response {
     }
     headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
     response
+}
+
+/// Refuse a write that a browser sent from somewhere else.
+///
+/// The session cookie is SameSite=Lax, which already keeps a foreign
+/// page's form from carrying it. This is the second lock: a browser
+/// says where a request came from (`Sec-Fetch-Site`, and `Origin` on
+/// any cross-origin POST), and a write claiming to come from another
+/// site is refused before any handler sees it. Git clients, curl and
+/// agents send neither header and are unaffected; they authenticate
+/// with a bearer token, which no other site can attach.
+pub async fn same_origin_writes(request: Request, next: Next) -> Response {
+    let method = request.method();
+    let reads = matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS);
+    if !reads {
+        let headers = request.headers();
+        let fetch_site = headers
+            .get("sec-fetch-site")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if fetch_site == "cross-site" {
+            return refused("cross-site writes are not accepted");
+        }
+        if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok())
+            && origin != "null"
+            && let Some(host) = headers.get(header::HOST).and_then(|v| v.to_str().ok())
+            && !origin_matches(origin, host)
+        {
+            return refused("this write did not come from here");
+        }
+    }
+    next.run(request).await
+}
+
+/// `Origin` carries a scheme and never a path; `Host` carries neither.
+fn origin_matches(origin: &str, host: &str) -> bool {
+    origin
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(origin)
+        .eq_ignore_ascii_case(host)
+}
+
+fn refused(why: &'static str) -> Response {
+    (StatusCode::FORBIDDEN, why).into_response()
 }
 
 /// A fixed-window limiter for sign-in attempts, keyed by source

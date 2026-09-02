@@ -20,6 +20,7 @@ use crate::types::{
     Capability, ChangeSpec, ChangeState, ClaimSpec, Disposition, Mirror, ObjectFormat, Policy,
     Principal, PrincipalKind, ReviewDomain, SessionState, TaskState, Visibility,
 };
+use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
 use sha2::{Digest, Sha256};
 
@@ -435,6 +436,20 @@ impl Store {
     /// with no password, or a wrong password — and takes the same work
     /// to say so in the first two cases as the third, so the answer
     /// cannot be read off the clock.
+    /// Whether this person can sign in with a password at all.
+    pub fn has_password(&self, principal: &PrincipalId) -> bool {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM credentials WHERE principal = ?",
+                rusqlite::params![principal.as_str()],
+                |_| Ok(()),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
     pub fn password_matches(&self, principal: &PrincipalId, password: &str) -> bool {
         let stored = raw::credential(&self.conn, principal.as_str())
             .ok()

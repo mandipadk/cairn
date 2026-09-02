@@ -193,6 +193,11 @@ fn sidebar(viewer: &Viewer, current: Option<&str>) -> Markup {
             }
             a href="/you" { span { "Your changes" } span class="n" { @if chrome.yours > 0 { (chrome.yours) } } }
             a href="/agents" { span { "Agents" } span class="n" {} }
+            @if chrome.admin {
+                a class={ @if current == Some("people") { "on" } @else { "" } } href="/people" {
+                    span { "People" } span class="n" {}
+                }
+            }
             a href="/you/tokens" { span { "Tokens" } span class="n" {} }
             a href="/you/settings" { span { "Settings" } span class="n" {} }
         }
@@ -682,7 +687,13 @@ fn day_label(day: &str) -> String {
     }
 }
 
-pub fn settings(theme: Theme, viewer: &Viewer, error: Option<&str>, done: bool) -> Markup {
+pub fn settings(
+    theme: Theme,
+    viewer: &Viewer,
+    error: Option<&str>,
+    done: bool,
+    first: bool,
+) -> Markup {
     layout(
         theme,
         Some(viewer),
@@ -694,6 +705,9 @@ pub fn settings(theme: Theme, viewer: &Viewer, error: Option<&str>, done: bool) 
                 div class="sechead" { b { "Settings" } span { (viewer.0.as_str()) } }
                 @if let Some(error) = error { p class="error" { (error) } }
                 @if done { p class="done" { "Saved." } }
+                @if first {
+                    p class="note" { "You are signed in from an invitation, which worked once. Set a password to sign in next time." }
+                }
 
                 form class="stack" method="post" action="/you/settings" {
                     div {
@@ -769,6 +783,60 @@ pub fn tokens(
                 }
             }
         },
+    )
+}
+
+pub fn people(
+    theme: Theme,
+    viewer: &Viewer,
+    people: &[super::PersonRow],
+    join_link: Option<&str>,
+    error: Option<&str>,
+) -> Markup {
+    layout_with(
+        theme,
+        Some(viewer),
+        Some("people"),
+        None,
+        "People",
+        html! {
+            div class="sechead" { b { "People" } span { (people.len()) } }
+            @if let Some(error) = error { p class="error" { (error) } }
+
+            @if let Some(link) = join_link {
+                div class="once" {
+                    p { b { "Send them this link." } " It signs them in once, then it is spent; this is the only time it can be shown." }
+                    code class="secret" { (link) }
+                }
+            }
+
+            @for row in people {
+                div class="trow" style="grid-template-columns: 150px minmax(0,1fr) auto;" {
+                    span style="font-weight: 500;" { (row.principal.id.as_str()) }
+                    span class="sec3" { (row.principal.display) }
+                    span class="sec3" {
+                        @if row.admin { "runs the forge" }
+                        @else if row.has_password { "can sign in" }
+                        @else { "no password yet" }
+                    }
+                }
+            }
+
+            div class="sechead" style="margin-top: 30px;" { b { "Add a person" } span {} }
+            form class="stack narrowcol" method="post" action="/people" {
+                div {
+                    label for="id" { "Name" }
+                    input id="id" name="id" type="text" autocomplete="off"
+                          placeholder="lowercase, digits and hyphens";
+                }
+                div {
+                    label for="display" { "Display name" }
+                    input id="display" name="display" type="text" autocomplete="off";
+                }
+                button class="btn" type="submit" { "Add and make a link" }
+            }
+        },
+        None,
     )
 }
 

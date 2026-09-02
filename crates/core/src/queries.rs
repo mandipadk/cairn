@@ -850,6 +850,26 @@ impl Store {
         raw::principal_for_token_hash(&self.conn, &crate::commands::token_hash(secret))
     }
 
+    /// The live token a secret belongs to, with its label - for the one
+    /// place a token is more than a credential: an invitation, which is
+    /// spent on use.
+    pub fn token_for_secret(&self, secret: &str) -> CoreResult<Option<TokenInfo>> {
+        Ok(self
+            .conn
+            .prepare_cached(
+                "SELECT id, principal, label, revoked FROM tokens WHERE hash = ? AND revoked = 0",
+            )?
+            .query_row(params![crate::commands::token_hash(secret)], |row| {
+                Ok(TokenInfo {
+                    id: crate::id::TokenId(row.get(0)?),
+                    principal: PrincipalId(row.get(1)?),
+                    label: row.get(2)?,
+                    revoked: row.get::<_, i64>(3)? != 0,
+                })
+            })
+            .optional()?)
+    }
+
     pub fn principals(&self) -> CoreResult<Vec<Principal>> {
         raw::principals(&self.conn)
     }

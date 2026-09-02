@@ -57,6 +57,8 @@ pub fn routes() -> Router<AppState> {
         .route("/you/settings", get(settings_page).post(change_password))
         .route("/you/tokens", get(tokens_page).post(token_action))
         .route("/agents", get(agents_page).post(agent_action))
+        .route("/people", get(people_page).post(people_action))
+        .route("/join", get(join))
         .route("/{repo}", get(repo_page))
         .route("/{repo}/tree/{*path}", get(tree_page))
         .route("/{repo}/blame/{*path}", get(blame_page))
@@ -330,6 +332,12 @@ struct Flash {
     /// could show it again.
     #[serde(default)]
     secret: Option<String>,
+    /// A freshly minted invitation, likewise shown once.
+    #[serde(default)]
+    invite: Option<String>,
+    /// First sign-in, straight from an invitation.
+    #[serde(default)]
+    first: Option<String>,
 }
 
 async fn settings_page(
@@ -337,7 +345,14 @@ async fn settings_page(
     viewer: Viewer,
     Query(flash): Query<Flash>,
 ) -> Response {
-    views::settings(theme, &viewer, flash.error.as_deref(), flash.done.is_some()).into_response()
+    views::settings(
+        theme,
+        &viewer,
+        flash.error.as_deref(),
+        flash.done.is_some(),
+        flash.first.is_some(),
+    )
+    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -441,6 +456,158 @@ async fn token_action(
 }
 
 /// An agent and everything it is allowed to do.
+/// A person as the people page shows them: who they are, and whether
+/// they can sign in yet.
+pub struct PersonRow {
+    pub principal: cairn_core::Principal,
+    pub has_password: bool,
+    pub admin: bool,
+}
+
+/// Who is here, and a way to bring somebody in. Running the forge is
+/// what this page is for, so to anybody else it does not exist.
+async fn people_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    viewer: Viewer,
+    headers: HeaderMap,
+    Query(flash): Query<Flash>,
+) -> Response {
+    if !viewer.1.admin {
+        return not_found();
+    }
+    let people = app.with_store(|store| {
+        let mut rows = Vec::new();
+        for principal in store.principals()? {
+            if principal.kind != cairn_core::PrincipalKind::Human {
+                continue;
+            }
+            rows.push(PersonRow {
+                has_password: store.has_password(&principal.id),
+                admin: store.is_admin(&principal.id),
+                principal,
+            });
+        }
+        Ok::<_, cairn_core::CoreError>(rows)
+    });
+    // The invitation is a link to this forge, so it needs to know its
+    // own address; a proxy in front says so, and otherwise the cookie
+    // policy already tells us whether this is https.
+    let join_link = flash.invite.as_deref().map(|secret| {
+        let host = headers
+            .get(header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("localhost");
+        let scheme = headers
+            .get("x-forwarded-proto")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or(if app.secure_cookies() {
+                "https"
+            } else {
+                "http"
+            });
+        format!("{scheme}://{host}/join?token={}", urlencode(secret))
+    });
+    match people {
+        Ok(people) => views::people(
+            theme,
+            &viewer,
+            &people,
+            join_link.as_deref(),
+            flash.error.as_deref(),
+        )
+        .into_response(),
+        Err(err) => oops(err),
+    }
+}
+
+#[derive(Deserialize)]
+struct PersonForm {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    display: String,
+}
+
+/// Register a person and hand back the one thing they need: a link
+/// that signs them in once. It is a token under the hood, labelled so
+/// that /join knows to spend it, and shown exactly once like any other.
+async fn people_action(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Form(form): Form<PersonForm>,
+) -> Response {
+    if !viewer.1.admin {
+        return not_found();
+    }
+    let back =
+        |error: &str| Redirect::to(&format!("/people?error={}", urlencode(error))).into_response();
+    let Some(id) = PrincipalId::new(form.id.trim()) else {
+        return back(&format!("{:?} is not a valid name", form.id));
+    };
+    let display = form.display.trim();
+    let display = if display.is_empty() {
+        id.as_str()
+    } else {
+        display
+    };
+    let registered = app.with_store(|s| {
+        s.register_principal(
+            &viewer.0,
+            &id,
+            cairn_core::PrincipalKind::Human,
+            display,
+            None,
+            None,
+        )
+    });
+    match registered {
+        Ok(env) => {
+            app.publish(&env);
+            match app.with_store(|s| s.mint_token(&viewer.0, &id, Some(INVITE_LABEL))) {
+                Ok((_, secret, env)) => {
+                    app.publish(&env);
+                    Redirect::to(&format!("/people?invite={}", urlencode(&secret))).into_response()
+                }
+                Err(err) => back(&err.to_string()),
+            }
+        }
+        Err(err) => back(&err.to_string()),
+    }
+}
+
+/// The label that marks a token as an invitation rather than a credential.
+const INVITE_LABEL: &str = "invitation";
+
+#[derive(Deserialize)]
+struct JoinQuery {
+    #[serde(default)]
+    token: String,
+}
+
+/// Arrive from an invitation: the token becomes a browser session and is
+/// spent in the same breath, so the link works once. Then straight to
+/// setting a password, because a session expires and the link is gone.
+async fn join(State(app): State<AppState>, Query(query): Query<JoinQuery>) -> Response {
+    let expired =
+        || Redirect::to("/login?error=That+invitation+has+been+used+or+revoked").into_response();
+    let token = match app.with_store(|s| s.token_for_secret(query.token.trim())) {
+        Ok(Some(token)) if token.label.as_deref() == Some(INVITE_LABEL) => token,
+        Ok(_) => return expired(),
+        Err(err) => return oops(err),
+    };
+    // Spend it first: a session that could be minted twice from one
+    // link is a link that can be forwarded.
+    match app.with_store(|s| s.revoke_token(&token.principal, &token.id)) {
+        Ok(env) => app.publish(&env),
+        Err(err) => return oops(err),
+    }
+    match app.start_session(&token.principal) {
+        Ok(session) => signed_in_to(&app, SESSION_COOKIE, &session, "/you/settings?first=1"),
+        Err(err) => oops(err),
+    }
+}
+
 pub struct AgentRow {
     pub principal: cairn_core::Principal,
     pub grants: Vec<cairn_core::Grant>,
@@ -652,6 +819,7 @@ fn chrome_for(app: &AppState, who: &PrincipalId) -> Result<Chrome, cairn_core::C
             working,
             yours,
             unread: store.unread_count(who)?,
+            admin: store.is_admin(who),
         })
     })
 }
@@ -722,6 +890,9 @@ pub struct Chrome {
     pub yours: usize,
     /// Notices the viewer has not dealt with, for the sidebar count.
     pub unread: usize,
+    /// Whether the viewer runs the forge, which decides what the sidebar
+    /// offers rather than what any page allows.
+    pub admin: bool,
 }
 
 pub struct Viewer(pub PrincipalId, pub Chrome);
@@ -1034,9 +1205,13 @@ async fn login_submit(
 }
 
 fn signed_in(app: &AppState, name: &str, value: &str) -> Response {
+    signed_in_to(app, name, value, "/")
+}
+
+fn signed_in_to(app: &AppState, name: &str, value: &str, to: &str) -> Response {
     let secure = if app.secure_cookies() { "; Secure" } else { "" };
     let cookie = format!("{name}={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000{secure}");
-    ([(header::SET_COOKIE, cookie)], Redirect::to("/")).into_response()
+    ([(header::SET_COOKIE, cookie)], Redirect::to(to)).into_response()
 }
 
 async fn logout(State(app): State<AppState>, headers: HeaderMap) -> Response {

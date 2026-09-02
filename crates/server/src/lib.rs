@@ -126,5 +126,6 @@ pub fn router(state: AppState) -> Router {
         )
         .merge(web::routes())
         .layer(axum::middleware::from_fn(guard::security_headers))
+        .layer(axum::middleware::from_fn(guard::same_origin_writes))
         .with_state(state)
 }

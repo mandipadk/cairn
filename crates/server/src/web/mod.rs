@@ -105,7 +105,7 @@ struct SearchQuery {
     q: String,
 }
 
-/// One search hit, whatever kind of thing it is.
+/// One search hit as the page shows it: what it is, where it goes.
 pub struct Hit {
     pub kind: &'static str,
     pub label: String,
@@ -113,61 +113,43 @@ pub struct Hit {
     pub href: String,
 }
 
-/// Search across the things a person actually looks for by name:
-/// repositories, changes, and the principals doing the work.
+/// Where a hit leads. A person leads to their work, because a page
+/// about a person is a list of what they did.
+fn hit_href(hit: &cairn_core::SearchHit) -> String {
+    use cairn_core::HitKind::*;
+    match (hit.kind, &hit.repo, hit.number, &hit.principal) {
+        (Change, Some(repo), Some(number), _) => format!("/{repo}/changes/{number}"),
+        (Repository, Some(repo), _, _) => format!("/{repo}"),
+        (Task, Some(repo), _, _) => format!("/{repo}/changes"),
+        (Lesson, Some(repo), _, _) => format!("/{repo}/lessons"),
+        (Person, _, _, Some(who)) => format!("/search?q=by:{}", urlencode(who.as_str())),
+        _ => "/".to_owned(),
+    }
+}
+
+/// Search across what a person looks for by name, ranked, filtered by
+/// the `key:value` words everybody already types into a forge.
 async fn search_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
     viewer: Viewer,
     Query(query): Query<SearchQuery>,
 ) -> Response {
-    let needle = query.q.trim().to_lowercase();
-    if needle.is_empty() {
-        return views::search(theme, &viewer, "", &[]).into_response();
-    }
-    let hits = app.with_store(|store| -> Result<Vec<Hit>, cairn_core::CoreError> {
-        let mut hits = Vec::new();
-        for repo in store.readable_repos(&viewer.0)? {
-            if repo.name.to_lowercase().contains(&needle) {
-                hits.push(Hit {
-                    kind: "repository",
-                    label: repo.name.clone(),
-                    detail: repo.default_branch.clone(),
-                    href: format!("/{}", repo.name),
-                });
-            }
-            for change in store.changes_in_repo(&repo.name)? {
-                if change.title.to_lowercase().contains(&needle) {
-                    hits.push(Hit {
-                        kind: "change",
-                        label: change.title.clone(),
-                        detail: format!(
-                            "{} #{} · {}",
-                            repo.name,
-                            change.number,
-                            change.state.as_str()
-                        ),
-                        href: format!("/{}/changes/{}", repo.name, change.number),
-                    });
-                }
-            }
-        }
-        for principal in store.principals()? {
-            let matches = principal.id.as_str().to_lowercase().contains(&needle)
-                || principal.display.to_lowercase().contains(&needle);
-            if matches {
-                hits.push(Hit {
-                    kind: "person",
-                    label: principal.display.clone(),
-                    detail: principal.id.as_str().to_owned(),
-                    href: format!("/search?q={}", principal.id.as_str()),
-                });
-            }
-        }
-        Ok(hits)
-    });
+    let parsed = cairn_core::SearchQuery::parse(&query.q);
+    let hits = app.with_store(|store| store.search(&viewer.0, &parsed, 100));
     match hits {
-        Ok(hits) => views::search(theme, &viewer, &query.q, &hits).into_response(),
+        Ok(hits) => {
+            let hits: Vec<Hit> = hits
+                .iter()
+                .map(|hit| Hit {
+                    kind: hit.kind.as_str(),
+                    label: hit.title.clone(),
+                    detail: hit.detail.clone(),
+                    href: hit_href(hit),
+                })
+                .collect();
+            views::search(theme, &viewer, &query.q, parsed.kind, &hits).into_response()
+        }
         Err(err) => oops(err),
     }
 }

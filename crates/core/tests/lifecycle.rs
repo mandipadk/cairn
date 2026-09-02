@@ -1821,3 +1821,65 @@ fn notices_go_to_whose_work_it_is_and_never_to_the_actor() {
     // The inbox is a projection: replaying the log reproduces it exactly.
     assert!(store.fsck().unwrap().is_empty());
 }
+
+#[test]
+fn search_ranks_the_exact_thing_first_and_hides_what_you_cannot_read() {
+    use cairn_core::{HitKind, SearchQuery};
+    let (mut store, human, scout, _) = seeded();
+    let (open, _, _) = store
+        .open_change(
+            &scout,
+            ChangeSpec::new("forge", "main", "Carry children onto the tip"),
+        )
+        .unwrap();
+    store.push_revision(&scout, &open, OID, None, "w").unwrap();
+    let (other, _, _) = store
+        .open_change(
+            &scout,
+            ChangeSpec::new("forge", "main", "Also carry the children"),
+        )
+        .unwrap();
+    store.push_revision(&scout, &other, OID, None, "w").unwrap();
+    store.abandon_change(&scout, &other, "superseded").unwrap();
+
+    let hits = store
+        .search(&human, &SearchQuery::parse("carry children"), 20)
+        .unwrap();
+    let titles: Vec<_> = hits.iter().map(|h| h.title.as_str()).collect();
+    assert_eq!(
+        titles[0], "Carry children onto the tip",
+        "the open, phrase-leading change outranks the abandoned reordering: {titles:?}"
+    );
+    assert!(hits[0].score > hits[1].score, "{hits:#?}");
+
+    // Filters narrow rather than reorder.
+    let open_only = store
+        .search(&human, &SearchQuery::parse("children state:open"), 20)
+        .unwrap();
+    assert!(
+        open_only
+            .iter()
+            .all(|h| h.kind == HitKind::Change && h.number == Some(1)),
+        "{open_only:#?}"
+    );
+    let by_number = store.search(&human, &SearchQuery::parse("#2"), 20).unwrap();
+    assert_eq!(by_number.len(), 1);
+    assert_eq!(by_number[0].number, Some(2));
+
+    // A person is found by name and leads to their work.
+    let people = store
+        .search(&human, &SearchQuery::parse("scout kind:person"), 20)
+        .unwrap();
+    assert_eq!(people.len(), 1);
+    assert_eq!(people[0].kind, HitKind::Person);
+
+    // A stranger to the repository finds nothing in it.
+    let bystander = principal("bystander");
+    store
+        .register_principal(&human, &bystander, PrincipalKind::Human, "By", None, None)
+        .unwrap();
+    let theirs = store
+        .search(&bystander, &SearchQuery::parse("children"), 20)
+        .unwrap();
+    assert!(theirs.is_empty(), "{theirs:#?}");
+}

@@ -954,6 +954,29 @@ pub async fn lessons(
     Ok(Json(json!(lessons)))
 }
 
+// ---- search ----
+
+#[derive(Deserialize)]
+pub struct SearchParams {
+    #[serde(default)]
+    pub q: String,
+    pub limit: Option<usize>,
+}
+
+/// Ranked search over what the caller may see. Plain words plus
+/// `kind:`, `repo:`, `state:` and `by:` filters, or a bare `#12`. The
+/// same box a person gets, so an agent can ask "has anyone tried this?"
+/// before it starts.
+pub async fn search(
+    State(app): State<AppState>,
+    actor: Actor,
+    Query(params): Query<SearchParams>,
+) -> ApiResult<Json<Value>> {
+    let query = cairn_core::SearchQuery::parse(&params.q);
+    let hits = app.with_store(|s| s.search(&actor.0, &query, params.limit.unwrap_or(50)))?;
+    Ok(Json(json!({ "hits": hits })))
+}
+
 // ---- inbox ----
 
 #[derive(Deserialize)]

@@ -109,6 +109,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/lessons", get(routes::lessons))
         .route("/healthz", get(routes::health))
         .route("/api/events", get(routes::list_events))
+        .route("/api/search", get(routes::search))
         .route("/api/inbox", get(routes::inbox))
         .route("/api/inbox/read", post(routes::mark_read))
         .route("/api/events/stream", get(sse::stream))

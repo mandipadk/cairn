@@ -645,3 +645,5 @@ a.srow:hover .t { text-decoration: underline; }
 .composer.claim .line { display: flex; gap: 8px; align-items: center; }
 .composer.claim .line > * { flex: 1; min-width: 0; }
 .composer.claim input[type="text"] { width: 100%; box-sizing: border-box; }
+
+.tabs.filters { margin: -8px 0 8px 22px; }

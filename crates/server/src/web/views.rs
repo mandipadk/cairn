@@ -5,8 +5,8 @@
 use super::diff::{FileDiff, LineKind};
 use super::{Brief, LandingData, Sidebar, Viewer};
 use cairn_core::{
-    Change, ChangeState, Claim, Disposition, Envelope, Event, Notice, PolicyTrace, Revision, Task,
-    Verdict, Verification,
+    Change, ChangeState, Claim, Disposition, Envelope, Event, HitKind, Notice, PolicyTrace,
+    Revision, Task, Verdict, Verification,
 };
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 use std::collections::HashMap;
@@ -508,7 +508,27 @@ pub fn first_run(theme: Theme, viewer: &Viewer) -> Markup {
     )
 }
 
-pub fn search(theme: Theme, viewer: &Viewer, query: &str, hits: &[super::Hit]) -> Markup {
+pub fn search(
+    theme: Theme,
+    viewer: &Viewer,
+    query: &str,
+    kind: Option<HitKind>,
+    hits: &[super::Hit],
+) -> Markup {
+    // The filter row rewrites the query rather than adding a control:
+    // what it does is visible in the box afterwards, and copyable.
+    let without_kind: String = query
+        .split_whitespace()
+        .filter(|w| !w.to_lowercase().starts_with("kind:"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let with = |k: Option<HitKind>| -> String {
+        let q = match k {
+            Some(k) => format!("{} kind:{}", without_kind, k.as_str()),
+            None => without_kind.clone(),
+        };
+        format!("/search?q={}", super::urlencode(q.trim()))
+    };
     layout(
         theme,
         Some(viewer),
@@ -516,13 +536,33 @@ pub fn search(theme: Theme, viewer: &Viewer, query: &str, hits: &[super::Hit]) -
         None,
         "Search",
         html! {
-            div class="sechead" { b { "Search" } span { @if !query.is_empty() { (hits.len()) } } }
+            div class="sechead" { b { "Search" } span { @if !query.trim().is_empty() { (hits.len()) } } }
             form class="searchbig" method="get" action="/search" {
                 input name="q" type="search" value=(query) autofocus
-                      placeholder="Repositories, changes, people" aria-label="Search";
+                      placeholder="Repositories, changes, people — or #12, repo:demo, by:scout" aria-label="Search";
             }
-            @if query.is_empty() {
-                p class="empty" { "Type to search repositories, changes and people." }
+            @if !query.trim().is_empty() {
+                div class="tabs filters" {
+                    a class={ "tab" @if kind.is_none() { " active" } } href=(with(None)) { "All" }
+                    @for k in [HitKind::Change, HitKind::Repository, HitKind::Person, HitKind::Task, HitKind::Lesson] {
+                        a class={ "tab" @if kind == Some(k) { " active" } } href=(with(Some(k))) {
+                            (match k {
+                                HitKind::Change => "Changes",
+                                HitKind::Repository => "Repositories",
+                                HitKind::Person => "People",
+                                HitKind::Task => "Tasks",
+                                HitKind::Lesson => "Lessons",
+                            })
+                        }
+                    }
+                }
+            }
+            @if query.trim().is_empty() {
+                p class="empty" {
+                    "Type to search repositories, changes, tasks, lessons and people. "
+                    "Narrow with " code { "repo:" } ", " code { "state:open" } ", " code { "by:" } " or " code { "kind:" } "; "
+                    code { "#12" } " opens a change by number."
+                }
             } @else if hits.is_empty() {
                 p class="empty" { "Nothing matches " b { (query) } "." }
             }

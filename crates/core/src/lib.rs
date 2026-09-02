@@ -35,6 +35,7 @@ mod id;
 mod leases;
 mod policy;
 mod queries;
+mod search;
 mod store;
 mod types;
 
@@ -46,6 +47,7 @@ pub use id::{
 };
 pub use leases::{Overlap, covers, patterns_overlap};
 pub use policy::{PolicyTrace, Requirement};
+pub use search::{HitKind, SearchHit, SearchQuery};
 pub use store::Store;
 pub use types::{
     Capability, Change, ChangeSpec, ChangeState, Claim, ClaimKind, ClaimSpec, Disposition, Grant,

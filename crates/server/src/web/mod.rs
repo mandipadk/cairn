@@ -69,6 +69,10 @@ pub fn routes() -> Router<AppState> {
         .route("/{repo}/changes/{number}/enqueue", post(submit_enqueue))
         .route("/{repo}/landing", get(landing_page))
         .route("/{repo}/log", get(log_page))
+        .route("/{repo}/settings", get(repo_settings_page))
+        .route("/{repo}/settings/visibility", post(repo_visibility))
+        .route("/{repo}/settings/transfer", post(repo_transfer))
+        .route("/{repo}/transfer", get(transfer_page).post(transfer_answer))
         .route("/{repo}/lessons", get(lessons_page))
 }
 
@@ -798,9 +802,13 @@ async fn agent_action(
 fn chrome_for(app: &AppState, who: &PrincipalId) -> Result<Chrome, cairn_core::CoreError> {
     app.with_store(|store| {
         let mut repos = Vec::new();
+        let mut owned = Vec::new();
         let mut yours = 0;
         let mut leases = Vec::new();
         for repo in store.readable_repos(who)? {
+            if repo.owner == *who {
+                owned.push(repo.name.clone());
+            }
             leases.extend(store.live_leases(&repo.name)?);
             let changes = store.changes_in_repo(&repo.name)?;
             let open: Vec<_> = changes
@@ -836,6 +844,7 @@ fn chrome_for(app: &AppState, who: &PrincipalId) -> Result<Chrome, cairn_core::C
             yours,
             unread: store.unread_count(who)?,
             admin: store.is_admin(who),
+            owned,
         })
     })
 }
@@ -909,6 +918,8 @@ pub struct Chrome {
     /// Whether the viewer runs the forge, which decides what the sidebar
     /// offers rather than what any page allows.
     pub admin: bool,
+    /// Repositories the viewer owns, for the tabs that only an owner gets.
+    pub owned: Vec<String>,
 }
 
 pub struct Viewer(pub PrincipalId, pub Chrome);
@@ -1913,6 +1924,142 @@ async fn lessons_page(
 #[derive(Deserialize)]
 struct LogQuery {
     after: Option<i64>,
+}
+
+/// A repository's settings: who may see it, and who owns it. For
+/// anybody who is neither its owner nor running the forge, the page
+/// does not exist - the same answer a private repository gives.
+async fn repo_settings_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    viewer: Viewer,
+    Path(repo): Path<String>,
+    Query(flash): Query<Flash>,
+) -> Response {
+    let record = match readable(&app, &viewer, &repo) {
+        Ok(record) => record,
+        Err(response) => return *response,
+    };
+    if record.owner != viewer.0 && !viewer.1.admin {
+        return not_found();
+    }
+    views::repo_settings(
+        theme,
+        &viewer,
+        &record,
+        flash.error.as_deref(),
+        flash.done.is_some(),
+    )
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct VisibilityForm {
+    #[serde(default)]
+    visibility: String,
+}
+
+async fn repo_visibility(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Path(repo): Path<String>,
+    Form(form): Form<VisibilityForm>,
+) -> Response {
+    let back = format!("/{repo}/settings");
+    let Some(visibility) = cairn_core::Visibility::parse(&form.visibility) else {
+        return flash(&back, "Pick a visibility");
+    };
+    match app.with_store(|s| s.set_visibility(&viewer.0, &repo, visibility)) {
+        Ok(env) => {
+            app.publish(&env);
+            Redirect::to(&format!("{back}?done=1")).into_response()
+        }
+        Err(cairn_core::CoreError::NotFound(_)) => not_found(),
+        Err(err) => flash(&back, &err.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct TransferForm {
+    #[serde(default)]
+    action: String,
+    #[serde(default)]
+    to: String,
+}
+
+async fn repo_transfer(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Path(repo): Path<String>,
+    Form(form): Form<TransferForm>,
+) -> Response {
+    let back = format!("/{repo}/settings");
+    let result = match form.action.as_str() {
+        "offer" => match PrincipalId::new(form.to.trim()) {
+            Some(to) => app.with_store(|s| s.offer_transfer(&viewer.0, &repo, &to)),
+            None => return flash(&back, "Say who, by their name"),
+        },
+        "withdraw" => app.with_store(|s| s.decline_transfer(&viewer.0, &repo)),
+        _ => return flash(&back, "Unknown action"),
+    };
+    match result {
+        Ok(env) => {
+            app.publish(&env);
+            Redirect::to(&format!("{back}?done=1")).into_response()
+        }
+        Err(cairn_core::CoreError::NotFound(_)) => not_found(),
+        Err(err) => flash(&back, &err.to_string()),
+    }
+}
+
+/// The offer as the person it was made to sees it. They may not be able
+/// to read the repository yet - that is rather the point - so this page
+/// is gated on the offer itself, not on readability.
+async fn transfer_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    viewer: Viewer,
+    Path(repo): Path<String>,
+    Query(flash): Query<Flash>,
+) -> Response {
+    let record = match app.with_store(|s| s.repo(&repo)) {
+        Ok(Some(record)) if record.pending_owner.as_ref() == Some(&viewer.0) => record,
+        Ok(_) => return not_found(),
+        Err(err) => return oops(err),
+    };
+    views::transfer_offer(theme, &viewer, &record, flash.error.as_deref()).into_response()
+}
+
+#[derive(Deserialize)]
+struct AnswerForm {
+    #[serde(default)]
+    action: String,
+}
+
+async fn transfer_answer(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Path(repo): Path<String>,
+    Form(form): Form<AnswerForm>,
+) -> Response {
+    let result = match form.action.as_str() {
+        "accept" => app.with_store(|s| s.accept_transfer(&viewer.0, &repo)),
+        "decline" => app.with_store(|s| s.decline_transfer(&viewer.0, &repo)),
+        _ => return flash(&format!("/{repo}/transfer"), "Unknown action"),
+    };
+    match result {
+        Ok(env) => {
+            app.publish(&env);
+            let to = if form.action == "accept" {
+                format!("/{repo}")
+            } else {
+                "/inbox".to_owned()
+            };
+            Redirect::to(&to).into_response()
+        }
+        Err(cairn_core::CoreError::NotFound(_)) => not_found(),
+        Err(err) => flash(&format!("/{repo}/transfer"), &err.to_string()),
+    }
 }
 
 async fn log_page(

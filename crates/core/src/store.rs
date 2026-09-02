@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -123,7 +123,8 @@ CREATE TABLE IF NOT EXISTS repos (
   policy         TEXT NOT NULL DEFAULT '{}',
   mirror         TEXT,
   visibility     TEXT NOT NULL DEFAULT 'private',
-  owner          TEXT NOT NULL DEFAULT ''
+  owner          TEXT NOT NULL DEFAULT '',
+  pending_owner  TEXT
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS imports (
@@ -679,6 +680,9 @@ fn record_scope(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
         | MirrorPushed { repo, .. }
         | HistoryImported { repo, .. }
         | PathsDeclared { repo, .. }
+        | RepoTransferOffered { repo, .. }
+        | RepoTransferAccepted { repo }
+        | RepoTransferDeclined { repo }
         | ChangeOpened { repo, .. } => (Some(repo.clone()), None),
 
         // Named by a change, which knows its repository.
@@ -1093,6 +1097,35 @@ fn record_notices(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             })
         }
 
+        RepoTransferOffered { repo, to } => Some((
+            to.as_str().to_owned(),
+            "transfer",
+            Some(repo.clone()),
+            None,
+            None,
+            format!("{actor} offered you ownership of {repo}"),
+        )),
+        RepoTransferAccepted { repo } => repo_owner(repo)?.map(|owner| {
+            (
+                owner,
+                "transferred",
+                Some(repo.clone()),
+                None,
+                None,
+                format!("{actor} accepted ownership of {repo}"),
+            )
+        }),
+        RepoTransferDeclined { repo } => repo_owner(repo)?.map(|owner| {
+            (
+                owner,
+                "declined",
+                Some(repo.clone()),
+                None,
+                None,
+                format!("{actor} declined ownership of {repo}"),
+            )
+        }),
+
         MirrorPushed {
             repo,
             branch,
@@ -1271,6 +1304,24 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             tx.execute(
                 "UPDATE repos SET visibility = ? WHERE name = ?",
                 params![visibility.as_str(), repo],
+            )?;
+        }
+        Event::RepoTransferOffered { repo, to } => {
+            tx.execute(
+                "UPDATE repos SET pending_owner = ? WHERE name = ?",
+                params![to.as_str(), repo],
+            )?;
+        }
+        Event::RepoTransferAccepted { repo } => {
+            tx.execute(
+                "UPDATE repos SET owner = ?, pending_owner = NULL WHERE name = ?",
+                params![actor, repo],
+            )?;
+        }
+        Event::RepoTransferDeclined { repo } => {
+            tx.execute(
+                "UPDATE repos SET pending_owner = NULL WHERE name = ?",
+                params![repo],
             )?;
         }
         Event::MirrorSet { repo, mirror } => {

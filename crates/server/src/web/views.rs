@@ -5,8 +5,8 @@
 use super::diff::{FileDiff, LineKind};
 use super::{Brief, LandingData, Sidebar, Viewer};
 use cairn_core::{
-    Change, ChangeState, Claim, Disposition, Envelope, Event, HitKind, Notice, PolicyTrace,
-    Revision, Task, Verdict, Verification,
+    Change, ChangeState, Claim, Disposition, Envelope, Event, HitKind, Notice, PolicyTrace, Repo,
+    Revision, Task, Verdict, Verification, Visibility,
 };
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 use std::collections::HashMap;
@@ -64,6 +64,7 @@ pub enum Tab {
     Landing,
     Lessons,
     Log,
+    Settings,
 }
 
 fn layout(
@@ -114,6 +115,9 @@ fn layout_with(
                                             (tab(repo, "/landing", "Landing", active == Some(Tab::Landing)))
                                             (tab(repo, "/lessons", "Lessons", active == Some(Tab::Lessons)))
                                             (tab(repo, "/log", "Log", active == Some(Tab::Log)))
+                                            @if viewer.1.admin || viewer.1.owned.iter().any(|r| r == repo) {
+                                                (tab(repo, "/settings", "Settings", active == Some(Tab::Settings)))
+                                            }
                                         }
                                     }
                                 }
@@ -695,6 +699,7 @@ pub fn inbox(theme: Theme, viewer: &Viewer, notices: &[Notice], unread: usize) -
 fn notice_href(notice: &Notice) -> String {
     match (&notice.repo, notice.number) {
         (Some(repo), Some(number)) => format!("/{repo}/changes/{number}"),
+        (Some(repo), None) if notice.kind == "transfer" => format!("/{repo}/transfer"),
         (Some(repo), None) => format!("/{repo}"),
         (None, _) => match notice.kind.as_str() {
             "granted" | "revoked" => "/you".to_owned(),
@@ -726,6 +731,85 @@ fn day_label(day: &str) -> String {
     } else {
         day.to_owned()
     }
+}
+
+pub fn repo_settings(
+    theme: Theme,
+    viewer: &Viewer,
+    repo: &Repo,
+    error: Option<&str>,
+    done: bool,
+) -> Markup {
+    layout(
+        theme,
+        Some(viewer),
+        Some(&repo.name),
+        Some(Tab::Settings),
+        "Settings",
+        html! {
+            div class="narrowcol" {
+                @if let Some(error) = error { p class="error" { (error) } }
+                @if done { p class="done" { "Saved." } }
+
+                div class="sechead" { b { "Visibility" } span { (repo.visibility.as_str()) } }
+                form class="stack" method="post" action={ "/" (repo.name) "/settings/visibility" } {
+                    label class="choice" {
+                        input type="radio" name="visibility" value="private" checked[repo.visibility == Visibility::Private];
+                        span { b { "Private" } " — only you, and whoever you grant something on it." }
+                    }
+                    label class="choice" {
+                        input type="radio" name="visibility" value="public" checked[repo.visibility == Visibility::Public];
+                        span { b { "Public" } " — anyone can read and clone it. Writing still needs authority." }
+                    }
+                    button class="btn" type="submit" { "Save" }
+                }
+
+                div class="sechead" style="margin-top: 30px;" { b { "Ownership" } span { (repo.owner.as_str()) } }
+                @if let Some(pending) = &repo.pending_owner {
+                    p class="note" { "Offered to " b { (pending.as_str()) } ". Nothing changes until they accept." }
+                    form class="stack" method="post" action={ "/" (repo.name) "/settings/transfer" } {
+                        input type="hidden" name="action" value="withdraw";
+                        button class="btn" type="submit" { "Withdraw the offer" }
+                    }
+                } @else {
+                    p class="note" { "Owning a repository carries every capability on it. Offer it to a person; it moves when they accept." }
+                    form class="stack" method="post" action={ "/" (repo.name) "/settings/transfer" } {
+                        input type="hidden" name="action" value="offer";
+                        div {
+                            label for="to" { "Offer to" }
+                            input id="to" name="to" type="text" autocomplete="off" placeholder="their name";
+                        }
+                        button class="btn" type="submit" { "Offer ownership" }
+                    }
+                }
+            }
+        },
+    )
+}
+
+/// What the person an offer was made to sees: the offer, and a yes or no.
+pub fn transfer_offer(theme: Theme, viewer: &Viewer, repo: &Repo, error: Option<&str>) -> Markup {
+    layout(
+        theme,
+        Some(viewer),
+        None,
+        None,
+        "Ownership offered",
+        html! {
+            div class="narrowcol" {
+                div class="sechead" { b { "Ownership offered" } span { (repo.name) } }
+                @if let Some(error) = error { p class="error" { (error) } }
+                p class="note" {
+                    b { (repo.owner.as_str()) } " has offered you " b { (repo.name) } ". "
+                    "If you accept, you hold every capability on it from then on, and they hold none unless you grant it."
+                }
+                form class="inline" method="post" action={ "/" (repo.name) "/transfer" } {
+                    button class="btn" type="submit" name="action" value="accept" { "Accept" }
+                    button class="vbtn" type="submit" name="action" value="decline" { "Decline" }
+                }
+            }
+        },
+    )
 }
 
 pub fn settings(
@@ -1828,6 +1912,24 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
             "dot idle",
             html! {
                 b { (actor) } " made " (repo) " " (visibility.as_str())
+            },
+        ),
+        Event::RepoTransferOffered { repo, to } => (
+            "dot idle",
+            html! {
+                b { (actor) } " offered " (repo) " to " (to.as_str())
+            },
+        ),
+        Event::RepoTransferAccepted { repo } => (
+            "dot ok",
+            html! {
+                b { (actor) } " now owns " (repo)
+            },
+        ),
+        Event::RepoTransferDeclined { repo } => (
+            "dot idle",
+            html! {
+                b { (actor) } " declined ownership of " (repo)
             },
         ),
         Event::PolicySet { repo, .. } => (

@@ -133,6 +133,11 @@ pub struct Repo {
     /// be granted: it comes with having made the thing.
     #[serde(default)]
     pub owner: PrincipalId,
+    /// Somebody the owner has offered the repository to, until they
+    /// answer. Ownership moves only when the other side says yes: a
+    /// repository is not something you can leave on someone's doorstep.
+    #[serde(default)]
+    pub pending_owner: Option<PrincipalId>,
     pub object_format: ObjectFormat,
     pub policy: Policy,
     /// Set when landed branches are copied somewhere else.

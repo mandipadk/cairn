@@ -70,7 +70,8 @@ pub(crate) mod raw {
     pub fn repos(conn: &Connection) -> CoreResult<Vec<Repo>> {
         let rows = conn
             .prepare_cached(
-                "SELECT name, default_branch, object_format, policy, mirror, visibility, owner
+                "SELECT name, default_branch, object_format, policy, mirror, visibility, owner,
+                        pending_owner
                  FROM repos ORDER BY name",
             )?
             .query_map([], |row| {
@@ -82,14 +83,16 @@ pub(crate) mod raw {
                     row.get::<_, Option<String>>(4)?,
                     row.get::<_, String>(5)?,
                     row.get::<_, String>(6)?,
+                    row.get::<_, Option<String>>(7)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
             .map(
-                |(name, default_branch, format, policy, mirror, visibility, owner)| {
+                |(name, default_branch, format, policy, mirror, visibility, owner, pending)| {
                     Ok(Repo {
                         owner: PrincipalId(owner),
+                        pending_owner: pending.map(PrincipalId),
                         object_format: parsed(
                             &format!("repo {name}"),
                             &format,
@@ -129,7 +132,8 @@ pub(crate) mod raw {
 
     pub fn repo(conn: &Connection, name: &str) -> CoreResult<Option<Repo>> {
         conn.prepare_cached(
-            "SELECT name, default_branch, object_format, policy, mirror, visibility, owner
+            "SELECT name, default_branch, object_format, policy, mirror, visibility, owner,
+                    pending_owner
              FROM repos WHERE name = ?",
         )?
         .query_row(params![name], |row| {
@@ -141,13 +145,15 @@ pub(crate) mod raw {
                 row.get::<_, Option<String>>(4)?,
                 row.get::<_, String>(5)?,
                 row.get::<_, String>(6)?,
+                row.get::<_, Option<String>>(7)?,
             ))
         })
         .optional()?
         .map(
-            |(name, default_branch, format, policy, mirror, visibility, owner)| {
+            |(name, default_branch, format, policy, mirror, visibility, owner, pending)| {
                 Ok(Repo {
                     owner: PrincipalId(owner),
+                    pending_owner: pending.map(PrincipalId),
                     object_format: parsed(&format!("repo {name}"), &format, ObjectFormat::parse)?,
                     policy: read_policy(&name, &policy)?,
                     mirror: read_mirror(&name, mirror.as_deref())?,

@@ -655,6 +655,81 @@ impl Store {
     ///
     /// Admin authority, and recorded: making a repository public is a
     /// decision with consequences that someone will want to date later.
+    /// Offer the repository to somebody. Nothing moves until they say
+    /// yes: a repository cannot be left on somebody's doorstep, because
+    /// owning one carries every capability on it and whatever is in it.
+    pub fn offer_transfer(
+        &mut self,
+        actor: &PrincipalId,
+        repo: &str,
+        to: &PrincipalId,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        authorize(&tx, actor, Capability::Admin, Some(repo))?;
+        let record =
+            raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
+        require(record.owner != *to, || "they already own it".to_owned())?;
+        let recipient = raw::principal(&tx, to.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("principal {to}")))?;
+        require(recipient.kind == PrincipalKind::Human, || {
+            "only a person can own a repository; grant an agent what it needs instead".to_owned()
+        })?;
+        let env = append(
+            &tx,
+            actor,
+            Event::RepoTransferOffered {
+                repo: repo.to_owned(),
+                to: to.clone(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
+    /// Take up an offer. Only the person it was made to can.
+    pub fn accept_transfer(&mut self, actor: &PrincipalId, repo: &str) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        ensure_actor(&tx, actor)?;
+        let record =
+            raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
+        require(record.pending_owner.as_ref() == Some(actor), || {
+            format!("{repo} has not been offered to {actor}")
+        })?;
+        let env = append(
+            &tx,
+            actor,
+            Event::RepoTransferAccepted {
+                repo: repo.to_owned(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
+    /// Turn an offer down, or take it back: the offeree may decline, and
+    /// whoever could have made the offer may withdraw it.
+    pub fn decline_transfer(&mut self, actor: &PrincipalId, repo: &str) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        ensure_actor(&tx, actor)?;
+        let record =
+            raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
+        require(record.pending_owner.is_some(), || {
+            format!("{repo} is not on offer")
+        })?;
+        if record.pending_owner.as_ref() != Some(actor) {
+            authorize(&tx, actor, Capability::Admin, Some(repo))?;
+        }
+        let env = append(
+            &tx,
+            actor,
+            Event::RepoTransferDeclined {
+                repo: repo.to_owned(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
     pub fn set_visibility(
         &mut self,
         actor: &PrincipalId,

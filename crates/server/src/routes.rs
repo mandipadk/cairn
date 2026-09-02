@@ -246,6 +246,43 @@ pub async fn set_visibility(
     Ok(committed(Some(name), &env))
 }
 
+#[derive(Deserialize)]
+pub struct TransferRepo {
+    pub to: PrincipalId,
+}
+
+/// Offer the repository to somebody; nothing moves until they accept.
+pub async fn offer_transfer(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(name): Path<String>,
+    Json(body): Json<TransferRepo>,
+) -> ApiResult<Json<Value>> {
+    let env = app.with_store(|s| s.offer_transfer(&actor.0, &name, &body.to))?;
+    app.publish(&env);
+    Ok(committed(Some(name), &env))
+}
+
+pub async fn accept_transfer(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(name): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let env = app.with_store(|s| s.accept_transfer(&actor.0, &name))?;
+    app.publish(&env);
+    Ok(committed(Some(name), &env))
+}
+
+pub async fn decline_transfer(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(name): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let env = app.with_store(|s| s.decline_transfer(&actor.0, &name))?;
+    app.publish(&env);
+    Ok(committed(Some(name), &env))
+}
+
 pub async fn get_repo(
     State(app): State<AppState>,
     actor: Actor,

@@ -119,6 +119,20 @@ pub enum Event {
         repo: String,
         visibility: Visibility,
     },
+    /// The owner offered the repository to somebody. Nothing changes
+    /// until they accept.
+    RepoTransferOffered {
+        repo: String,
+        to: PrincipalId,
+    },
+    /// The offeree accepted: the actor is the new owner from here on.
+    RepoTransferAccepted {
+        repo: String,
+    },
+    /// The offer was declined by the offeree, or withdrawn by the owner.
+    RepoTransferDeclined {
+        repo: String,
+    },
 
     /// A repository set the rules everything on it must meet.
     PolicySet {
@@ -284,6 +298,9 @@ impl Event {
             Event::RepoCreated { .. } => "repo_created",
             Event::HistoryImported { .. } => "history_imported",
             Event::VisibilitySet { .. } => "visibility_set",
+            Event::RepoTransferOffered { .. } => "repo_transfer_offered",
+            Event::RepoTransferAccepted { .. } => "repo_transfer_accepted",
+            Event::RepoTransferDeclined { .. } => "repo_transfer_declined",
             Event::PolicySet { .. } => "policy_set",
             Event::MirrorSet { .. } => "mirror_set",
             Event::MirrorPushed { .. } => "mirror_pushed",

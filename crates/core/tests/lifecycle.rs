@@ -1883,3 +1883,72 @@ fn search_ranks_the_exact_thing_first_and_hides_what_you_cannot_read() {
         .unwrap();
     assert!(theirs.is_empty(), "{theirs:#?}");
 }
+
+#[test]
+fn ownership_moves_only_when_the_other_side_says_yes() {
+    let (mut store, human, scout, _) = seeded();
+    let bee = principal("bee");
+    store
+        .register_principal(&human, &bee, PrincipalKind::Human, "Bee", None, None)
+        .unwrap();
+
+    // Not to an agent: owning carries everything, and agents are granted
+    // what they need instead.
+    assert!(store.offer_transfer(&human, "forge", &scout).is_err());
+    // Not by somebody who does not own it.
+    assert!(matches!(
+        store.offer_transfer(&bee, "forge", &bee).unwrap_err(),
+        CoreError::Forbidden(_)
+    ));
+
+    store.offer_transfer(&human, "forge", &bee).unwrap();
+    let repo = store.repo("forge").unwrap().unwrap();
+    assert_eq!(repo.owner, human, "an offer changes nothing yet");
+    assert_eq!(repo.pending_owner.as_ref(), Some(&bee));
+    assert_eq!(store.inbox(&bee, 5).unwrap()[0].kind, "transfer");
+
+    // Only the offeree can accept; anyone else is refused.
+    assert!(store.accept_transfer(&scout, "forge").is_err());
+    store.accept_transfer(&bee, "forge").unwrap();
+    let repo = store.repo("forge").unwrap().unwrap();
+    assert_eq!(repo.owner, bee);
+    assert!(repo.pending_owner.is_none());
+    assert_eq!(store.inbox(&human, 5).unwrap()[0].kind, "transferred");
+
+    // The old owner holds nothing implicit any more. Ada still can,
+    // but only because she runs the forge; cat, who merely owned
+    // something, does not.
+    let cat = principal("cat");
+    store
+        .register_principal(&human, &cat, PrincipalKind::Human, "Cat", None, None)
+        .unwrap();
+    store
+        .create_repo(&cat, "garden", "main", ObjectFormat::Sha1)
+        .unwrap();
+    store.offer_transfer(&cat, "garden", &bee).unwrap();
+    store.accept_transfer(&bee, "garden").unwrap();
+    assert!(matches!(
+        store.offer_transfer(&cat, "garden", &cat).unwrap_err(),
+        CoreError::Forbidden(_)
+    ));
+    // The new owner may offer it back, and the offeree may decline; the
+    // owner may also withdraw an offer they made.
+    store.offer_transfer(&bee, "forge", &human).unwrap();
+    store.decline_transfer(&human, "forge").unwrap();
+    assert!(
+        store
+            .repo("forge")
+            .unwrap()
+            .unwrap()
+            .pending_owner
+            .is_none()
+    );
+    store.offer_transfer(&bee, "forge", &human).unwrap();
+    store.decline_transfer(&bee, "forge").unwrap();
+    assert!(
+        store.decline_transfer(&bee, "forge").is_err(),
+        "nothing on offer to withdraw"
+    );
+
+    assert!(store.fsck().unwrap().is_empty());
+}

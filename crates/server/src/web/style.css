@@ -694,3 +694,6 @@ pre { overflow-x: auto; }
   .bar .search { display: none; }
   .bar { grid-template-columns: auto minmax(0, 1fr) auto; }
 }
+
+.choice { display: flex; gap: 10px; align-items: baseline; font-size: 13px; color: var(--ink2); }
+.choice b { color: var(--ink); font-weight: 500; }

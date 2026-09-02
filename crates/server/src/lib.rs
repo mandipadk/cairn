@@ -40,6 +40,15 @@ pub fn router(state: AppState) -> Router {
         .route("/api/repos/{name}", get(routes::get_repo))
         .route("/api/repos/{name}/import", post(routes::import_history))
         .route("/api/repos/{name}/visibility", post(routes::set_visibility))
+        .route("/api/repos/{name}/transfer", post(routes::offer_transfer))
+        .route(
+            "/api/repos/{name}/transfer/accept",
+            post(routes::accept_transfer),
+        )
+        .route(
+            "/api/repos/{name}/transfer/decline",
+            post(routes::decline_transfer),
+        )
         .route("/api/repos/{name}/changes", get(routes::list_changes))
         .route(
             "/api/repos/{name}/changes/{number}",

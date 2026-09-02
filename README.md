@@ -1,295 +1,136 @@
-# cairn
+# Cairn
 
-A git forge designed for teams of humans and AI agents, built around a
-different core than existing forges: an append-only, queryable event graph
-of how software actually comes to exist.
+A git forge that records how software came to exist.
 
-Where a traditional forge stores code plus free-text conversation, cairn
-records the full causal chain as structured, subscribable data:
+Not who typed which line — what was claimed about the code, who re-ran
+those claims, who judged it, and why anything was allowed to land. When
+most of the work arrives from agents, the diff stops being the thing worth
+reading and the evidence starts.
 
-- **Tasks** — durable statements of intent
-- **Sessions** — individual (typically agent) runs of work against a task
-- **Changes and revisions** — the produced code, with stable identity
-  across rebases
-- **Claims** — reproducible verification assertions, including what was
-  deliberately *not* checked
-- **Verdicts** — typed review judgments across domains
-- **Merges** — decided by explainable policy, with the full evaluation
-  trace recorded in the event log
+Cairn speaks ordinary git. Clone and push with the client you already
+have; the forge turns a push into a change, a change into a record, and a
+record into a decision it can explain.
 
-What a repository requires before anything lands on it is its own
-choice, recorded as an event like everything else: whether an executed
-check is needed, who counts as an independent approver, whether a
-runner must have reproduced a claim, and which review domains must sign
-off. The defaults are the rules the forge ships with, so a repository
-that never sets a policy behaves as it always did. A proposed policy
-can be previewed first — it reports which open changes it would stop
-from landing, and why, without changing anything.
+## What a merge looks like here
 
-A repository can mirror its landed branches somewhere else, which is
-how a migration happens without a cutover: work moves here while
-whatever people already read — GitHub, usually — keeps seeing the
-branches it always did. Every attempt is recorded whether it succeeded
-or not, because a mirror that has been quietly failing for a week is
-exactly what nobody notices. An unreachable mirror never holds up work
-on the forge that owns it. The credential that authorises the push
-belongs to whoever runs the forge and is never written to the graph:
-mirror URLs carrying credentials are refused.
+Every merge carries the evaluation that allowed it. This is a real one,
+from the forge that hosts this repository:
 
-Because projections are derived from the log, a schema change is not a
-migration: on opening a database whose projection shape is out of date,
-the forge drops the derived tables and replays the log into fresh ones.
-The log itself is never touched.
-
-Agents are first-class principals alongside humans. Stateless agents
-reconstruct context by querying the graph and resume event streams from a
-cursor; merge policy composes human and machine judgment (for example:
-one human approval, or two approvals from agents of distinct models).
-
-## Status
-
-Early development. Implemented and tested: the event-sourced core —
-object graph, command layer, policy engine (`crates/core`); the HTTP
-surface: a JSON API covering every protocol verb plus a Server-Sent
-Events stream with cursor resume (`crates/server`, `cairn serve`); and
-an MCP adapter exposing the protocol as tools for AI agents
-(`cairn mcp`); and git hosting with change-native transport — pushing
-to `refs/for/<branch>` opens a change or adds a revision (matched by
-`Change-Id` trailer, as emitted by Gerrit tooling and jj), a
-multi-commit push becomes a stack of linked changes (one per commit,
-requiring a trailer on each), every revision stays fetchable at
-`refs/changes/<number>/<revision>`, and a policy-approved merge
-fast-forwards the real branch. Direct pushes to branches are refused —
-branches advance only by merge. Repos may use SHA-1 or SHA-256 object
-databases.
-
-Identity and authority are real: API tokens (secrets shown once at
-mint, only hashes stored — recorded via the event log itself), and
-capability grants. Authority is explicit for everyone. You hold every
-capability on repositories you own — creating one is how you come to own
-it — and everywhere else you hold precisely what somebody granted you:
-typed verbs (`task`, `push`, `review`, `merge`, `verify`, `admin`),
-optionally repo-scoped and time-boxed, revocable with immediate effect.
-The same rules apply to people and to agents, which is the point: a
-forge where signing in made you an administrator of everyone else's work
-would not be one anybody could share. Running the forge is itself a
-grant — an unscoped `admin` — held by whoever `cairn admin bootstrap`
-set up, and grantable onward like any other. A refusal names the missing capability and the exact grant
-that would fix it. Git pushes authenticate with a token as the
-Basic-auth password. An asserted-identity dev header exists behind an
-explicit `--dev` flag, off by default.
-
-Ready changes land through a merge queue: enqueue a change (policy
-must already be satisfied) and the forge lands it — fast-forward when
-the target is unmoved, otherwise auto-rebased in memory with the
-original author preserved and the landed commit recorded as
-`merged_as` on the merge event. Whatever cannot land is dequeued with
-a reason event naming exactly why: a policy regression, a revoked
-capability, or the conflicting files. Policy is re-checked at landing
-time, and stacks enqueue bottom-up.
-
-A web interface ships in the same binary, server-rendered from the same
-store the API reads: browse the tree (every file linking to the change
-that landed it), read a change with its verification, judgment and
-readiness side by side, give a verdict, enqueue, and watch the landing
-queue and event log. Sign in with an API token.
-
-Blame answers a different question here. Instead of who typed a line,
-each line carries the change that landed it, what was claimed about it,
-who judged it — and what those claims explicitly left unverified.
-Lines that landed under a declared gap are marked, and the gaps are
-listed. The same view is available to agents as an API endpoint and an
-MCP tool, so an agent can ask what is known about code before changing
-it.
-
-Claims are contracts rather than assertions: a runner holding the
-verify capability can re-execute a claim's recorded command and record
-what it actually observed. Verification must be independent — a claim's
-author cannot verify it — and a claim a runner cannot reproduce blocks
-the change from landing until the dispute is resolved. `cairn verify`
-is such a runner: it re-runs a change's claims in whatever environment
-you point it at and reports honestly.
-
-Deciding what deserves a human's attention gets the same treatment as
-deciding what may land: an explainable evaluation over the graph rather
-than a feed sorted by recency. Open changes are ranked by what judgment
-is worth on them — reviewers disagreeing, a disputed claim, work resting
-on argument alone, claims nobody re-ran, declared gaps — and each
-ranking carries its signals and their evidence. A sampling policy also
-draws a fixed share of changes no human ever looked at, deterministically
-by change id, so a share of agent-only work reaches a person whether or
-not anything about it looks wrong.
-
-A session can declare which paths it expects to touch, and is told who
-else is already there — including whether they have pushed code, which
-means a rebase is coming rather than merely possible. Nothing is
-refused: the forge makes the collision visible while it is still cheap
-and the agent decides what to do. Declarations are replaced rather than
-accumulated, so narrowing scope releases ground, and a lease lives
-exactly as long as the session behind it.
-
-Where reviewers reach opposite conclusions, both positions are put side
-by side on the change — that is the one place a human's judgment is
-worth more than another review.
-
-Because the protocol refuses to let a session end without recording an
-outcome, failed attempts leave knowledge behind by construction. Those
-outcomes are searchable, so the question an agent should ask first —
-has anyone tried this before? — has an answer.
-
-When a stacked change lands, its open children are carried onto the new
-tip automatically: a successful carry adds a revision exactly as a push
-would, and one that conflicts is recorded with the files that collided
-and left for a person. The author's own revisions are never rewritten.
-
-Each branch is its own landing queue and they run at the same time,
-since two lanes never advance the same ref. Within a lane, order stays
-strict — that is what keeps every landing a plain consequence of the
-one before it.
-
-## Continuous integration
-
-`cairn verify` is the runner. Given a change it re-runs that change's
-claims; given none, it works through every change whose claims name a
-command nobody has re-run, fetching each revision from the forge rather
-than trusting whatever directory it was started in. It exits non-zero
-when a claim cannot be reproduced, so a CI job goes red where people
-already look, and the dispute blocks the change until someone resolves
-it. `.github/workflows/verify.yml.example` is a working configuration;
-nothing about the runner is specific to any CI product.
-
-## Exposure
-
-Before putting a forge somewhere strangers can reach it: serve it over
-HTTPS and pass `--secure-cookies`, keep `--dev` off, and note what is
-and is not defended. Responses carry a strict content policy, frame and
-sniffing protections, and HSTS. Sign-in attempts are rate limited per
-source address — behind a reverse proxy, pass `--trust-proxy` so callers
-are told apart by the forwarded address rather than sharing the proxy's.
-`/healthz` answers unauthenticated, for whatever is watching. Every free-text field a caller controls is bounded, so
-the log cannot be inflated by a stranger. Git subprocesses have
-timeouts, so a hung transfer cannot hold a connection indefinitely.
-
-What one request may cost is bounded too, because the sizes involved are
-not the forge's to choose. A single push carries at most 64 commits —
-beyond that it is history rather than a stack, and it is refused with
-that explanation. Files are rendered up to 2 MB and diffs up to 1 MB;
-past that the page says how large the thing is instead of loading it,
-since the bytes would otherwise be held once as read, again as a string,
-and again escaped into HTML. Binary files are named rather than shown. A
-database with no room left fails the write whole: every command is one
-transaction, so a full disk costs the write and not the log.
-
-Repositories are private unless someone says otherwise, and that is
-enforced at the transport rather than only in the interface: a private
-repository cannot be cloned without a token, and it answers a stranger
-exactly as a repository that does not exist does, so which private
-repositories are here is not public either. Making one public is an
-admin decision and is recorded like any other. Reading authenticates on
-the token alone — the username in Basic auth is decoration, as it is
-everywhere else — while a push still requires the two to agree, because
-a mismatch there is usually somebody's mistake worth catching.
-
-The event log is the forge's memory, and memory is not automatically
-public. Every event carries a recorded scope: a repository's, somebody's
-own, or the forge's. You see a repository's events if you could read the
-repository, your own account's events because they are about you, and the
-forge's events because they are how the forge is run. So a repository page
-shows that repository's history rather than the whole instance's, an
-account shows its own, and the resumable stream filters the same way
-without gaps — the cursor advances past what it withheld, so nobody can
-learn what they missed from a hole in the numbering. Authority is scoped
-but never private: a grant is visible to everyone it stands alongside,
-because a forge arguing that authority should be auditable cannot hide who
-may act. Passwords and tokens are the exception that proves it — those are
-credentials, not authority, and stay with their subject.
-
-What is not here yet: request-rate limiting beyond sign-in and the
-waitlist; quotas on repository or push size; teams and organisations as a
-grouping over ownership; and any protection against a principal that
-holds legitimate capabilities and abuses them. Grants are the tool for
-that, and they are only as narrow as whoever issues them.
-
-## Requirements
-
-**git 2.39 or newer**, on the PATH of whoever runs `serve`. Merging uses
-`merge-tree --write-tree`, which arrived in git 2.38, so a stock Ubuntu
-22.04 (git 2.34) cannot merge — add `ppa:git-core/ppa`, or run somewhere
-newer. `serve` checks this at startup and refuses to boot on a git it
-cannot merge with, rather than accepting work it will fail to land.
-
-2.39 rather than 2.38 because 2.39 is the oldest git the test suite runs
-against; the floor is a tested fact, not an inference.
-
-**SHA-256 repositories additionally need git 2.43 or newer on the
-client.** Cloning an empty repository cannot infer the object format from
-any object, so it depends on the transport advertising it, and older git
-quietly produces a SHA-1 working copy whose first push will not match the
-repository it came from. Verified: 2.40 fails, 2.43 works. This is a
-client limitation and applies to whoever clones, not to the server.
-
-## Running
-
-```sh
-# first run: register the first human and mint their token (shown once)
-cargo run -- admin bootstrap --db forge.db ada --display "Ada"
-cargo run -- serve --db forge.db --listen 127.0.0.1:6160
-
-# everything authenticates with 'Authorization: Bearer <token>'
-curl -X POST localhost:6160/api/principals \
-  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d '{"id": "scout", "kind": "agent", "display": "Scout", "model": "claude-fable-5"}'
-
-# delegate: agents act only under capability grants
-curl -X POST localhost:6160/api/grants \
-  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d '{"grantee": "scout", "actions": ["task", "push"]}'
-
-# follow everything that happens, resumable by cursor
-curl -N 'localhost:6160/api/events/stream?after=0' -H "Authorization: Bearer $TOKEN"
+```json
+{
+  "kind": "change_merged",
+  "change": "c-11jegz16kc10xfvbf6y8tnrzzc",
+  "actor": "mandip",
+  "trace": {
+    "satisfied": true,
+    "requirements": [
+      { "description": "latest revision carries a passing test claim",
+        "evidence": "cl-0ssb0r7z6v4852jp7tste29jhy" },
+      { "description": "a runner reproduced a claim on the latest revision",
+        "evidence": "runner reproduced cl-0ssb0r7z6v4852jp7tste29jhy" },
+      { "description": "no claim on the latest revision is disputed by a runner",
+        "evidence": "1 re-run(s), all reproduced" },
+      { "description": "no blocking verdict on the latest revision",
+        "evidence": "no blocks" }
+    ]
+  }
+}
 ```
 
-Agents connect natively over MCP — the adapter proxies the same API:
+Months later, "why did this land?" has an answer that does not depend on
+anyone remembering.
+
+## What is different
+
+**Claims are contracts, not comments.** A claim that the tests pass is
+recorded with the command that produced it, so somebody else can run it
+and say whether they saw the same thing. Verification has to be
+independent — a claim cannot vouch for itself — and a claim nobody could
+reproduce blocks the change until it is settled. A claim also says what
+it deliberately did *not* check, and that gap follows the code: blame
+here tells you which lines landed under a declared gap.
+
+**Merges explain themselves.** What a repository requires before anything
+lands is its policy: an executed check, an independent approver, a runner
+that reproduced a claim, review domains that must sign off. Policy is
+evaluated at landing time and the full trace is written into the merge
+event, as above. A proposed policy can be previewed first — it reports
+which open changes it would stop, and why, without changing anything.
+
+**Attention is routed, not scrolled.** Open work is ranked by what human
+judgment is actually worth on it — reviewers disagreeing, a disputed
+claim, code resting on argument alone, claims nobody re-ran — and each
+ranking carries its evidence. A fixed share of work no human has looked at
+is sampled regardless, so agent output cannot quietly become unread
+output.
+
+**Agents are principals, not plugins.** People and agents hold the same
+kind of identity and the same kind of authority: typed capabilities
+(`task`, `push`, `review`, `merge`, `verify`, `admin`), scoped to a
+repository if you like, time-boxed if you like, revocable with immediate
+effect. You hold everything on what you own and precisely what someone
+granted you everywhere else — and that rule is the same for a person as
+for an agent. A refusal names the missing capability and the exact grant
+that would fix it. Agents connect over MCP; the adapter ships in the same
+binary.
+
+**The log is the product, and it has an audience.** Everything above is an
+event in an append-only log, and every projection — the tree, the queue,
+blame, the ranking — is that log, applied. A schema change is a replay,
+not a migration. `fsck` proves the two still agree. And each event knows
+who it is for: a repository's events go to the people who can read that
+repository, your account's events to you, and nothing leaks through a gap
+in the sequence numbers.
+
+**Imported history says so.** History that predates the forge is recorded
+as imported, never dressed up as reviewed. The log would rather admit a
+gap than invent a decision.
+
+## It speaks git
+
+```sh
+git clone https://forge.example/git/demo
+git commit -m $'Do the thing\n\nChange-Id: I8f3a1c2e'
+git push origin HEAD:refs/for/main
+#  * [new reference]   HEAD -> refs/changes/1/1
+```
+
+Pushing to `refs/for/<branch>` opens a change. Push again with the same
+`Change-Id` and it becomes revision 2 of the same change; every revision
+stays fetchable at `refs/changes/<number>/<revision>`. A multi-commit push
+becomes a stack, landed bottom-up, with children carried onto each new
+tip automatically. Branches move only by merge — a direct push is refused
+with the reason.
+
+## Try it
+
+```sh
+cargo run -- admin bootstrap --db forge.db you --display "You"
+cargo run -- serve --db forge.db --listen 127.0.0.1:6160
+```
+
+Open `http://127.0.0.1:6160` and sign in with the token it printed. Push
+a change as above, attach a claim, and watch the readiness view fill in.
+To let an agent work alongside you:
 
 ```sh
 cairn mcp --server http://127.0.0.1:6160 --token $AGENT_TOKEN
 ```
 
-Mirroring landed branches outward, for a migration that needs no
-cutover:
+Needs git 2.39 or newer on the server. [Operating](docs/operating.md)
+covers exposure, CI, mirroring and the admin commands;
+[Architecture](docs/architecture.md) covers the model in depth.
 
-```sh
-cairn serve --db forge.db --mirror-token $GITHUB_TOKEN   # or CAIRN_MIRROR_TOKEN
-curl -X POST localhost:6160/api/repos/demo/mirror \
-  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d '{"mirror": {"url": "https://github.com/you/demo.git", "enabled": true}}'
-```
+## Status
 
-The web interface is served at the same address — open
-`http://127.0.0.1:6160` and sign in with a token. Add `--dev` to accept
-asserted identity instead, for local development only.
+Early, self-hosted, and hosting itself: since the day it could, every
+change to this repository has been pushed to Cairn, independently re-run
+by a runner, and landed under its own policy. A hosted instance is on the way
+— there is a waitlist at [cairn.mandip.dev](https://cairn.mandip.dev).
 
-The transport is also the API — plain git speaks to the graph:
-
-```sh
-git clone http://127.0.0.1:6160/git/demo
-git commit -m $'Do the thing\n\nChange-Id: I8f3a1c2e'
-git push http://scout:x@127.0.0.1:6160/git/demo HEAD:refs/for/main
-# remote reports the change ref, e.g. refs/changes/1/1;
-# amend + push again with the same Change-Id -> revision 2
-```
-
-## Layout
-
-- `crates/core` — event log, projections, domain commands, merge policy
-- `crates/git` — bare-repo storage, pkt-line codec, commit parsing
-- `crates/server` — JSON API, event stream, git smart HTTP, web interface
-- `crates/cli` — the `cairn` binary: server, MCP adapter, push hook
-
-## Development
-
-```sh
-cargo test --workspace
-cargo clippy --workspace --all-targets
-cargo fmt
-```
+What is not here yet, so nobody has to find out the hard way:
+notifications, teams and organisations, self-service password reset,
+quotas on repository size, and a mobile layout. What is here is tested at
+the boundaries where a forge is usually wrong — authority, concurrency,
+crash recovery, hostile input, resource limits — and `fsck` runs clean on
+the instance serving this page.

@@ -241,6 +241,19 @@ pub fn run(runner: Runner) -> anyhow::Result<bool> {
             .current_dir(runner.workdir)
             .output()
             .with_context(|| format!("running {command:?}"))?;
+        // The shell's two reserved codes mean the command never ran:
+        // 127 is "not found", 126 is "found but not executable". Neither
+        // is evidence about the claim - it is this machine missing a
+        // toolchain - and recording it as a dispute would block a change
+        // for a reason that has nothing to do with the change. Refusing
+        // loudly costs one confusing CI failure; a false dispute costs
+        // somebody an afternoon and teaches them to distrust the runner.
+        if matches!(output.status.code(), Some(126 | 127)) {
+            bail!(
+                "cannot run {command:?} here: {}. The claim was not checked and                  nothing has been recorded - fix this runner's environment",
+                summarize(&output, false)
+            );
+        }
         let passed = output.status.success();
         let agrees = passed == expected;
         ran += 1;

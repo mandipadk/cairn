@@ -1659,3 +1659,76 @@ fn projections_rebuild_themselves_from_the_log() {
     // And the log itself was never touched.
     assert_eq!(store.events_after(EventSeq(0), 100).unwrap().len(), 11);
 }
+
+#[test]
+fn a_runner_that_re_runs_replaces_its_own_earlier_verdict() {
+    let (mut store, human, scout, arbiter) = seeded();
+    store
+        .issue_grant(&human, &arbiter, None, vec![Capability::Verify], None)
+        .unwrap();
+
+    let (change, _, _) = store
+        .open_change(&scout, ChangeSpec::new("forge", "main", "Claims something"))
+        .unwrap();
+    store
+        .push_revision(&scout, &change, OID, None, "work")
+        .unwrap();
+    let (claim, _) = store
+        .attach_claim(
+            &scout,
+            &change,
+            1,
+            ClaimSpec {
+                kind: ClaimKind::Test,
+                command: Some("cargo test".into()),
+                passed: true,
+                summary: "all green".into(),
+                unchecked: vec![],
+            },
+        )
+        .unwrap();
+    store
+        .give_verdict(
+            &human,
+            &change,
+            1,
+            ReviewDomain::Correctness,
+            Disposition::Approve,
+            "ok",
+        )
+        .unwrap();
+
+    // A runner whose environment was broken says so, and the change is
+    // rightly held: the record now contains a contradiction.
+    store
+        .verify_claim(&arbiter, &claim, false, "cargo test", "exit 1")
+        .unwrap();
+    assert!(!store.merge_readiness(&change).unwrap().satisfied);
+
+    // The same runner, fixed and re-run, is not adding a second opinion
+    // to its first - it is stating what it now observes. Were both to
+    // stand, one bad afternoon would make the change unlandable forever.
+    store
+        .verify_claim(&arbiter, &claim, true, "cargo test", "exit 0")
+        .unwrap();
+    let ready = store.merge_readiness(&change).unwrap();
+    assert!(ready.satisfied, "{:#?}", ready.requirements);
+
+    // Both attempts remain in the log; superseding is a reading of the
+    // record, not an edit of it.
+    assert_eq!(store.verifications_on(&change, 1).unwrap().len(), 2);
+
+    // A second runner disagreeing is a different matter entirely, and
+    // nothing the first one said supersedes it.
+    let other = principal("second-runner");
+    store
+        .register_principal(&human, &other, PrincipalKind::Agent, "Two", Some("m"), None)
+        .unwrap();
+    store
+        .issue_grant(&human, &other, None, vec![Capability::Verify], None)
+        .unwrap();
+    store
+        .verify_claim(&other, &claim, false, "cargo test", "exit 1")
+        .unwrap();
+    assert!(!store.merge_readiness(&change).unwrap().satisfied);
+}

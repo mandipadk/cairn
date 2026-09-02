@@ -15,9 +15,12 @@
 
 use crate::error::CoreResult;
 use crate::queries::raw;
-use crate::types::{Change, ClaimKind, Disposition, Independence, Policy, PrincipalKind};
+use crate::types::{
+    Change, ClaimKind, Disposition, Independence, Policy, PrincipalKind, Verification,
+};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Requirement {
@@ -94,12 +97,31 @@ pub(crate) fn evaluate_against(
     // A claim someone re-ran and could not reproduce is worse than no
     // claim: it is a contradiction on the record.
     let verifications = raw::verifications_on(conn, change.id.as_str(), revision)?;
-    let disputed: Vec<_> = verifications.iter().filter(|v| !v.agrees).collect();
+    // A runner's verdict on a claim is its current position, not a
+    // permanent artefact. When the same runner re-runs the same claim it
+    // is saying what it now observes, and its earlier attempt becomes
+    // history rather than a standing objection - otherwise one bad
+    // afternoon in a runner's environment would brick a change forever,
+    // with the log asserting both that the claim was reproduced and that
+    // it was not. Two *different* runners disagreeing is not superseded
+    // by either of them: that disagreement is real information, and it
+    // is exactly the case a person should look at.
+    let standing: Vec<&Verification> = {
+        let mut latest: BTreeMap<(&str, &str), &Verification> = BTreeMap::new();
+        for verification in &verifications {
+            latest.insert(
+                (verification.claim.as_str(), verification.by.as_str()),
+                verification,
+            );
+        }
+        latest.into_values().collect()
+    };
+    let disputed: Vec<_> = standing.iter().filter(|v| !v.agrees).collect();
     requirements.push(Requirement {
         description: "no claim on the latest revision is disputed by a runner".into(),
         satisfied: disputed.is_empty(),
         evidence: if disputed.is_empty() {
-            match verifications.len() {
+            match standing.len() {
                 0 => "no independent re-runs".into(),
                 n => format!("{n} re-run(s), all reproduced"),
             }
@@ -113,7 +135,7 @@ pub(crate) fn evaluate_against(
     });
 
     if policy.require_runner_verification {
-        let reproduced: Vec<_> = verifications.iter().filter(|v| v.agrees).collect();
+        let reproduced: Vec<_> = standing.iter().filter(|v| v.agrees).collect();
         requirements.push(Requirement {
             description: "a runner reproduced a claim on the latest revision".into(),
             satisfied: !reproduced.is_empty(),

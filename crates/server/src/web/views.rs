@@ -5,8 +5,8 @@
 use super::diff::{FileDiff, LineKind};
 use super::{Brief, LandingData, Sidebar, Viewer};
 use cairn_core::{
-    Change, ChangeState, Claim, Disposition, Envelope, Event, PolicyTrace, Revision, Task, Verdict,
-    Verification,
+    Change, ChangeState, Claim, Disposition, Envelope, Event, Notice, PolicyTrace, Revision, Task,
+    Verdict, Verification,
 };
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 use std::collections::HashMap;
@@ -188,6 +188,9 @@ fn sidebar(viewer: &Viewer, current: Option<&str>) -> Markup {
 
             div class="sep" {}
             h4 { "You" }
+            a class={ @if current == Some("inbox") { "on" } @else { "" } } href="/inbox" {
+                span { "Inbox" } span class="n" { @if chrome.unread > 0 { (chrome.unread) } }
+            }
             a href="/you" { span { "Your changes" } span class="n" { @if chrome.yours > 0 { (chrome.yours) } } }
             a href="/agents" { span { "Agents" } span class="n" {} }
             a href="/you/tokens" { span { "Tokens" } span class="n" {} }
@@ -592,6 +595,91 @@ pub fn you(theme: Theme, viewer: &Viewer, mine: &[(String, Change)]) -> Markup {
             }
         },
     )
+}
+
+/// What is addressed to the viewer, newest first, grouped by day. An
+/// unread row carries a dot and full weight; a read one recedes. Every
+/// row is a link to the thing itself, because a notice that cannot be
+/// acted on from where it is read is a to-do list somebody has to copy.
+pub fn inbox(theme: Theme, viewer: &Viewer, notices: &[Notice], unread: usize) -> Markup {
+    layout_with(
+        theme,
+        Some(viewer),
+        Some("inbox"),
+        None,
+        "Inbox",
+        html! {
+            div class="sechead" {
+                b { "Inbox" }
+                span { (unread) " unread" }
+                @if unread > 0 {
+                    form method="post" action="/inbox/read" style="margin-left: auto;" {
+                        input type="hidden" name="all" value="1";
+                        button class="act" type="submit" { "Mark all read" }
+                    }
+                }
+            }
+            @if notices.is_empty() {
+                p class="empty" { "Nothing is waiting on you." }
+            }
+            @let mut day = String::new();
+            @for notice in notices {
+                @let this_day = day_of(&notice.ts);
+                @if this_day != day {
+                    div class="day" { (day_label(&this_day)) }
+                    ({ day = this_day; "" })
+                }
+                a class={ "trow notice" @if notice.read { " read" } } href=(notice_href(notice)) {
+                    span class="dot" {}
+                    span class="what" { (notice.what) }
+                    span class="where" {
+                        @if let Some(repo) = &notice.repo { (repo) }
+                        @if let Some(number) = notice.number { " #" (number) }
+                    }
+                    span class="when" { (clock_of(&notice.ts)) }
+                }
+            }
+        },
+        None,
+    )
+}
+
+/// Where a notice points: the change if it names one, else the
+/// repository, else the viewer's own pages.
+fn notice_href(notice: &Notice) -> String {
+    match (&notice.repo, notice.number) {
+        (Some(repo), Some(number)) => format!("/{repo}/changes/{number}"),
+        (Some(repo), None) => format!("/{repo}"),
+        (None, _) => match notice.kind.as_str() {
+            "granted" | "revoked" => "/you".to_owned(),
+            _ => "/you".to_owned(),
+        },
+    }
+}
+
+fn day_of(ts: &str) -> String {
+    ts.get(..10).unwrap_or(ts).to_owned()
+}
+
+fn clock_of(ts: &str) -> String {
+    ts.get(11..16).unwrap_or("").to_owned()
+}
+
+/// "Today", "Yesterday", or the date. The comparison is in UTC, which
+/// is what the log records; a viewer's own midnight is not something
+/// the server knows.
+fn day_label(day: &str) -> String {
+    let today = jiff::Timestamp::now().to_string();
+    let today = today.get(..10).unwrap_or("");
+    let yesterday = (jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24)).to_string();
+    let yesterday = yesterday.get(..10).unwrap_or("");
+    if day == today {
+        "Today".to_owned()
+    } else if day == yesterday {
+        "Yesterday".to_owned()
+    } else {
+        day.to_owned()
+    }
 }
 
 pub fn settings(theme: Theme, viewer: &Viewer, error: Option<&str>, done: bool) -> Markup {

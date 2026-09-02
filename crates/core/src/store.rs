@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -71,6 +71,16 @@ CREATE TABLE IF NOT EXISTS waitlist (
   email  TEXT PRIMARY KEY,
   joined TEXT NOT NULL,
   note   TEXT
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS inbox_read (
+  principal TEXT NOT NULL,
+  seq       INTEGER NOT NULL,
+  PRIMARY KEY (principal, seq)
+) STRICT;
+CREATE TABLE IF NOT EXISTS inbox_cursor (
+  principal TEXT PRIMARY KEY,
+  seq       INTEGER NOT NULL
 ) STRICT;
 ";
 
@@ -136,6 +146,18 @@ CREATE TABLE IF NOT EXISTS event_scope (
   subject TEXT
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_event_scope_repo ON event_scope (repo);
+
+CREATE TABLE IF NOT EXISTS notices (
+  seq       INTEGER NOT NULL,
+  recipient TEXT NOT NULL,
+  kind      TEXT NOT NULL,
+  repo      TEXT,
+  change_id TEXT,
+  number    INTEGER,
+  what      TEXT NOT NULL,
+  PRIMARY KEY (seq, recipient)
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_notices_recipient ON notices (recipient, seq);
 CREATE INDEX IF NOT EXISTS idx_event_scope_subject ON event_scope (subject);
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -253,6 +275,7 @@ CREATE INDEX IF NOT EXISTS idx_verdicts_change ON verdicts (change_id, revision)
 const PROJECTION_TABLES: &[&str] = &[
     "principals",
     "event_scope",
+    "notices",
     "tokens",
     "grants",
     "repos",
@@ -701,8 +724,6 @@ fn record_scope(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             (None, owner)
         }
 
-        // A grant scoped to a repository is that repository's business;
-        // a wider one is the grantee's.
         // A grant scoped to a repository is that repository's business.
         // A wider one is the forge's, and deliberately not private to
         // the grantee: authority is not a credential, and a forge whose
@@ -852,10 +873,302 @@ fn tracing_replay(events: u64) {
     eprintln!("cairn: projections rebuilt by replaying {events} events");
 }
 
+/// Who an event is addressed to, and in what words.
+///
+/// A notice is an event read from one person's side: your change was
+/// judged, your claim was disputed, somebody gave you authority. It is
+/// derived here, at apply time, so the inbox is a projection like the
+/// tree and the queue - rebuilt from the log, never edited. Nobody is
+/// told about their own action, and nobody is told about a repository
+/// they could not read: routing goes to owners and authors, who by
+/// construction can.
+/// One notice as it is routed: (recipient, kind, repository, change,
+/// change number, what happened in words).
+type Addressed = (
+    String,
+    &'static str,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    String,
+);
+
+fn record_notices(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
+    use Event::*;
+
+    struct ChangeRef {
+        repo: String,
+        number: i64,
+        owner: String,
+        target: String,
+    }
+    let change_ref = |id: &str| -> CoreResult<Option<ChangeRef>> {
+        Ok(tx
+            .prepare_cached("SELECT repo, number, owner, target FROM changes WHERE id = ?")?
+            .query_row(params![id], |row| {
+                Ok(ChangeRef {
+                    repo: row.get(0)?,
+                    number: row.get(1)?,
+                    owner: row.get(2)?,
+                    target: row.get(3)?,
+                })
+            })
+            .optional()?)
+    };
+    let repo_owner = |name: &str| -> CoreResult<Option<String>> {
+        Ok(tx
+            .prepare_cached("SELECT owner FROM repos WHERE name = ?")?
+            .query_row(params![name], |row| row.get(0))
+            .optional()?)
+    };
+    let task_ref = |id: &str| -> CoreResult<Option<(String, String)>> {
+        Ok(tx
+            .prepare_cached("SELECT created_by, title FROM tasks WHERE id = ?")?
+            .query_row(params![id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .optional()?)
+    };
+
+    let actor = env.actor.as_str();
+    // (recipient, kind, repo, change, number, what)
+    let notice: Option<Addressed> = match &env.event {
+        ChangeOpened {
+            change,
+            repo,
+            number,
+            title,
+            ..
+        } => repo_owner(repo)?.map(|owner| {
+            (
+                owner,
+                "opened",
+                Some(repo.clone()),
+                Some(change.as_str().to_owned()),
+                Some(*number),
+                format!("{actor} opened #{number} in {repo}: {title}"),
+            )
+        }),
+
+        VerdictGiven {
+            change,
+            domain,
+            disposition,
+            ..
+        } => change_ref(change.as_str())?.map(|c| {
+            (
+                c.owner,
+                "verdict",
+                Some(c.repo.clone()),
+                Some(change.as_str().to_owned()),
+                Some(c.number),
+                format!(
+                    "{actor} {} #{} on {}",
+                    match disposition {
+                        crate::types::Disposition::Approve => "approved",
+                        crate::types::Disposition::Block => "blocked",
+                        _ => "commented on",
+                    },
+                    c.number,
+                    domain.as_str()
+                ),
+            )
+        }),
+
+        ClaimVerified {
+            claim,
+            change,
+            agrees,
+            ..
+        } => {
+            let author: Option<String> = tx
+                .prepare_cached("SELECT by FROM claims WHERE id = ?")?
+                .query_row(params![claim.as_str()], |row| row.get(0))
+                .optional()?;
+            match (author, change_ref(change.as_str())?) {
+                (Some(author), Some(c)) => Some((
+                    author,
+                    if *agrees { "reproduced" } else { "disputed" },
+                    Some(c.repo),
+                    Some(change.as_str().to_owned()),
+                    Some(c.number),
+                    if *agrees {
+                        format!("{actor} reproduced your claim on #{}", c.number)
+                    } else {
+                        format!("{actor} could not reproduce your claim on #{}", c.number)
+                    },
+                )),
+                _ => None,
+            }
+        }
+
+        ChangeMerged { change, .. } => change_ref(change.as_str())?.map(|c| {
+            (
+                c.owner,
+                "landed",
+                Some(c.repo.clone()),
+                Some(change.as_str().to_owned()),
+                Some(c.number),
+                format!("#{} landed on {}", c.number, c.target),
+            )
+        }),
+
+        ChangeDequeued { change, reason } => change_ref(change.as_str())?.map(|c| {
+            (
+                c.owner,
+                "dequeued",
+                Some(c.repo),
+                Some(change.as_str().to_owned()),
+                Some(c.number),
+                format!("#{} left the queue: {reason}", c.number),
+            )
+        }),
+
+        RebaseFailed {
+            change,
+            onto,
+            files,
+        } => change_ref(change.as_str())?.map(|c| {
+            (
+                c.owner,
+                "conflict",
+                Some(c.repo),
+                Some(change.as_str().to_owned()),
+                Some(c.number),
+                format!(
+                    "#{} could not be carried onto {onto}: {}",
+                    c.number,
+                    files.join(", ")
+                ),
+            )
+        }),
+
+        ChangeAbandoned { change, reason } => change_ref(change.as_str())?.map(|c| {
+            (
+                c.owner,
+                "abandoned",
+                Some(c.repo),
+                Some(change.as_str().to_owned()),
+                Some(c.number),
+                format!("{actor} abandoned #{}: {reason}", c.number),
+            )
+        }),
+
+        GrantIssued {
+            grantee,
+            repo,
+            actions,
+            ..
+        } => Some((
+            grantee.as_str().to_owned(),
+            "granted",
+            repo.clone(),
+            None,
+            None,
+            format!(
+                "{actor} granted you {} on {}",
+                actions
+                    .iter()
+                    .map(|a| a.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                repo.as_deref().unwrap_or("the whole forge")
+            ),
+        )),
+
+        GrantRevoked { grant, reason } => {
+            let row: Option<(String, Option<String>)> = tx
+                .prepare_cached("SELECT grantee, repo FROM grants WHERE id = ?")?
+                .query_row(params![grant.as_str()], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
+                .optional()?;
+            row.map(|(grantee, repo)| {
+                (
+                    grantee,
+                    "revoked",
+                    repo,
+                    None,
+                    None,
+                    format!("{actor} revoked a grant of yours: {reason}"),
+                )
+            })
+        }
+
+        MirrorPushed {
+            repo,
+            branch,
+            ok: false,
+            detail,
+            ..
+        } => repo_owner(repo)?.map(|owner| {
+            (
+                owner,
+                "mirror",
+                Some(repo.clone()),
+                None,
+                None,
+                format!(
+                    "mirroring {branch} of {repo} failed{}",
+                    detail
+                        .as_deref()
+                        .map(|d| format!(": {d}"))
+                        .unwrap_or_default()
+                ),
+            )
+        }),
+
+        TaskClaimed { task } => task_ref(task.as_str())?.map(|(creator, title)| {
+            (
+                creator,
+                "claimed",
+                None,
+                None,
+                None,
+                format!("{actor} took on: {title}"),
+            )
+        }),
+
+        SessionEnded {
+            session,
+            state: crate::types::SessionState::Failed,
+            outcome,
+        } => {
+            let task: Option<String> = tx
+                .prepare_cached("SELECT task FROM sessions WHERE id = ?")?
+                .query_row(params![session.as_str()], |row| row.get(0))
+                .optional()?;
+            match task.map(|t| task_ref(&t)).transpose()?.flatten() {
+                Some((creator, title)) => Some((
+                    creator,
+                    "failed",
+                    None,
+                    None,
+                    None,
+                    format!("{actor} gave up on {title}: {outcome}"),
+                )),
+                None => None,
+            }
+        }
+
+        _ => None,
+    };
+
+    if let Some((recipient, kind, repo, change, number, what)) = notice
+        && recipient != actor
+    {
+        tx.execute(
+            "INSERT OR REPLACE INTO notices (seq, recipient, kind, repo, change_id, number, what)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![env.seq.0, recipient, kind, repo, change, number, what],
+        )?;
+    }
+    Ok(())
+}
+
 /// The single projector: the only code that writes projection tables.
 fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
     let actor = env.actor.as_str();
     record_scope(tx, env)?;
+    record_notices(tx, env)?;
     match &env.event {
         Event::PrincipalRegistered {
             principal,

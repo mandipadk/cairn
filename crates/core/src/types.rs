@@ -397,6 +397,23 @@ pub struct Lesson {
     pub outcome: String,
 }
 
+/// Something that happened to your work or your authority, addressed to
+/// you. Derived from the log like every projection; whether you have
+/// read it is operational state, since a log cannot forget on your
+/// behalf.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Notice {
+    pub seq: i64,
+    pub ts: String,
+    pub kind: String,
+    pub actor: PrincipalId,
+    pub repo: Option<String>,
+    pub change: Option<ChangeId>,
+    pub number: Option<i64>,
+    pub what: String,
+    pub read: bool,
+}
+
 /// A session's declared intent over paths, live while the session is.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Lease {

@@ -464,3 +464,27 @@ where
     }
     panic!("timed out waiting for: {what}");
 }
+
+/// Submit a form as a signed-in browser would, and report where it was
+/// sent next. Pages answer a form with a redirect, so the location is
+/// the interesting part of the response.
+pub async fn post_form(app: &Router, path: &str, cookie: &str, body: &str) -> (StatusCode, String) {
+    let request = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("cookie", cookie)
+        .body(Body::from(body.to_owned()))
+        .unwrap();
+    let response = tower::ServiceExt::oneshot(app.clone(), request)
+        .await
+        .unwrap();
+    let status = response.status();
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_owned();
+    (status, location)
+}

@@ -12,34 +12,13 @@ use common::*;
 
 use axum::http::StatusCode;
 
-async fn post(app: &axum::Router, path: &str, cookie: &str, body: &str) -> (StatusCode, String) {
-    let request = axum::http::Request::builder()
-        .method("POST")
-        .uri(path)
-        .header("content-type", "application/x-www-form-urlencoded")
-        .header("cookie", cookie)
-        .body(axum::body::Body::from(body.to_owned()))
-        .unwrap();
-    let response = tower::ServiceExt::oneshot(app.clone(), request)
-        .await
-        .unwrap();
-    let status = response.status();
-    let location = response
-        .headers()
-        .get("location")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_owned();
-    (status, location)
-}
-
 /// A token's secret exists exactly once, and the page says so.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_minted_token_is_shown_once_and_then_never_again() {
     let forge = boot().await;
     let app = &forge.app;
 
-    let (_, location) = post(
+    let (_, location) = post_form(
         app,
         "/you/tokens",
         "cairn_dev=ada",
@@ -75,7 +54,7 @@ async fn a_token_can_be_revoked_from_the_page() {
         c
     };
 
-    let (_, location) = post(app, "/you/tokens", &cookie, "action=mint&label=doomed").await;
+    let (_, location) = post_form(app, "/you/tokens", &cookie, "action=mint&label=doomed").await;
     let secret = location
         .split("secret=")
         .nth(1)
@@ -107,7 +86,7 @@ async fn a_token_can_be_revoked_from_the_page() {
         .as_str()
         .unwrap()
         .to_owned();
-    post(
+    post_form(
         app,
         "/you/tokens",
         &cookie,
@@ -130,7 +109,7 @@ async fn a_new_agent_gets_a_token_but_no_capability() {
     let forge = boot().await;
     let app = &forge.app;
 
-    let (_, location) = post(
+    let (_, location) = post_form(
         app,
         "/agents",
         "cairn_dev=ada",
@@ -167,7 +146,7 @@ async fn a_new_agent_gets_a_token_but_no_capability() {
     );
 
     // Grant it exactly one thing, scoped to one repository.
-    post(
+    post_form(
         app,
         "/agents",
         "cairn_dev=ada",
@@ -201,7 +180,7 @@ async fn changing_your_password_signs_you_out() {
         StatusCode::OK
     );
 
-    let (_, location) = post(
+    let (_, location) = post_form(
         app,
         "/you/settings",
         &cookie,
@@ -224,7 +203,7 @@ async fn changing_your_password_signs_you_out() {
 async fn a_mistyped_confirmation_changes_nothing() {
     let forge = boot_token_only().await;
     let (_, cookie) = sign_in_as(&forge, "ada").await;
-    let (_, location) = post(
+    let (_, location) = post_form(
         &forge.app,
         "/you/settings",
         &cookie,

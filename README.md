@@ -128,9 +128,13 @@ change to this repository has been pushed to Cairn, independently re-run
 by a runner, and landed under its own policy. A hosted instance is on the way
 — there is a waitlist at [cairn.mandip.dev](https://cairn.mandip.dev).
 
-What is not here yet, so nobody has to find out the hard way:
-notifications, teams and organisations, self-service password reset,
-quotas on repository size, and a mobile layout. What is here is tested at
+What is not here yet, so nobody has to find out the hard way: teams
+and organisations, self-service password reset, quotas on repository
+size, and a mobile layout. What is here is tested at
 the boundaries where a forge is usually wrong — authority, concurrency,
 crash recovery, hostile input, resource limits — and `fsck` runs clean on
 the instance serving this page.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).

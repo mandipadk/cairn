@@ -2,6 +2,8 @@
 name = "cairn-core"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 argon2 = "0.5.3"

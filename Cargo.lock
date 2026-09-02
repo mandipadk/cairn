@@ -261,6 +261,7 @@ dependencies = [
  "cairn-git",
  "flate2",
  "http-body-util",
+ "jiff",
  "maud",
  "pulldown-cmark",
  "rand",

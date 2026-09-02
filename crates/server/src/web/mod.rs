@@ -51,6 +51,8 @@ pub fn routes() -> Router<AppState> {
         .route("/theme", post(set_theme))
         .route("/search", get(search_page))
         .route("/new", get(new_page).post(create_from_form))
+        .route("/inbox", get(inbox_page))
+        .route("/inbox/read", post(inbox_read))
         .route("/you", get(you_page))
         .route("/you/settings", get(settings_page).post(change_password))
         .route("/you/tokens", get(tokens_page).post(token_action))
@@ -255,6 +257,44 @@ async fn import_into(
 }
 
 /// Your open work, across every repository.
+async fn inbox_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    viewer: Viewer,
+) -> Response {
+    let notices = app.with_store(|s| s.inbox(&viewer.0, 200));
+    match notices {
+        Ok(notices) => {
+            let unread = notices.iter().filter(|n| !n.read).count();
+            views::inbox(theme, &viewer, &notices, unread).into_response()
+        }
+        Err(err) => oops(err),
+    }
+}
+
+#[derive(Deserialize)]
+struct InboxReadForm {
+    seq: Option<i64>,
+    #[serde(default)]
+    all: Option<String>,
+}
+
+async fn inbox_read(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Form(form): Form<InboxReadForm>,
+) -> Response {
+    let result = match (form.all.is_some(), form.seq) {
+        (true, _) => app.with_store(|s| s.mark_all_read(&viewer.0)),
+        (false, Some(seq)) => app.with_store(|s| s.mark_read(&viewer.0, seq)),
+        (false, None) => Ok(()),
+    };
+    match result {
+        Ok(()) => Redirect::to("/inbox").into_response(),
+        Err(err) => oops(err),
+    }
+}
+
 async fn you_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
@@ -610,6 +650,7 @@ fn chrome_for(app: &AppState, who: &PrincipalId) -> Result<Chrome, cairn_core::C
             repos,
             working,
             yours,
+            unread: store.unread_count(who)?,
         })
     })
 }
@@ -678,6 +719,8 @@ pub struct Chrome {
     pub repos: Vec<ChromeRepo>,
     pub working: Vec<Working>,
     pub yours: usize,
+    /// Notices the viewer has not dealt with, for the sidebar count.
+    pub unread: usize,
 }
 
 pub struct Viewer(pub PrincipalId, pub Chrome);

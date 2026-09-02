@@ -954,6 +954,59 @@ pub async fn lessons(
     Ok(Json(json!(lessons)))
 }
 
+// ---- inbox ----
+
+#[derive(Deserialize)]
+pub struct InboxQuery {
+    #[serde(default)]
+    pub unread: bool,
+    pub limit: Option<usize>,
+}
+
+/// What has been addressed to the caller: judgments on their changes,
+/// disputes on their claims, authority given to them. Newest first.
+pub async fn inbox(
+    State(app): State<AppState>,
+    actor: Actor,
+    Query(query): Query<InboxQuery>,
+) -> ApiResult<Json<Value>> {
+    let mut notices = app.with_store(|s| s.inbox(&actor.0, query.limit.unwrap_or(100)))?;
+    if query.unread {
+        notices.retain(|notice| !notice.read);
+    }
+    let unread = app.with_store(|s| s.unread_count(&actor.0))?;
+    Ok(Json(json!({ "unread": unread, "notices": notices })))
+}
+
+#[derive(Deserialize)]
+pub struct MarkRead {
+    pub seq: Option<i64>,
+    #[serde(default)]
+    pub all: bool,
+}
+
+/// Mark one notice, or everything so far, dealt with. Not an event:
+/// what somebody has read is not a fact about the software.
+pub async fn mark_read(
+    State(app): State<AppState>,
+    actor: Actor,
+    Json(body): Json<MarkRead>,
+) -> ApiResult<Json<Value>> {
+    match (body.all, body.seq) {
+        (true, _) => app.with_store(|s| s.mark_all_read(&actor.0))?,
+        (false, Some(seq)) => app.with_store(|s| s.mark_read(&actor.0, seq))?,
+        (false, None) => {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid",
+                "say which notice, or all".to_owned(),
+            ));
+        }
+    }
+    let unread = app.with_store(|s| s.unread_count(&actor.0))?;
+    Ok(Json(json!({ "unread": unread })))
+}
+
 // ---- policy ----
 
 #[derive(Deserialize)]

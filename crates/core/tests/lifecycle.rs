@@ -1732,3 +1732,98 @@ fn a_runner_that_re_runs_replaces_its_own_earlier_verdict() {
         .unwrap();
     assert!(!store.merge_readiness(&change).unwrap().satisfied);
 }
+
+#[test]
+fn notices_go_to_whose_work_it_is_and_never_to_the_actor() {
+    let (mut store, human, scout, arbiter) = seeded();
+    store
+        .issue_grant(&human, &arbiter, None, vec![Capability::Verify], None)
+        .unwrap();
+
+    // The fixture's own grants are already scout's news; measure from here.
+    let scout_before = store.unread_count(&scout).unwrap();
+    let human_before = store.unread_count(&human).unwrap();
+
+    // Scout opens a change in a repository the human owns: the owner
+    // hears about it, scout does not hear about its own push.
+    let (change, _, _) = store
+        .open_change(&scout, ChangeSpec::new("forge", "main", "Scout's work"))
+        .unwrap();
+    store
+        .push_revision(&scout, &change, OID, None, "work")
+        .unwrap();
+    assert_eq!(store.unread_count(&human).unwrap(), human_before + 1);
+    assert_eq!(store.unread_count(&scout).unwrap(), scout_before);
+
+    // A verdict on scout's change is scout's news; the human giving it
+    // is not told about their own verdict.
+    store
+        .give_verdict(
+            &human,
+            &change,
+            1,
+            ReviewDomain::Correctness,
+            Disposition::Approve,
+            "fine",
+        )
+        .unwrap();
+    let scouts = store.inbox(&scout, 10).unwrap();
+    assert_eq!(scouts[0].kind, "verdict", "{scouts:#?}");
+    assert!(scouts[0].what.contains("approved #1"), "{}", scouts[0].what);
+    assert!(!scouts[0].read);
+
+    // A disputed claim goes to whoever made the claim.
+    let (claim, _) = store
+        .attach_claim(
+            &scout,
+            &change,
+            1,
+            ClaimSpec {
+                kind: ClaimKind::Test,
+                command: Some("cargo test".into()),
+                passed: true,
+                summary: "green".into(),
+                unchecked: vec![],
+            },
+        )
+        .unwrap();
+    store
+        .verify_claim(&arbiter, &claim, false, "cargo test", "exit 1")
+        .unwrap();
+    let scouts = store.inbox(&scout, 10).unwrap();
+    assert_eq!(scouts[0].kind, "disputed", "{scouts:#?}");
+    assert_eq!(store.unread_count(&scout).unwrap(), scout_before + 2);
+
+    // Reading is per item, or all at once, and is not an event.
+    let before = store.latest_seq().unwrap();
+    store.mark_read(&scout, scouts[0].seq).unwrap();
+    assert_eq!(store.unread_count(&scout).unwrap(), scout_before + 1);
+    store.mark_all_read(&scout).unwrap();
+    assert_eq!(store.unread_count(&scout).unwrap(), 0);
+    assert_eq!(
+        store.latest_seq().unwrap(),
+        before,
+        "reading writes nothing to the log"
+    );
+
+    // Authority given to you is addressed to you.
+    store
+        .issue_grant(
+            &human,
+            &scout,
+            Some("forge"),
+            vec![Capability::Merge],
+            None,
+        )
+        .unwrap();
+    let scouts = store.inbox(&scout, 10).unwrap();
+    assert_eq!(scouts[0].kind, "granted");
+    assert!(
+        scouts[0].what.contains("merge on forge"),
+        "{}",
+        scouts[0].what
+    );
+
+    // The inbox is a projection: replaying the log reproduces it exactly.
+    assert!(store.fsck().unwrap().is_empty());
+}

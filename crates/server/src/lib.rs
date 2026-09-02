@@ -109,6 +109,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/lessons", get(routes::lessons))
         .route("/healthz", get(routes::health))
         .route("/api/events", get(routes::list_events))
+        .route("/api/inbox", get(routes::inbox))
+        .route("/api/inbox/read", post(routes::mark_read))
         .route("/api/events/stream", get(sse::stream))
         .route("/api/git/pushes", post(git_http::record_push))
         .route("/api/repos/{name}/blame", get(git_http::blame))

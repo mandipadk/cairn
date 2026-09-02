@@ -608,6 +608,26 @@ impl Store {
         raw::grants_cover(&grants, Capability::Admin, None, &now)
     }
 
+    /// Mark one notice dealt with. Operational, not logged: what you
+    /// have read is not a fact about the software.
+    pub fn mark_read(&mut self, who: &PrincipalId, seq: i64) -> CoreResult<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO inbox_read (principal, seq) VALUES (?, ?)",
+            rusqlite::params![who.as_str(), seq],
+        )?;
+        Ok(())
+    }
+
+    /// Mark everything so far dealt with, as a single high-water mark.
+    pub fn mark_all_read(&mut self, who: &PrincipalId) -> CoreResult<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO inbox_cursor (principal, seq)
+             VALUES (?, (SELECT COALESCE(MAX(seq), 0) FROM events))",
+            rusqlite::params![who.as_str()],
+        )?;
+        Ok(())
+    }
+
     /// Every repository this principal may see, in name order.
     pub fn readable_repos(&self, actor: &PrincipalId) -> CoreResult<Vec<crate::types::Repo>> {
         Ok(raw::repos(&self.conn)?

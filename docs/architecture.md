@@ -52,6 +52,17 @@ stands alongside, because a forge arguing that authority should be
 auditable cannot hide who may act. Passwords and tokens stay with their
 subject — those are credentials, not authority.
 
+### Inbox
+
+A notice is an event read from one person's side: your change was
+judged, your claim was disputed, your change landed or left the queue,
+somebody gave you authority, somebody took on a task you wrote. Notices
+are routed as events are applied, so the inbox is a projection like the
+tree and the queue — rebuilt from the log, never edited. Nobody is told
+about their own action. Whether you have read a notice is operational
+state beside the projection, because what you have dealt with is not a
+fact about the software.
+
 ## Changes over git
 
 Pushing to `refs/for/<branch>` opens a change or adds a revision, matched

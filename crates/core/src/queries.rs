@@ -9,8 +9,9 @@ use crate::id::{ChangeId, PrincipalId, SessionId, TaskId};
 use crate::store::Store;
 use crate::types::{
     Capability, Change, ChangeState, Claim, ClaimKind, Disposition, Grant, Lease, Lesson, Mirror,
-    ObjectFormat, Policy, Principal, PrincipalKind, Provenance, QueueEntry, Repo, ReviewDomain,
-    Revision, Session, SessionState, Task, TaskState, TokenInfo, Verdict, Verification, Visibility,
+    Notice, ObjectFormat, Policy, Principal, PrincipalKind, Provenance, QueueEntry, Repo,
+    ReviewDomain, Revision, Session, SessionState, Task, TaskState, TokenInfo, Verdict,
+    Verification, Visibility,
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
@@ -895,6 +896,53 @@ impl Store {
         limit: usize,
     ) -> CoreResult<Vec<Lesson>> {
         raw::lessons(&self.conn, repo, query, failures_only, limit.min(200))
+    }
+
+    /// What has been addressed to this principal, newest first, each
+    /// marked read or not. Read state lives beside the projection rather
+    /// than in it: the log says what happened, the reader says what they
+    /// have dealt with.
+    pub fn inbox(&self, who: &PrincipalId, limit: usize) -> CoreResult<Vec<Notice>> {
+        let rows = self
+            .conn
+            .prepare_cached(
+                "SELECT n.seq, e.ts, n.kind, e.actor, n.repo, n.change_id, n.number, n.what,
+                        (n.seq <= COALESCE((SELECT seq FROM inbox_cursor WHERE principal = ?1), 0)
+                         OR EXISTS (SELECT 1 FROM inbox_read r
+                                     WHERE r.principal = ?1 AND r.seq = n.seq)) AS read
+                   FROM notices n JOIN events e ON e.seq = n.seq
+                  WHERE n.recipient = ?1
+                  ORDER BY n.seq DESC LIMIT ?2",
+            )?
+            .query_map(params![who.as_str(), limit.min(500) as i64], |row| {
+                Ok(Notice {
+                    seq: row.get(0)?,
+                    ts: row.get(1)?,
+                    kind: row.get(2)?,
+                    actor: PrincipalId(row.get(3)?),
+                    repo: row.get(4)?,
+                    change: row.get::<_, Option<String>>(5)?.map(ChangeId),
+                    number: row.get(6)?,
+                    what: row.get(7)?,
+                    read: row.get::<_, i64>(8)? != 0,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// How many notices this principal has not dealt with.
+    pub fn unread_count(&self, who: &PrincipalId) -> CoreResult<usize> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM notices n
+              WHERE n.recipient = ?1
+                AND n.seq > COALESCE((SELECT seq FROM inbox_cursor WHERE principal = ?1), 0)
+                AND NOT EXISTS (SELECT 1 FROM inbox_read r
+                                 WHERE r.principal = ?1 AND r.seq = n.seq)",
+            params![who.as_str()],
+            |row| row.get(0),
+        )?;
+        Ok(n as usize)
     }
 
     /// Open changes whose latest revision carries a claim that names

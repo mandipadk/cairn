@@ -35,17 +35,24 @@ pub struct StreamQuery {
 /// receiver is still listening.
 async fn drain_from_store(
     app: &AppState,
+    who: &cairn_core::PrincipalId,
     tx: &mpsc::Sender<Envelope>,
     last: &mut i64,
 ) -> Result<bool, cairn_core::CoreError> {
     loop {
-        let batch = app.with_store(|s| s.events_after(EventSeq(*last), CATCH_UP_BATCH))?;
+        let batch = app.with_store(|s| s.events_after_scoped(EventSeq(*last), CATCH_UP_BATCH))?;
         if batch.is_empty() {
             return Ok(true);
         }
-        for envelope in batch {
-            *last = envelope.seq.0;
-            if tx.send(envelope).await.is_err() {
+        for scoped in batch {
+            // The cursor advances past everything read, sent or not: a
+            // reader who cannot see event five must not ask for five
+            // again forever.
+            *last = scoped.envelope.seq.0;
+            let visible = app.with_store(|s| {
+                s.scope_visible_to(who, scoped.repo.as_deref(), scoped.subject.as_deref())
+            });
+            if visible && tx.send(scoped.envelope).await.is_err() {
                 return Ok(false);
             }
         }
@@ -54,7 +61,7 @@ async fn drain_from_store(
 
 pub async fn stream(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Query(query): Query<StreamQuery>,
     headers: HeaderMap,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
@@ -71,9 +78,10 @@ pub async fn stream(
     // missed; the seq guard below deduplicates the overlap.
     let mut live = app.subscribe();
 
+    let who = actor.0;
     tokio::spawn(async move {
         let mut last = cursor;
-        if !drain_from_store(&app, &tx, &mut last)
+        if !drain_from_store(&app, &who, &tx, &mut last)
             .await
             .unwrap_or(false)
         {
@@ -88,7 +96,7 @@ pub async fn stream(
                     // A gap means concurrent handlers published out of
                     // order — the store has the missing events already.
                     if envelope.seq.0 > last + 1 {
-                        if !drain_from_store(&app, &tx, &mut last)
+                        if !drain_from_store(&app, &who, &tx, &mut last)
                             .await
                             .unwrap_or(false)
                         {
@@ -97,12 +105,17 @@ pub async fn stream(
                         continue;
                     }
                     last = envelope.seq.0;
+                    // A live event is filtered exactly as a replayed one
+                    // is; the cursor still moves past what is withheld.
+                    if !app.with_store(|s| s.may_see_event(&who, envelope.seq)) {
+                        continue;
+                    }
                     if tx.send(envelope).await.is_err() {
                         return;
                     }
                 }
                 Err(RecvError::Lagged(_)) => {
-                    if !drain_from_store(&app, &tx, &mut last)
+                    if !drain_from_store(&app, &who, &tx, &mut last)
                         .await
                         .unwrap_or(false)
                     {

@@ -10,12 +10,12 @@ use crate::error::{CoreError, CoreResult};
 use crate::event::{Envelope, Event, EventSeq};
 use crate::id::PrincipalId;
 use crate::types::Policy;
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -124,6 +124,19 @@ CREATE TABLE IF NOT EXISTS imports (
   commits INTEGER NOT NULL,
   PRIMARY KEY (repo, branch)
 ) STRICT;
+
+-- What each event is about, so who may see it is a property of the
+-- event rather than a decision every page makes for itself. A repo means
+-- visible to whoever may read that repository; a subject means somebody
+-- own account business and nobody else s; both null means the event
+-- concerns the forge, and anyone with an account may see it.
+CREATE TABLE IF NOT EXISTS event_scope (
+  seq     INTEGER PRIMARY KEY,
+  repo    TEXT,
+  subject TEXT
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_event_scope_repo ON event_scope (repo);
+CREATE INDEX IF NOT EXISTS idx_event_scope_subject ON event_scope (subject);
 
 CREATE TABLE IF NOT EXISTS tasks (
   id         TEXT PRIMARY KEY,
@@ -239,6 +252,7 @@ CREATE INDEX IF NOT EXISTS idx_verdicts_change ON verdicts (change_id, revision)
 /// never looks at it.
 const PROJECTION_TABLES: &[&str] = &[
     "principals",
+    "event_scope",
     "tokens",
     "grants",
     "repos",
@@ -253,6 +267,16 @@ const PROJECTION_TABLES: &[&str] = &[
     "verifications",
     "verdicts",
 ];
+
+/// An event together with the audience its scope implies: the repository
+/// it belongs to, or the principal it is about. Neither means the forge's
+/// own business, which anybody signed in may see.
+#[derive(Debug, Clone)]
+pub struct Scoped {
+    pub envelope: Envelope,
+    pub repo: Option<String>,
+    pub subject: Option<String>,
+}
 
 pub struct Store {
     pub(crate) conn: Connection,
@@ -347,6 +371,12 @@ impl Store {
 
     /// Events strictly after `cursor`, oldest first. The resume primitive:
     /// a consumer that remembers one integer can always catch up.
+    /// Every event after a cursor, unfiltered.
+    ///
+    /// Only for callers that are the forge itself — replay, fsck, the
+    /// landing queue. Anything answering a person wants
+    /// [`Store::events_visible_to`], because this one shows everything
+    /// to everybody.
     pub fn events_after(&self, cursor: EventSeq, limit: usize) -> CoreResult<Vec<Envelope>> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT seq, ts, actor, payload FROM events WHERE seq > ? ORDER BY seq LIMIT ?",
@@ -376,6 +406,195 @@ impl Store {
         Ok(out)
     }
 
+    /// The events after a cursor that this principal may see.
+    ///
+    /// Three ways an event qualifies: it concerns the forge and anyone
+    /// with an account may see it; it is this principal's own account
+    /// business; or it belongs to a repository they may read. Credential
+    /// events stay with their subject even from an administrator — an
+    /// admin needs to run the forge, not to watch people change their
+    /// passwords.
+    pub fn events_visible_to(
+        &self,
+        actor: &PrincipalId,
+        cursor: EventSeq,
+        limit: usize,
+    ) -> CoreResult<Vec<Envelope>> {
+        let readable: Vec<String> = self
+            .readable_repos(actor)?
+            .into_iter()
+            .map(|repo| repo.name)
+            .collect();
+        // A repository list is short and a query is not the place to
+        // re-derive who may read what, so the names go in as parameters.
+        let holes = std::iter::repeat_n("?", readable.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT e.seq, e.ts, e.actor, e.payload
+               FROM events e
+               LEFT JOIN event_scope s ON s.seq = e.seq
+              WHERE e.seq > ?
+                AND (
+                      (s.repo IS NULL AND s.subject IS NULL)
+                   OR s.subject = ?
+                   OR s.repo IN ({holes})
+                )
+              ORDER BY e.seq LIMIT ?"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut binds: Vec<Box<dyn rusqlite::ToSql>> =
+            vec![Box::new(cursor.0), Box::new(actor.as_str().to_owned())];
+        for name in readable {
+            binds.push(Box::new(name));
+        }
+        binds.push(Box::new(limit as i64));
+        let refs: Vec<&dyn rusqlite::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
+
+        let rows = stmt.query_map(refs.as_slice(), |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (seq, ts, actor, payload) = row?;
+            let event: Event = serde_json::from_str(&payload).map_err(|e| CoreError::Corrupt {
+                at: format!("event seq {seq}"),
+                reason: e.to_string(),
+            })?;
+            out.push(Envelope {
+                seq: EventSeq(seq),
+                ts,
+                actor: PrincipalId(actor),
+                event,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Events after a cursor with their scope attached, so a caller can
+    /// filter in memory.
+    ///
+    /// The live stream needs this rather than the filtered query: its
+    /// cursor has to advance past events it does not send, or a reader
+    /// who cannot see event 5 would ask for 5 again forever.
+    pub fn events_after_scoped(&self, cursor: EventSeq, limit: usize) -> CoreResult<Vec<Scoped>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT e.seq, e.ts, e.actor, e.payload, s.repo, s.subject
+               FROM events e
+               LEFT JOIN event_scope s ON s.seq = e.seq
+              WHERE e.seq > ? ORDER BY e.seq LIMIT ?",
+        )?;
+        let rows = stmt.query_map(params![cursor.0, limit as i64], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (seq, ts, actor, payload, repo, subject) = row?;
+            let event: Event = serde_json::from_str(&payload).map_err(|e| CoreError::Corrupt {
+                at: format!("event seq {seq}"),
+                reason: e.to_string(),
+            })?;
+            out.push(Scoped {
+                envelope: Envelope {
+                    seq: EventSeq(seq),
+                    ts,
+                    actor: PrincipalId(actor),
+                    event,
+                },
+                repo,
+                subject,
+            });
+        }
+        Ok(out)
+    }
+
+    /// The events belonging to one repository, newest cursor onward.
+    ///
+    /// A repository page showing the whole forge's stream is a category
+    /// error: most of what scrolled past belonged to other repositories
+    /// or to somebody's account. Scope is recorded per event, so this is
+    /// a filter rather than a second query nobody keeps in step.
+    pub fn events_for_repo(
+        &self,
+        repo: &str,
+        cursor: EventSeq,
+        limit: usize,
+    ) -> CoreResult<Vec<Envelope>> {
+        Ok(self
+            .events_after_scoped(cursor, limit.saturating_mul(4).max(limit))?
+            .into_iter()
+            .filter(|scoped| scoped.repo.as_deref() == Some(repo))
+            .map(|scoped| scoped.envelope)
+            .take(limit)
+            .collect())
+    }
+
+    /// Somebody's own account activity: what happened to them, and the
+    /// grants that gave them authority.
+    pub fn events_about(
+        &self,
+        subject: &PrincipalId,
+        cursor: EventSeq,
+        limit: usize,
+    ) -> CoreResult<Vec<Envelope>> {
+        Ok(self
+            .events_after_scoped(cursor, limit.saturating_mul(8).max(limit))?
+            .into_iter()
+            .filter(|scoped| {
+                scoped.subject.as_deref() == Some(subject.as_str())
+                    || (scoped.repo.is_none() && scoped.envelope.actor == *subject)
+            })
+            .map(|scoped| scoped.envelope)
+            .take(limit)
+            .collect())
+    }
+
+    /// Whether a scope belongs to this principal's view of the forge.
+    pub fn scope_visible_to(
+        &self,
+        actor: &PrincipalId,
+        repo: Option<&str>,
+        subject: Option<&str>,
+    ) -> bool {
+        match (repo, subject) {
+            (None, None) => true,
+            (None, Some(subject)) => subject == actor.as_str(),
+            (Some(repo), _) => self.may_read(actor, repo),
+        }
+    }
+
+    /// Whether one event is this principal's to see. Used by the live
+    /// stream, where events arrive one at a time.
+    pub fn may_see_event(&self, actor: &PrincipalId, seq: EventSeq) -> bool {
+        let scope: Option<(Option<String>, Option<String>)> = self
+            .conn
+            .prepare_cached("SELECT repo, subject FROM event_scope WHERE seq = ?")
+            .ok()
+            .and_then(|mut stmt| {
+                stmt.query_row(params![seq.0], |row| Ok((row.get(0)?, row.get(1)?)))
+                    .optional()
+                    .ok()
+                    .flatten()
+            });
+        match scope {
+            None | Some((None, None)) => true,
+            Some((None, Some(subject))) => subject == actor.as_str(),
+            Some((Some(repo), _)) => self.may_read(actor, &repo),
+        }
+    }
+
     pub fn latest_seq(&self) -> CoreResult<EventSeq> {
         let seq: i64 =
             self.conn
@@ -401,6 +620,113 @@ pub(crate) fn append(tx: &Transaction, actor: &PrincipalId, event: Event) -> Cor
     };
     apply(tx, &envelope)?;
     Ok(envelope)
+}
+
+/// What an event is about, so that who may see it stops being a
+/// judgement each page makes for itself.
+///
+/// Many events name a change or a session rather than a repository, so
+/// this resolves them here, once, while the transaction that appended
+/// the event is still open and the rows it refers to are already
+/// present. Doing it at read time instead would mean a lookup per event
+/// per reader, forever.
+fn record_scope(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
+    use Event::*;
+
+    let repo_of_change = |change: &str| -> CoreResult<Option<String>> {
+        Ok(tx
+            .prepare_cached("SELECT repo FROM changes WHERE id = ?")?
+            .query_row(params![change], |row| row.get::<_, String>(0))
+            .optional()?)
+    };
+    let repo_of_task = |task: &str| -> CoreResult<Option<String>> {
+        Ok(tx
+            .prepare_cached("SELECT repo FROM tasks WHERE id = ?")?
+            .query_row(params![task], |row| row.get::<_, Option<String>>(0))
+            .optional()?
+            .flatten())
+    };
+
+    let (repo, subject): (Option<String>, Option<String>) = match &env.event {
+        // Squarely about one repository.
+        RepoCreated { repo, .. }
+        | VisibilitySet { repo, .. }
+        | PolicySet { repo, .. }
+        | MirrorSet { repo, .. }
+        | MirrorPushed { repo, .. }
+        | HistoryImported { repo, .. }
+        | PathsDeclared { repo, .. }
+        | ChangeOpened { repo, .. } => (Some(repo.clone()), None),
+
+        // Named by a change, which knows its repository.
+        RevisionPushed { change, .. }
+        | ClaimAttached { change, .. }
+        | ClaimVerified { change, .. }
+        | VerdictGiven { change, .. }
+        | ChangeEnqueued { change }
+        | ChangeDequeued { change, .. }
+        | ChangeMerged { change, .. }
+        | ChangeAbandoned { change, .. }
+        | RebaseFailed { change, .. } => (repo_of_change(change.as_str())?, None),
+
+        // Work items: scoped when they belong to a repository, and
+        // otherwise ordinary forge business.
+        TaskCreated { repo, .. } => (repo.clone(), None),
+        TaskClaimed { task } | TaskStateChanged { task, .. } => {
+            (repo_of_task(task.as_str())?, None)
+        }
+        SessionOpened { task, .. } => (repo_of_task(task.as_str())?, None),
+        SessionEnded { session, .. } => {
+            let task: Option<String> = tx
+                .prepare_cached("SELECT task FROM sessions WHERE id = ?")?
+                .query_row(params![session.as_str()], |row| row.get::<_, String>(0))
+                .optional()?;
+            (
+                match task {
+                    Some(task) => repo_of_task(&task)?,
+                    None => None,
+                },
+                None,
+            )
+        }
+
+        // Somebody's own account business.
+        PasswordSet { principal, .. } => (None, Some(principal.as_str().to_owned())),
+        TokenMinted { principal, .. } => (None, Some(principal.as_str().to_owned())),
+        TokenRevoked { token } => {
+            let owner: Option<String> = tx
+                .prepare_cached("SELECT principal FROM tokens WHERE id = ?")?
+                .query_row(params![token.as_str()], |row| row.get::<_, String>(0))
+                .optional()?;
+            (None, owner)
+        }
+
+        // A grant scoped to a repository is that repository's business;
+        // a wider one is the grantee's.
+        // A grant scoped to a repository is that repository's business.
+        // A wider one is the forge's, and deliberately not private to
+        // the grantee: authority is not a credential, and a forge whose
+        // argument is that authority should be auditable cannot hide who
+        // may act from the people acting alongside them. Whoever issued
+        // it has to be able to see it, too.
+        GrantIssued { repo, .. } => (repo.clone(), None),
+        GrantRevoked { grant, .. } => {
+            let repo: Option<Option<String>> = tx
+                .prepare_cached("SELECT repo FROM grants WHERE id = ?")?
+                .query_row(params![grant.as_str()], |row| row.get(0))
+                .optional()?;
+            (repo.flatten(), None)
+        }
+
+        // That a person exists is not a secret on the forge they are on.
+        PrincipalRegistered { .. } => (None, None),
+    };
+
+    tx.execute(
+        "INSERT OR REPLACE INTO event_scope (seq, repo, subject) VALUES (?, ?, ?)",
+        params![env.seq.0, repo, subject],
+    )?;
+    Ok(())
 }
 
 /// One projection table, rendered as ordered rows of text so two
@@ -529,6 +855,7 @@ fn tracing_replay(events: u64) {
 /// The single projector: the only code that writes projection tables.
 fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
     let actor = env.actor.as_str();
+    record_scope(tx, env)?;
     match &env.event {
         Event::PrincipalRegistered {
             principal,

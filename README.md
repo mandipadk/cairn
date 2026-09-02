@@ -190,11 +190,24 @@ the token alone — the username in Basic auth is decoration, as it is
 everywhere else — while a push still requires the two to agree, because
 a mismatch there is usually somebody's mistake worth catching.
 
-What is not here yet: per-user visibility within a forge, so everyone
-signed in can see every repository they are told about; request-rate
-limiting beyond sign-in and the waitlist; quotas on repository or push
-size; and any protection against a principal that holds legitimate
-capabilities and abuses them. Grants are the tool for
+The event log is the forge's memory, and memory is not automatically
+public. Every event carries a recorded scope: a repository's, somebody's
+own, or the forge's. You see a repository's events if you could read the
+repository, your own account's events because they are about you, and the
+forge's events because they are how the forge is run. So a repository page
+shows that repository's history rather than the whole instance's, an
+account shows its own, and the resumable stream filters the same way
+without gaps — the cursor advances past what it withheld, so nobody can
+learn what they missed from a hole in the numbering. Authority is scoped
+but never private: a grant is visible to everyone it stands alongside,
+because a forge arguing that authority should be auditable cannot hide who
+may act. Passwords and tokens are the exception that proves it — those are
+credentials, not authority, and stay with their subject.
+
+What is not here yet: request-rate limiting beyond sign-in and the
+waitlist; quotas on repository or push size; teams and organisations as a
+grouping over ownership; and any protection against a principal that
+holds legitimate capabilities and abuses them. Grants are the tool for
 that, and they are only as narrow as whoever issues them.
 
 ## Requirements

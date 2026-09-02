@@ -864,7 +864,7 @@ fn gather_home(app: &AppState, who: &PrincipalId) -> Result<HomeData, cairn_core
 
         let latest = store.latest_seq()?.0;
         let recent = store
-            .events_after(cairn_core::EventSeq((latest - 300).max(0)), 320)?
+            .events_visible_to(who, cairn_core::EventSeq((latest - 300).max(0)), 320)?
             .into_iter()
             .rev()
             .filter_map(describe)
@@ -1619,7 +1619,9 @@ async fn log_page(
             .collect(),
         Err(err) => return oops(err),
     };
-    match app.with_store(|s| s.events_after(cairn_core::EventSeq(after), 100)) {
+    // This repository's own log, not the forge's. The scope is on the
+    // event, so the page does not have to guess which rows belong here.
+    match app.with_store(|s| s.events_for_repo(&repo, cairn_core::EventSeq(after), 100)) {
         Ok(events) => views::log(theme, &viewer, &repo, &numbers, after, &events).into_response(),
         Err(err) => oops(err),
     }

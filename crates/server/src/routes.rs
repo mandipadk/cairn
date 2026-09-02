@@ -587,11 +587,13 @@ pub struct EventsQuery {
 
 pub async fn list_events(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Query(query): Query<EventsQuery>,
 ) -> ApiResult<Json<Value>> {
     let limit = query.limit.unwrap_or(100).min(1000);
-    let events = app.with_store(|s| s.events_after(EventSeq(query.after), limit))?;
+    // Who is asking decides what comes back. It used to only decide
+    // whether anything came back at all.
+    let events = app.with_store(|s| s.events_visible_to(&actor.0, EventSeq(query.after), limit))?;
     Ok(Json(json!(events)))
 }
 

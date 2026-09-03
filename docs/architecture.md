@@ -212,4 +212,5 @@ forge and is never written to the graph.
 - `crates/core` — event log, projections, domain commands, merge policy
 - `crates/git` — bare-repo storage, pkt-line codec, commit parsing
 - `crates/server` — JSON API, event stream, git smart HTTP, web interface
-- `crates/cli` — the `cairn` binary: server, MCP adapter, push hook, runner
+- `crates/client` — the MCP adapter and the claim runner (Apache-2.0; everything else is AGPL-3.0)
+- `crates/cli` — the `cairn` binary: server, admin commands, push hook, and the client commands

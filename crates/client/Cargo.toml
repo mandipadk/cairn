@@ -1,0 +1,18 @@
+[package]
+name = "cairn-client"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+# The pieces other tools embed - the MCP adapter and the claim runner -
+# are permissively licensed on purpose. The forge itself is AGPL-3.0.
+license = "Apache-2.0"
+repository.workspace = true
+description = "Client side of the Cairn forge protocol: the MCP adapter for agents and the claim runner"
+
+[dependencies]
+anyhow = "1.0.104"
+serde_json = "1.0.151"
+ureq = { version = "3.4.0", features = ["json"] }
+
+[lints]
+workspace = true

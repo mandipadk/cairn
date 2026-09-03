@@ -139,4 +139,15 @@ the instance serving this page.
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+The forge — `cairn-core`, `cairn-git`, `cairn-server`, and the `cairn`
+binary — is licensed under the [GNU AGPL-3.0](LICENSE). Run it, change
+it, fork it; if you offer a changed version to others over a network, they
+get your changes too. That is the deal that keeps a system of record
+auditable.
+
+The client side — [`cairn-client`](crates/client), the MCP adapter and
+the claim runner — is [Apache-2.0](crates/client/LICENSE), so any tool can
+embed the protocol without a second thought.
+
+Copyright © 2026 Mandip Adhikari. Contributions are welcome under the
+terms in [CONTRIBUTING.md](CONTRIBUTING.md).

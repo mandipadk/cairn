@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 anyhow = "1.0.104"
 axum = "0.8.9"
+cairn-client = { version = "0.1.0", path = "../client" }
 cairn-core = { version = "0.1.0", path = "../core" }
 cairn-git = { version = "0.1.0", path = "../git" }
 cairn-server = { version = "0.1.0", path = "../server" }

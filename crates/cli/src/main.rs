@@ -1,6 +1,6 @@
 mod hook;
-mod mcp;
-mod verify;
+
+use cairn_client::{mcp, verify};
 
 use anyhow::Context;
 use cairn_core::{PrincipalId, PrincipalKind, Store};

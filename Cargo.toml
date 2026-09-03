@@ -1,12 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/git", "crates/server", "crates/cli"]
+members = ["crates/core", "crates/git", "crates/server", "crates/client", "crates/cli"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.90"
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 repository = "https://github.com/mandipadk/cairn"
 
 [workspace.lints.rust]

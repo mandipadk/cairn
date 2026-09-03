@@ -157,6 +157,17 @@ enum AdminCommand {
         #[arg(long)]
         remove: Option<String>,
     },
+    /// Prove the mail configuration without sending anyone anything:
+    /// reach the relay, negotiate TLS, authenticate, hang up. Reads the
+    /// same flags and environment as `serve`.
+    MailCheck {
+        #[arg(long)]
+        smtp_url: Option<String>,
+        #[arg(long)]
+        mail_command: Option<String>,
+        #[arg(long)]
+        mail_from: Option<String>,
+    },
     /// Check that current state is exactly the log applied, by replaying
     /// it into empty projections and comparing. Exits non-zero on any
     /// divergence, so it can be run from cron or a health check.
@@ -220,28 +231,14 @@ async fn main() -> anyhow::Result<()> {
             if trust_proxy {
                 state = state.trusting_proxy();
             }
-            let smtp_url = smtp_url.or_else(|| std::env::var("CAIRN_SMTP_URL").ok());
-            let mail_command = mail_command.or_else(|| std::env::var("CAIRN_MAIL_COMMAND").ok());
-            let mail_from = mail_from.or_else(|| std::env::var("CAIRN_MAIL_FROM").ok());
-            match (smtp_url, mail_command, mail_from) {
-                (Some(url), _, Some(from)) => {
-                    let mailer = cairn_server::Mailer::smtp(&url, from)
-                        .map_err(|e| anyhow::anyhow!("--smtp-url: {e}"))?;
+            match mailer_from(smtp_url, mail_command, mail_from)? {
+                Some(mailer) => {
+                    tracing::info!("mail: {}", mailer.describe());
                     state = state.with_mailer(mailer);
-                    tracing::info!("mail: SMTP relay configured");
                 }
-                (None, Some(command), Some(from)) => {
-                    state = state.with_mailer(cairn_server::Mailer::command(command, from));
-                    tracing::info!("mail: command configured");
-                }
-                (None, None, None) => {
-                    tracing::warn!(
-                        "no mail configured (CAIRN_SMTP_URL and CAIRN_MAIL_FROM): \
-                         password resets and invitations fall back to the People page"
-                    );
-                }
-                _ => anyhow::bail!(
-                    "mail needs --mail-from together with --smtp-url or --mail-command"
+                None => tracing::warn!(
+                    "no mail configured (CAIRN_SMTP_URL and CAIRN_MAIL_FROM): \
+                     password resets and invitations fall back to the People page"
                 ),
             }
             if secure_cookies {
@@ -350,6 +347,19 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
             }
+            AdminCommand::MailCheck {
+                smtp_url,
+                mail_command,
+                mail_from,
+            } => match mailer_from(smtp_url, mail_command, mail_from)? {
+                Some(mailer) => match mailer.check() {
+                    Ok(report) => println!("ok: {report}"),
+                    Err(err) => anyhow::bail!("{err}"),
+                },
+                None => anyhow::bail!(
+                    "no mail configured: set CAIRN_SMTP_URL (or CAIRN_MAIL_COMMAND) and CAIRN_MAIL_FROM"
+                ),
+            },
             AdminCommand::Fsck { db, repos } => {
                 let store = Store::open(&db)
                     .with_context(|| format!("opening forge database at {}", db.display()))?;
@@ -410,4 +420,24 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// The mail configuration, from flags or the environment: a relay URL or
+/// a command, either with a From address, or nothing at all.
+fn mailer_from(
+    smtp_url: Option<String>,
+    mail_command: Option<String>,
+    mail_from: Option<String>,
+) -> anyhow::Result<Option<cairn_server::Mailer>> {
+    let smtp_url = smtp_url.or_else(|| std::env::var("CAIRN_SMTP_URL").ok());
+    let mail_command = mail_command.or_else(|| std::env::var("CAIRN_MAIL_COMMAND").ok());
+    let mail_from = mail_from.or_else(|| std::env::var("CAIRN_MAIL_FROM").ok());
+    match (smtp_url, mail_command, mail_from) {
+        (Some(url), _, Some(from)) => cairn_server::Mailer::smtp(&url, from)
+            .map(Some)
+            .map_err(|e| anyhow::anyhow!("CAIRN_SMTP_URL: {e}")),
+        (None, Some(command), Some(from)) => Ok(Some(cairn_server::Mailer::command(command, from))),
+        (None, None, None) => Ok(None),
+        _ => anyhow::bail!("mail needs a From address together with a relay URL or a command"),
+    }
 }

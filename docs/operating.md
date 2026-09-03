@@ -71,7 +71,9 @@ CAIRN_MAIL_FROM='forge@example.org' cairn serve ...
 ```
 
 Put them in the service's environment file rather than on the command
-line, so the password is not in the process list. On a machine that
+line, so the password is not in the process list. `cairn admin
+mail-check` proves the configuration - reaches the relay, negotiates TLS,
+authenticates, hangs up - without sending anyone anything. On a machine that
 already has a mail system, `--mail-command "sendmail -t"` hands each
 message to that instead.
 
@@ -101,6 +103,8 @@ offline against it.
   grant admin.
 - `cairn admin waitlist [--remove <email>]` — list the waitlist, or
   remove someone who asked to be forgotten.
+- `cairn admin mail-check` — reach the relay and authenticate, sending
+  nothing; reads the same flags and environment as `serve`.
 - `cairn admin fsck [--repos <dir>]` — check that current state is
   exactly the log applied; exits non-zero on any divergence, so it can
   run from cron or a health check.

@@ -56,10 +56,55 @@ impl Mailer {
         })
     }
 
+    /// For a log line: how mail goes out, never the credentials.
+    pub fn describe(&self) -> String {
+        match self {
+            Mailer::Smtp { from, .. } => format!("SMTP relay, sending as {from}"),
+            Mailer::Command { command, from } => format!("command {command:?}, sending as {from}"),
+        }
+    }
+
     pub fn command(command: impl Into<String>, from: impl Into<String>) -> Self {
         Mailer::Command {
             command: command.into(),
             from: from.into(),
+        }
+    }
+
+    /// Prove the configuration without sending anyone anything: connect
+    /// to the relay, negotiate TLS and authenticate, then hang up; or
+    /// confirm the command exists. What it returns is what a real send
+    /// would have hit first.
+    pub fn check(&self) -> Result<String, String> {
+        match self {
+            Mailer::Smtp { transport, from } => transport
+                .test_connection()
+                .map_err(|e| format!("the relay refused the connection: {e}"))
+                .and_then(|ok| {
+                    if ok {
+                        Ok(format!(
+                            "relay reached, TLS and authentication accepted; sending as {from}"
+                        ))
+                    } else {
+                        Err("the relay did not answer the handshake".to_owned())
+                    }
+                }),
+            Mailer::Command { command, from } => {
+                let program = command.split_whitespace().next().unwrap_or_default();
+                let found = Command::new("sh")
+                    .arg("-c")
+                    .arg(format!("command -v {program}"))
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+                if found {
+                    Ok(format!("{program} is on PATH; sending as {from}"))
+                } else {
+                    Err(format!("{program} is not on PATH"))
+                }
+            }
         }
     }
 

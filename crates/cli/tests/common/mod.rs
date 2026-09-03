@@ -504,3 +504,24 @@ pub async fn post_form(app: &Router, path: &str, cookie: &str, body: &str) -> (S
         .to_owned();
     (status, location)
 }
+
+/// GET a path as a signed-in browser and report where it was sent.
+pub async fn get_redirect(app: &Router, path: &str, cookie: &str) -> (StatusCode, String) {
+    let request = Request::builder()
+        .method("GET")
+        .uri(path)
+        .header("cookie", cookie)
+        .body(Body::empty())
+        .unwrap();
+    let response = tower::ServiceExt::oneshot(app.clone(), request)
+        .await
+        .unwrap();
+    let status = response.status();
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_owned();
+    (status, location)
+}

@@ -84,11 +84,21 @@ CREATE TABLE IF NOT EXISTS inbox_cursor (
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS contact (
-  principal TEXT PRIMARY KEY,
-  email     TEXT NOT NULL,
-  set_at    TEXT NOT NULL
+  principal   TEXT PRIMARY KEY,
+  email       TEXT,
+  verified_at TEXT,
+  pending     TEXT,
+  set_at      TEXT NOT NULL
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_contact_email ON contact (email);
+
+CREATE TABLE IF NOT EXISTS email_verifications (
+  token_hash TEXT PRIMARY KEY,
+  principal  TEXT NOT NULL,
+  email      TEXT NOT NULL,
+  expires    TEXT NOT NULL,
+  used       INTEGER NOT NULL DEFAULT 0
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS password_resets (
   token_hash TEXT PRIMARY KEY,

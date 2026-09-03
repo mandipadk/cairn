@@ -50,8 +50,8 @@ pub use policy::{PolicyTrace, Requirement};
 pub use search::{HitKind, SearchHit, SearchQuery};
 pub use store::Store;
 pub use types::{
-    Capability, Change, ChangeSpec, ChangeState, Claim, ClaimKind, ClaimSpec, Disposition, Grant,
-    Independence, Lease, Lesson, Mirror, Notice, ObjectFormat, Policy, Principal, PrincipalKind,
-    Provenance, QueueEntry, Repo, ReviewDomain, Revision, Session, SessionState, Task, TaskState,
-    TokenInfo, Verdict, Verification, Visibility,
+    Capability, Change, ChangeSpec, ChangeState, Claim, ClaimKind, ClaimSpec, Contact, Disposition,
+    Grant, Independence, Lease, Lesson, Mirror, Notice, ObjectFormat, Policy, Principal,
+    PrincipalKind, Provenance, QueueEntry, Repo, ReviewDomain, Revision, Session, SessionState,
+    Task, TaskState, TokenInfo, Verdict, Verification, Visibility,
 };

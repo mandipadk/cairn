@@ -5,8 +5,8 @@
 use super::diff::{FileDiff, LineKind};
 use super::{Brief, LandingData, Sidebar, Viewer};
 use cairn_core::{
-    Change, ChangeState, Claim, Disposition, Envelope, Event, HitKind, Notice, PolicyTrace, Repo,
-    Revision, Task, Verdict, Verification, Visibility,
+    Change, ChangeState, Claim, Contact, Disposition, Envelope, Event, HitKind, Notice,
+    PolicyTrace, Repo, Revision, Task, Verdict, Verification, Visibility,
 };
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 use std::collections::HashMap;
@@ -924,14 +924,28 @@ pub fn transfer_offer(theme: Theme, viewer: &Viewer, repo: &Repo, error: Option<
     )
 }
 
+/// What the settings page has to say about the last thing that happened.
+#[derive(Default)]
+pub struct SettingsNote<'a> {
+    pub error: Option<&'a str>,
+    pub done: bool,
+    pub sent: bool,
+    pub first: bool,
+}
+
 pub fn settings(
     theme: Theme,
     viewer: &Viewer,
-    email: Option<&str>,
-    error: Option<&str>,
-    done: bool,
-    first: bool,
+    contact: &Contact,
+    can_mail: bool,
+    note: SettingsNote<'_>,
 ) -> Markup {
+    let SettingsNote {
+        error,
+        done,
+        sent,
+        first,
+    } = note;
     layout(
         theme,
         Some(viewer),
@@ -943,18 +957,31 @@ pub fn settings(
                 div class="sechead" { b { "Settings" } span { (viewer.0.as_str()) } }
                 @if let Some(error) = error { p class="error" { (error) } }
                 @if done { p class="done" { "Saved." } }
+                @if sent { p class="done" { "A confirmation link is on its way." } }
                 @if first {
                     p class="note" { "You are signed in from an invitation, which worked once. Set a password to sign in next time." }
                 }
 
-                form class="stack" method="post" action="/you/settings/email" {
-                    div {
-                        label for="email" { "Email" }
-                        input id="email" name="email" type="email" autocomplete="email"
-                              value=[email] placeholder="where a password reset can reach you";
+                div class="sechead" style="padding-left: 0;" { b { "Email" } span {
+                    @match (&contact.email, &contact.pending) {
+                        (Some(email), None) => { (email) " · confirmed" }
+                        (Some(email), Some(pending)) => { (email) " · confirmed; " (pending) " awaiting confirmation" }
+                        (None, Some(pending)) => { (pending) " · awaiting confirmation" }
+                        (None, None) => { "none on record" }
                     }
-                    p class="hint" { "Kept beside your credentials, not in the log, and shown to nobody." }
-                    button class="btn" type="submit" { "Save email" }
+                } }
+                @if can_mail {
+                    form class="stack" method="post" action="/you/settings/email" {
+                        div {
+                            label for="email" { @if contact.email.is_some() { "Change address" } @else { "Address" } }
+                            input id="email" name="email" type="email" autocomplete="email"
+                                  placeholder="a link goes there to confirm it";
+                        }
+                        p class="hint" { "Where a password reset can reach you. Kept beside your credentials, not in the log, shown to nobody, and used only once you have followed the link." }
+                        button class="btn" type="submit" { "Send a confirmation link" }
+                    }
+                } @else {
+                    p class="hint" { "This forge does not send mail, so an address cannot be confirmed here." }
                 }
 
                 form class="stack" method="post" action="/you/settings" style="margin-top: 28px;" {
@@ -1155,12 +1182,17 @@ pub fn people(
                         @if row.admin { "runs the forge" }
                         @else if row.has_password { "can sign in" }
                         @else { "no password yet" }
+                        @match (&row.contact.email, &row.contact.pending) {
+                            (Some(_), _) => { " · email confirmed" }
+                            (None, Some(_)) => { " · email pending" }
+                            (None, None) => { " · no email" }
+                        }
                     }
                     form method="post" action="/people" {
                         input type="hidden" name="action" value="relink";
                         input type="hidden" name="id" value=(row.principal.id.as_str());
                         button class="quiet" type="submit" {
-                            @if can_mail && row.has_email { "Send a new sign-in link" } @else { "Make a sign-in link" }
+                            @if can_mail && (row.contact.email.is_some() || row.contact.pending.is_some()) { "Send a new sign-in link" } @else { "Make a sign-in link" }
                         }
                     }
                 }

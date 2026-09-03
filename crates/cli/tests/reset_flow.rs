@@ -36,7 +36,8 @@ async fn a_reset_link_arrives_by_mail_and_works_exactly_once() {
     assert_eq!(location, "/forgot?done=1");
     assert!(!mail_file.exists(), "nothing to send to");
 
-    // Ada records an address; the page keeps it beside her credentials.
+    // Ada gives an address; it is pending until she follows the link,
+    // and a pending address gets no reset.
     let (status, location) = post_form(
         app,
         "/you/settings/email",
@@ -45,9 +46,29 @@ async fn a_reset_link_arrives_by_mail_and_works_exactly_once() {
     )
     .await;
     assert_eq!(status, StatusCode::SEE_OTHER, "{location}");
+    assert_eq!(location, "/you/settings?sent=1");
+    let (_, settings) = page_with_cookie(app, "/you/settings", &cookie).await;
+    assert!(
+        settings.contains("ada@example.org · awaiting confirmation"),
+        "{settings}"
+    );
+    let confirm = std::fs::read_to_string(&mail_file).unwrap();
+    assert!(
+        confirm.contains("Subject: Confirm your address on cairn"),
+        "{confirm}"
+    );
+    std::fs::remove_file(&mail_file).unwrap();
+    let (_, location) = post_form(app, "/forgot", "", "who=ada%40example.org").await;
+    assert_eq!(location, "/forgot?done=1");
+    assert!(!mail_file.exists(), "no reset to an unconfirmed address");
+    let (status, location) = get_redirect(app, &path_of(&link_in(&confirm)), &cookie).await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{location}");
     assert_eq!(location, "/you/settings?done=1");
     let (_, settings) = page_with_cookie(app, "/you/settings", &cookie).await;
-    assert!(settings.contains(r#"value="ada@example.org""#));
+    assert!(
+        settings.contains("ada@example.org · confirmed"),
+        "{settings}"
+    );
 
     // Asking by address or by name sends a link; a stranger's name does not.
     let (_, location) = post_form(app, "/forgot", "", "who=ada%40example.org").await;
@@ -172,4 +193,12 @@ async fn an_invitation_goes_by_mail_when_the_forge_can_send_it() {
     assert!(mail.contains("/join?token="), "{mail}");
     let (_, page) = page_with_cookie(app, &location, &ada).await;
     assert!(page.contains("Sent to bee@example.org"), "{page}");
+    assert!(page.contains("email pending"), "{page}");
+
+    // Following the mailed invitation proves the address.
+    let link = link_in(&mail);
+    let (status, _) = get_redirect(app, &path_of(&link), "").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (_, page) = page_with_cookie(app, "/people", &ada).await;
+    assert!(page.contains("email confirmed"), "{page}");
 }

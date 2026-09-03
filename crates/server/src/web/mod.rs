@@ -49,6 +49,7 @@ pub fn routes() -> Router<AppState> {
         .route("/login", get(login_page).post(login_submit))
         .route("/forgot", get(forgot_page).post(forgot_submit))
         .route("/reset", get(reset_page).post(reset_submit))
+        .route("/verify", get(verify_email))
         .route("/logout", post(logout))
         .route("/theme", post(set_theme))
         .route("/search", get(search_page))
@@ -365,6 +366,9 @@ struct Flash {
     /// Where an invitation was just sent, so the page can say so.
     #[serde(default)]
     mailed: Option<String>,
+    /// A verification mail just went out.
+    #[serde(default)]
+    sent: Option<String>,
 }
 
 async fn settings_page(
@@ -373,14 +377,20 @@ async fn settings_page(
     viewer: Viewer,
     Query(flash): Query<Flash>,
 ) -> Response {
-    let email = app.with_store(|s| s.contact_of(&viewer.0)).unwrap_or(None);
+    let contact = app
+        .with_store(|s| s.contact_of(&viewer.0))
+        .unwrap_or_default();
     views::settings(
         theme,
         &viewer,
-        email.as_deref(),
-        flash.error.as_deref(),
-        flash.done.is_some(),
-        flash.first.is_some(),
+        &contact,
+        app.mailer().is_some(),
+        views::SettingsNote {
+            error: flash.error.as_deref(),
+            done: flash.done.is_some(),
+            sent: flash.sent.is_some(),
+            first: flash.first.is_some(),
+        },
     )
     .into_response()
 }
@@ -391,19 +401,99 @@ struct EmailForm {
     email: String,
 }
 
+/// Put an address on record. It is pending until the link mailed to it
+/// is followed, so the form only exists where the forge can send.
 async fn change_email(
     State(app): State<AppState>,
     viewer: Viewer,
+    headers: HeaderMap,
     Form(form): Form<EmailForm>,
 ) -> Response {
-    match app.with_store(|s| s.set_contact(&viewer.0, &form.email)) {
-        Ok(()) => Redirect::to("/you/settings?done=1").into_response(),
-        Err(err) => Redirect::to(&format!(
-            "/you/settings?error={}",
-            urlencode(&err.to_string())
-        ))
-        .into_response(),
+    let Some(mailer) = app.mailer() else {
+        return Redirect::to(
+            "/you/settings?error=This+forge+does+not+send+mail%2C+so+it+cannot+verify+an+address",
+        )
+        .into_response();
+    };
+    let email = form.email.trim().to_owned();
+    let secret = match app.with_store(|s| s.request_email(&viewer.0, &email)) {
+        Ok(secret) => secret,
+        Err(err) => {
+            return Redirect::to(&format!(
+                "/you/settings?error={}",
+                urlencode(&err.to_string())
+            ))
+            .into_response();
+        }
+    };
+    let link = absolute(
+        &app,
+        &headers,
+        &format!("/verify?token={}", urlencode(&secret)),
+    );
+    let body = format!(
+        "This address was given for {} on cairn.\n\nOpen this link within a day to confirm it; \
+         it works once:\n\n  {link}\n\nIf that was not you, ignore this and nothing changes.\n",
+        viewer.0.as_str()
+    );
+    let to = email.clone();
+    let sent = tokio::task::spawn_blocking(move || {
+        mailer.send(&to, "Confirm your address on cairn", &body)
+    })
+    .await
+    .unwrap_or_else(|e| Err(e.to_string()));
+    match sent {
+        Ok(()) => Redirect::to("/you/settings?sent=1").into_response(),
+        Err(err) => {
+            tracing::error!(%err, "verification mail failed");
+            Redirect::to("/you/settings?error=The+mail+could+not+be+sent%3B+try+again+in+a+moment")
+                .into_response()
+        }
     }
+}
+
+#[derive(Deserialize)]
+struct VerifyQuery {
+    #[serde(default)]
+    token: String,
+}
+
+/// Follow a verification link. Whether or not anyone is signed in, the
+/// address is proved by the link having been followed; the page then
+/// sends them to sign in, or to settings if they already are.
+async fn verify_email(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<VerifyQuery>,
+) -> Response {
+    match app.with_store(|s| s.confirm_email(query.token.trim())) {
+        Ok(Some(_)) => {
+            if viewer_from(&headers, &app).is_some() {
+                Redirect::to("/you/settings?done=1").into_response()
+            } else {
+                Redirect::to("/login?error=Address+confirmed.+Sign+in.").into_response()
+            }
+        }
+        Ok(None) => Redirect::to("/login?error=That+link+has+expired+or+been+used").into_response(),
+        Err(err) => oops(err),
+    }
+}
+
+/// A link back to this forge, from the request that asked for it.
+fn absolute(app: &AppState, headers: &HeaderMap, path: &str) -> String {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("localhost");
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or(if app.secure_cookies() {
+            "https"
+        } else {
+            "http"
+        });
+    format!("{scheme}://{host}{path}")
 }
 
 async fn forgot_page(
@@ -458,7 +548,8 @@ async fn forgot_submit(
     let Some(who) = found else {
         return Redirect::to("/forgot?done=1").into_response();
     };
-    let address = app.with_store(|s| s.contact_of(&who)).unwrap_or(None);
+    let contact = app.with_store(|s| s.contact_of(&who)).unwrap_or_default();
+    let address = contact.email.filter(|_| contact.verified);
     match (app.mailer(), address) {
         (Some(mailer), Some(email)) => {
             if let Ok(secret) = app.with_store(|s| s.begin_password_reset(&who)) {
@@ -818,7 +909,7 @@ async fn teams_action(
 pub struct PersonRow {
     pub principal: cairn_core::Principal,
     pub has_password: bool,
-    pub has_email: bool,
+    pub contact: cairn_core::Contact,
     pub admin: bool,
 }
 
@@ -842,7 +933,7 @@ async fn people_page(
             }
             rows.push(PersonRow {
                 has_password: store.has_password(&principal.id),
-                has_email: store.contact_of(&principal.id)?.is_some(),
+                contact: store.contact_of(&principal.id)?,
                 admin: store.is_admin(&principal.id),
                 principal,
             });
@@ -922,7 +1013,7 @@ async fn people_action(
                 Err(err) => return back(&err.to_string()),
             }
             if !email.is_empty()
-                && let Err(err) = app.with_store(|s| s.set_contact(&id, email))
+                && let Err(err) = app.with_store(|s| s.request_email(&id, email))
             {
                 return back(&err.to_string());
             }
@@ -934,17 +1025,26 @@ async fn people_action(
         },
         _ => return back("Unknown action"),
     }
-    let secret = match app.with_store(|s| s.mint_token(&viewer.0, &id, Some(INVITE_LABEL))) {
+    // Mail it if we can and know where: the verified address, or the
+    // pending one - an invitation followed from that inbox proves it.
+    let contact = app.with_store(|s| s.contact_of(&id)).unwrap_or_default();
+    let destination = contact.email.clone().or(contact.pending.clone());
+    let will_mail = app.mailer().is_some() && destination.is_some();
+    let label = if will_mail {
+        MAILED_INVITE_LABEL
+    } else {
+        INVITE_LABEL
+    };
+    let secret = match app.with_store(|s| s.mint_token(&viewer.0, &id, Some(label))) {
         Ok((_, secret, env)) => {
             app.publish(&env);
             secret
         }
         Err(err) => return back(&err.to_string()),
     };
-    // Mail it if we can and know where; otherwise the page carries it.
     let mut mailed = None;
     if let Some(mailer) = app.mailer()
-        && let Ok(Some(to)) = app.with_store(|s| s.contact_of(&id))
+        && let Some(to) = destination
     {
         let link = join_link(&app, &headers, &secret);
         let body = format!(
@@ -952,13 +1052,14 @@ async fn people_action(
              you will be asked to set a password:\n\n  {link}\n",
             viewer.0.as_str()
         );
+        let dest = to.clone();
         let sent = tokio::task::spawn_blocking(move || {
-            mailer.send(&to, "You are invited to cairn", &body)
+            mailer.send(&dest, "You are invited to cairn", &body)
         })
         .await
         .unwrap_or_else(|e| Err(e.to_string()));
         match sent {
-            Ok(()) => mailed = app.with_store(|s| s.contact_of(&id)).ok().flatten(),
+            Ok(()) => mailed = Some(to),
             Err(err) => tracing::error!(%err, "invitation mail failed"),
         }
     }
@@ -990,6 +1091,8 @@ fn join_link(app: &AppState, headers: &HeaderMap, secret: &str) -> String {
 
 /// The label that marks a token as an invitation rather than a credential.
 const INVITE_LABEL: &str = "invitation";
+/// An invitation that went out by mail: following it proves the address.
+const MAILED_INVITE_LABEL: &str = "invitation:mailed";
 
 #[derive(Deserialize)]
 struct JoinQuery {
@@ -1004,10 +1107,24 @@ async fn join(State(app): State<AppState>, Query(query): Query<JoinQuery>) -> Re
     let expired =
         || Redirect::to("/login?error=That+invitation+has+been+used+or+revoked").into_response();
     let token = match app.with_store(|s| s.token_for_secret(query.token.trim())) {
-        Ok(Some(token)) if token.label.as_deref() == Some(INVITE_LABEL) => token,
+        Ok(Some(token))
+            if matches!(
+                token.label.as_deref(),
+                Some(INVITE_LABEL | MAILED_INVITE_LABEL)
+            ) =>
+        {
+            token
+        }
         Ok(_) => return expired(),
         Err(err) => return oops(err),
     };
+    // A mailed invitation, followed, proves the address it went to.
+    if token.label.as_deref() == Some(MAILED_INVITE_LABEL)
+        && let Ok(contact) = app.with_store(|s| s.contact_of(&token.principal))
+        && let Some(pending) = contact.pending
+    {
+        let _ = app.with_store(|s| s.mark_email_verified(&token.principal, &pending));
+    }
     // Spend it first: a session that could be minted twice from one
     // link is a link that can be forwarded.
     match app.with_store(|s| s.revoke_token(&token.principal, &token.id)) {

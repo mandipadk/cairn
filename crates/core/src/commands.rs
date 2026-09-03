@@ -17,8 +17,8 @@ use crate::policy::{self, PolicyTrace};
 use crate::queries::raw;
 use crate::store::{Store, append};
 use crate::types::{
-    Capability, ChangeSpec, ChangeState, ClaimSpec, Disposition, Mirror, ObjectFormat, Policy,
-    Principal, PrincipalKind, ReviewDomain, SessionState, TaskState, Visibility,
+    Capability, ChangeSpec, ChangeState, ClaimSpec, Contact, Disposition, Mirror, ObjectFormat,
+    Policy, Principal, PrincipalKind, ReviewDomain, SessionState, TaskState, Visibility,
 };
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
@@ -457,39 +457,115 @@ impl Store {
             .is_some()
     }
 
-    /// Where to reach this person, kept beside the credentials rather
-    /// than in the log: an address is changeable and is nobody else's
-    /// business, and a log that cannot forget is the wrong place for it.
-    pub fn set_contact(&mut self, who: &PrincipalId, email: &str) -> CoreResult<()> {
+    /// Begin putting an address on record: it is pending until a link
+    /// mailed to it is followed, because an address nobody has proved
+    /// they can read is not somewhere to send a credential. Returns the
+    /// secret for that link. A new pending address replaces an old one;
+    /// the verified address, if any, stays until the new one is proved.
+    pub fn request_email(&mut self, who: &PrincipalId, email: &str) -> CoreResult<String> {
         let email = email.trim();
         require(valid_email(email), || {
             "that does not look like an email address".into()
         })?;
+        let target = raw::principal(&self.conn, who.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("principal {who}")))?;
+        require(target.kind == PrincipalKind::Human, || {
+            format!("{who} is not a person")
+        })?;
         let now = jiff::Timestamp::now().to_string();
-        self.conn.execute(
-            "INSERT INTO contact (principal, email, set_at) VALUES (?, ?, ?)
-             ON CONFLICT (principal) DO UPDATE SET email = excluded.email, set_at = excluded.set_at",
+        let secret = random_token_secret();
+        let expires = (jiff::Timestamp::now() + jiff::SignedDuration::from_hours(24)).to_string();
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO contact (principal, pending, set_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT (principal) DO UPDATE SET pending = ?2, set_at = ?3",
             rusqlite::params![who.as_str(), email, now],
+        )?;
+        tx.execute(
+            "UPDATE email_verifications SET used = 1 WHERE principal = ? AND used = 0",
+            rusqlite::params![who.as_str()],
+        )?;
+        tx.execute(
+            "INSERT INTO email_verifications (token_hash, principal, email, expires)
+             VALUES (?, ?, ?, ?)",
+            rusqlite::params![token_hash(&secret), who.as_str(), email, expires],
+        )?;
+        tx.commit()?;
+        Ok(secret)
+    }
+
+    /// Follow a verification link: the pending address becomes the
+    /// address. Answers with who and what, or nothing for a link that
+    /// is unknown, spent, or old.
+    pub fn confirm_email(&mut self, secret: &str) -> CoreResult<Option<(PrincipalId, String)>> {
+        let now = jiff::Timestamp::now().to_string();
+        let tx = self.conn.transaction()?;
+        let row: Option<(String, String)> = tx
+            .prepare_cached(
+                "SELECT principal, email FROM email_verifications
+                  WHERE token_hash = ? AND used = 0 AND expires > ?",
+            )?
+            .query_row(rusqlite::params![token_hash(secret), now], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()?;
+        let Some((who, email)) = row else {
+            tx.commit()?;
+            return Ok(None);
+        };
+        tx.execute(
+            "UPDATE email_verifications SET used = 1 WHERE token_hash = ?",
+            rusqlite::params![token_hash(secret)],
+        )?;
+        Self::record_verified(&tx, &who, &email, &now)?;
+        tx.commit()?;
+        Ok(Some((PrincipalId(who), email)))
+    }
+
+    /// An invitation mailed to an address and then followed proves that
+    /// address as surely as a verification link would.
+    pub fn mark_email_verified(&mut self, who: &PrincipalId, email: &str) -> CoreResult<()> {
+        let now = jiff::Timestamp::now().to_string();
+        let tx = self.conn.transaction()?;
+        Self::record_verified(&tx, who.as_str(), email, &now)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn record_verified(tx: &Transaction, who: &str, email: &str, now: &str) -> CoreResult<()> {
+        tx.execute(
+            "INSERT INTO contact (principal, email, verified_at, pending, set_at)
+             VALUES (?1, ?2, ?3, NULL, ?3)
+             ON CONFLICT (principal) DO UPDATE
+                 SET email = ?2, verified_at = ?3, pending = NULL, set_at = ?3",
+            rusqlite::params![who, email, now],
         )?;
         Ok(())
     }
 
-    pub fn contact_of(&self, who: &PrincipalId) -> CoreResult<Option<String>> {
+    pub fn contact_of(&self, who: &PrincipalId) -> CoreResult<Contact> {
         Ok(self
             .conn
-            .prepare_cached("SELECT email FROM contact WHERE principal = ?")?
-            .query_row(rusqlite::params![who.as_str()], |row| row.get(0))
-            .optional()?)
+            .prepare_cached("SELECT email, verified_at, pending FROM contact WHERE principal = ?")?
+            .query_row(rusqlite::params![who.as_str()], |row| {
+                Ok(Contact {
+                    email: row.get(0)?,
+                    verified: row.get::<_, Option<String>>(1)?.is_some(),
+                    pending: row.get(2)?,
+                })
+            })
+            .optional()?
+            .unwrap_or_default())
     }
 
-    /// Whose address this is, by exact match. Several people may share
-    /// one; the first registered wins, and a reset still only ever goes
-    /// to the address itself.
+    /// Whose verified address this is. A pending address identifies
+    /// nobody: anyone can type anyone's address into a form.
     pub fn principal_by_email(&self, email: &str) -> CoreResult<Option<PrincipalId>> {
         Ok(self
             .conn
             .prepare_cached(
-                "SELECT principal FROM contact WHERE email = ? ORDER BY set_at LIMIT 1",
+                "SELECT principal FROM contact
+                  WHERE email = ? AND verified_at IS NOT NULL ORDER BY set_at LIMIT 1",
             )?
             .query_row(rusqlite::params![email.trim()], |row| {
                 row.get::<_, String>(0)

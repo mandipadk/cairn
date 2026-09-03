@@ -422,6 +422,16 @@ pub struct Notice {
     pub read: bool,
 }
 
+/// Where a person can be reached. An address counts only once a link
+/// mailed to it has been followed; until then it is pending, and a
+/// reset will not go to it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Contact {
+    pub email: Option<String>,
+    pub verified: bool,
+    pub pending: Option<String>,
+}
+
 /// A session's declared intent over paths, live while the session is.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Lease {

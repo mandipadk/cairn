@@ -111,12 +111,65 @@ async fn a_reset_link_arrives_by_mail_and_works_exactly_once() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_forge_that_cannot_send_mail_says_so() {
+async fn without_mail_the_request_reaches_whoever_runs_the_forge() {
     let forge = boot().await;
     let app = &forge.app;
+    api_with_token(
+        app,
+        "POST",
+        "/api/principals",
+        &forge.ada_token,
+        Some(serde_json::json!({ "id": "bee", "kind": "human", "display": "Bee" })),
+    )
+    .await;
+
     let (status, page) = page_with_cookie(app, "/forgot", "").await;
     assert_eq!(status, StatusCode::OK);
-    assert!(page.contains("cannot send mail"), "{page}");
-    let (_, location) = post_form(app, "/forgot", "", "who=ada").await;
-    assert!(location.contains("cannot+send+mail"), "{location}");
+    assert!(page.contains("Ask for a new link"), "{page}");
+    let (_, location) = post_form(app, "/forgot", "", "who=bee").await;
+    assert_eq!(location, "/forgot?done=1");
+    let (_, page) = page_with_cookie(app, "/forgot?done=1", "").await;
+    assert!(page.contains("have been told"), "{page}");
+
+    // Ada, who runs the forge, is told and can act from People.
+    let (_, ada) = sign_in_as(&forge, "ada").await;
+    let (_, inbox) = page_with_cookie(app, "/inbox", &ada).await;
+    assert!(
+        inbox.contains("bee cannot sign in and asked for a new link"),
+        "{inbox}"
+    );
+    assert!(inbox.contains(r#"href="/people""#));
+    let (status, location) = post_form(app, "/people", &ada, "action=relink&id=bee").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert!(location.starts_with("/people?invite="), "{location}");
+
+    // A name nobody has, or an agent's, gets the same answer and tells nobody new.
+    let (_, location) = post_form(app, "/forgot", "", "who=nobody").await;
+    assert_eq!(location, "/forgot?done=1");
+    let (_, location) = post_form(app, "/forgot", "", "who=scout").await;
+    assert_eq!(location, "/forgot?done=1");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_invitation_goes_by_mail_when_the_forge_can_send_it() {
+    let outbox = tempfile::tempdir().unwrap();
+    let mail_file = outbox.path().join("mail.txt");
+    let forge = boot_mailing(&format!("cat > '{}'", mail_file.display())).await;
+    let app = &forge.app;
+    let (_, ada) = sign_in_as(&forge, "ada").await;
+
+    let (status, location) = post_form(
+        app,
+        "/people",
+        &ada,
+        "action=register&id=bee&display=Bee&email=bee%40example.org",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert!(location.contains("&mailed=bee%40example.org"), "{location}");
+    let mail = std::fs::read_to_string(&mail_file).unwrap();
+    assert!(mail.contains("To: bee@example.org"), "{mail}");
+    assert!(mail.contains("/join?token="), "{mail}");
+    let (_, page) = page_with_cookie(app, &location, &ada).await;
+    assert!(page.contains("Sent to bee@example.org"), "{page}");
 }

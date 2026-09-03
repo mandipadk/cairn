@@ -631,6 +631,19 @@ pub(crate) mod raw {
         Ok(grants)
     }
 
+    /// Everyone holding the unscoped admin grant that running the forge
+    /// consists of.
+    pub fn admins(conn: &Connection) -> CoreResult<Vec<String>> {
+        Ok(conn
+            .prepare_cached(
+                "SELECT DISTINCT grantee FROM grants
+                  WHERE revoked = 0 AND repo IS NULL AND actions LIKE '%\"admin\"%'
+                  ORDER BY grantee",
+            )?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
     /// Does this grant list cover `action` on `repo` right now?
     pub fn grants_cover(
         grants: &[Grant],

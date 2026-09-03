@@ -401,10 +401,12 @@ pub fn forgot(theme: Theme, can_mail: bool, sent: bool, error: Option<&str>) -> 
         html! {
             @if let Some(error) = error { p class="error" { (error) } }
             @if sent {
-                p { "If that account has an email address on record, a link is on its way. It works once, for thirty minutes." }
-                p class="hint" { a href="/login" { "Back to sign in" } }
-            } @else if !can_mail {
-                p { "This forge cannot send mail, so it cannot reset a password by itself. Ask whoever runs it for a new sign-in link." }
+                @if can_mail {
+                    p { "If that account has an email address on record, a link is on its way. It works once, for thirty minutes." }
+                    p class="hint" { "No address on record? The people who run this forge have been told, and can send you a new sign-in link." }
+                } @else {
+                    p { "The people who run this forge have been told, and can send you a new sign-in link." }
+                }
                 p class="hint" { a href="/login" { "Back to sign in" } }
             } @else {
                 form class="stack" method="post" action="/forgot" {
@@ -412,7 +414,7 @@ pub fn forgot(theme: Theme, can_mail: bool, sent: bool, error: Option<&str>) -> 
                         label for="who" { "Your name or email" }
                         input id="who" name="who" type="text" autocomplete="username" autofocus;
                     }
-                    button class="btn" type="submit" { "Send a reset link" }
+                    button class="btn" type="submit" { @if can_mail { "Send a reset link" } @else { "Ask for a new link" } }
                     p class="hint" { a href="/login" { "Back to sign in" } }
                 }
             }
@@ -812,7 +814,7 @@ fn notice_href(notice: &Notice) -> String {
         (Some(repo), None) if notice.kind == "transfer" => format!("/{repo}/transfer"),
         (Some(repo), None) => format!("/{repo}"),
         (None, _) => match notice.kind.as_str() {
-            "team" => "/you".to_owned(),
+            "reset-request" => "/people".to_owned(),
             _ => "/you".to_owned(),
         },
     }
@@ -1120,7 +1122,9 @@ pub fn people(
     theme: Theme,
     viewer: &Viewer,
     people: &[super::PersonRow],
+    can_mail: bool,
     join_link: Option<&str>,
+    mailed: Option<&str>,
     error: Option<&str>,
 ) -> Markup {
     layout_section(
@@ -1134,13 +1138,17 @@ pub fn people(
 
             @if let Some(link) = join_link {
                 div class="once" {
-                    p { b { "Send them this link." } " It signs them in once, then it is spent; this is the only time it can be shown." }
+                    @if let Some(to) = mailed {
+                        p { b { "Sent to " (to) "." } " The same link is here in case it does not arrive; it signs them in once, then it is spent." }
+                    } @else {
+                        p { b { "Send them this link." } " It signs them in once, then it is spent; this is the only time it can be shown." }
+                    }
                     code class="secret" { (link) }
                 }
             }
 
             @for row in people {
-                div class="trow" style="grid-template-columns: 150px minmax(0,1fr) auto;" {
+                div class="trow" style="grid-template-columns: 150px minmax(0,1fr) 140px auto;" {
                     span style="font-weight: 500;" { (row.principal.id.as_str()) }
                     span class="sec3" { (row.principal.display) }
                     span class="sec3" {
@@ -1148,11 +1156,19 @@ pub fn people(
                         @else if row.has_password { "can sign in" }
                         @else { "no password yet" }
                     }
+                    form method="post" action="/people" {
+                        input type="hidden" name="action" value="relink";
+                        input type="hidden" name="id" value=(row.principal.id.as_str());
+                        button class="quiet" type="submit" {
+                            @if can_mail && row.has_email { "Send a new sign-in link" } @else { "Make a sign-in link" }
+                        }
+                    }
                 }
             }
 
             div class="sechead" style="margin-top: 30px;" { b { "Add a person" } span {} }
             form class="stack narrowcol" method="post" action="/people" {
+                input type="hidden" name="action" value="register";
                 div {
                     label for="id" { "Name" }
                     input id="id" name="id" type="text" autocomplete="off"
@@ -1162,7 +1178,14 @@ pub fn people(
                     label for="display" { "Display name" }
                     input id="display" name="display" type="text" autocomplete="off";
                 }
-                button class="btn" type="submit" { "Add and make a link" }
+                div {
+                    label for="email" { "Email" }
+                    input id="email" name="email" type="email" autocomplete="off"
+                          placeholder=(if can_mail { "the invitation goes here" } else { "optional; kept for password resets" });
+                }
+                button class="btn" type="submit" {
+                    @if can_mail { "Add and send an invitation" } @else { "Add and make a link" }
+                }
             }
         },
     )
@@ -2139,6 +2162,12 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
             "dot idle",
             html! {
                 b { (actor) } " added " (member.as_str()) " to " (team.as_str())
+            },
+        ),
+        Event::PasswordResetRequested { principal } => (
+            "dot idle",
+            html! {
+                b { (principal.as_str()) } " asked for a new sign-in link"
             },
         ),
         Event::TeamMemberRemoved { team, member } => (

@@ -141,6 +141,11 @@ pub enum Event {
         team: PrincipalId,
         member: PrincipalId,
     },
+    /// Somebody who cannot sign in asked for help, on a forge that could
+    /// not mail them a link itself. The people who run it are told.
+    PasswordResetRequested {
+        principal: PrincipalId,
+    },
 
     /// A repository set the rules everything on it must meet.
     PolicySet {
@@ -311,6 +316,7 @@ impl Event {
             Event::RepoTransferDeclined { .. } => "repo_transfer_declined",
             Event::TeamMemberAdded { .. } => "team_member_added",
             Event::TeamMemberRemoved { .. } => "team_member_removed",
+            Event::PasswordResetRequested { .. } => "password_reset_requested",
             Event::PolicySet { .. } => "policy_set",
             Event::MirrorSet { .. } => "mirror_set",
             Event::MirrorPushed { .. } => "mirror_pushed",

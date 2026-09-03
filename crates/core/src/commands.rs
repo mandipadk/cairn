@@ -498,6 +498,27 @@ impl Store {
             .map(PrincipalId))
     }
 
+    /// Record that somebody needs a way back in, on a forge that could
+    /// not mail them one. Recorded as an event so the people who run
+    /// the forge are told, and so the asking is on the record.
+    pub fn request_password_reset(&mut self, who: &PrincipalId) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        let target = raw::principal(&tx, who.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("principal {who}")))?;
+        require(target.kind == PrincipalKind::Human, || {
+            format!("{who} is not a person")
+        })?;
+        let env = append(
+            &tx,
+            who,
+            Event::PasswordResetRequested {
+                principal: who.clone(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
     /// Begin a password reset: a secret that works once, for half an
     /// hour, for one person. Earlier unused secrets for them die here,
     /// so the newest link is the only one that works. Only the hash is

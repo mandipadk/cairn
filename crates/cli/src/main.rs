@@ -47,9 +47,15 @@ enum Command {
         /// claim any address.
         #[arg(long)]
         trust_proxy: bool,
-        /// A command that accepts one mail message on stdin, such as
-        /// `sendmail -t` or `msmtp -t`. Enables password resets by
-        /// email. Read from CAIRN_MAIL_COMMAND when unset.
+        /// SMTP relay for outbound mail, credentials included:
+        /// `smtps://user:pass@host:465`, or
+        /// `smtp://user:pass@host:587?tls=required`. Read from
+        /// CAIRN_SMTP_URL when unset, which keeps the password out of the
+        /// process list.
+        #[arg(long)]
+        smtp_url: Option<String>,
+        /// Instead of SMTP: a command that accepts one message on stdin,
+        /// such as `sendmail -t`. Read from CAIRN_MAIL_COMMAND when unset.
         #[arg(long)]
         mail_command: Option<String>,
         /// The From address on mail the forge sends. Read from
@@ -186,6 +192,7 @@ async fn main() -> anyhow::Result<()> {
             secure_cookies,
             mirror_token,
             trust_proxy,
+            smtp_url,
             mail_command,
             mail_from,
         } => {
@@ -213,18 +220,29 @@ async fn main() -> anyhow::Result<()> {
             if trust_proxy {
                 state = state.trusting_proxy();
             }
+            let smtp_url = smtp_url.or_else(|| std::env::var("CAIRN_SMTP_URL").ok());
             let mail_command = mail_command.or_else(|| std::env::var("CAIRN_MAIL_COMMAND").ok());
             let mail_from = mail_from.or_else(|| std::env::var("CAIRN_MAIL_FROM").ok());
-            match (mail_command, mail_from) {
-                (Some(command), Some(from)) => {
+            match (smtp_url, mail_command, mail_from) {
+                (Some(url), _, Some(from)) => {
+                    let mailer = cairn_server::Mailer::smtp(&url, from)
+                        .map_err(|e| anyhow::anyhow!("--smtp-url: {e}"))?;
+                    state = state.with_mailer(mailer);
+                    tracing::info!("mail: SMTP relay configured");
+                }
+                (None, Some(command), Some(from)) => {
                     state = state.with_mailer(cairn_server::Mailer::command(command, from));
+                    tracing::info!("mail: command configured");
                 }
-                (Some(_), None) | (None, Some(_)) => {
-                    anyhow::bail!("mail needs both --mail-command and --mail-from");
+                (None, None, None) => {
+                    tracing::warn!(
+                        "no mail configured (CAIRN_SMTP_URL and CAIRN_MAIL_FROM): \
+                         password resets and invitations fall back to the People page"
+                    );
                 }
-                (None, None) => {
-                    tracing::info!("no mail command configured: password resets are off");
-                }
+                _ => anyhow::bail!(
+                    "mail needs --mail-from together with --smtp-url or --mail-command"
+                ),
             }
             if secure_cookies {
                 state = state.with_secure_cookies();

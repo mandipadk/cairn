@@ -362,6 +362,9 @@ struct Flash {
     /// First sign-in, straight from an invitation.
     #[serde(default)]
     first: Option<String>,
+    /// Where an invitation was just sent, so the page can say so.
+    #[serde(default)]
+    mailed: Option<String>,
 }
 
 async fn settings_page(
@@ -423,18 +426,18 @@ struct ForgotForm {
     who: String,
 }
 
-/// Ask for a reset. The answer is the same whether or not the name or
-/// address is known, so this form confirms nothing about who exists;
-/// the difference is a message that goes out, or does not.
+/// Ask for a way back in. With mail and an address on record, a link
+/// goes out. Otherwise - no mail on this forge, or no address for this
+/// person - the people who run the forge are told, in their inbox, and
+/// can send a new sign-in link from the People page. Either way the
+/// answer on the page is the same, so the form confirms nothing about
+/// who exists.
 async fn forgot_submit(
     State(app): State<AppState>,
     crate::guard::ClientIp(client): crate::guard::ClientIp,
     headers: HeaderMap,
     Form(form): Form<ForgotForm>,
 ) -> Response {
-    let Some(mailer) = app.mailer() else {
-        return Redirect::to("/forgot?error=This+forge+cannot+send+mail").into_response();
-    };
     if let Some(peer) = client
         && !app.reset_limiter.accept(peer)
     {
@@ -445,41 +448,53 @@ async fn forgot_submit(
         app.with_store(|s| s.principal_by_email(who))
             .unwrap_or(None)
     } else {
-        PrincipalId::new(who)
-    };
-    if let Some(who) = found
-        && let Ok(Some(email)) = app.with_store(|s| s.contact_of(&who))
-        && let Ok(secret) = app.with_store(|s| s.begin_password_reset(&who))
-    {
-        let host = headers
-            .get(header::HOST)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("localhost");
-        let scheme = headers
-            .get("x-forwarded-proto")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or(if app.secure_cookies() {
-                "https"
-            } else {
-                "http"
-            });
-        let link = format!("{scheme}://{host}/reset?token={}", urlencode(&secret));
-        let body = format!(
-            "Somebody asked to reset the password for {} on {host}.\n\n\
-             If that was you, open this link within thirty minutes; it works once:\n\n  {link}\n\n\
-             If it was not you, nothing has changed and you can ignore this.\n",
-            who.as_str()
-        );
-        // Sending happens off the async runtime: the mail command may
-        // take a moment, and a slow reset must not stall the forge.
-        let sent = tokio::task::spawn_blocking(move || {
-            mailer.send(&email, "Reset your cairn password", &body)
+        PrincipalId::new(who).filter(|id| {
+            matches!(
+                app.with_store(|s| s.principal(id)),
+                Ok(Some(p)) if p.kind == cairn_core::PrincipalKind::Human
+            )
         })
-        .await
-        .unwrap_or_else(|e| Err(e.to_string()));
-        if let Err(err) = sent {
-            tracing::error!(%err, "password reset mail failed");
+    };
+    let Some(who) = found else {
+        return Redirect::to("/forgot?done=1").into_response();
+    };
+    let address = app.with_store(|s| s.contact_of(&who)).unwrap_or(None);
+    match (app.mailer(), address) {
+        (Some(mailer), Some(email)) => {
+            if let Ok(secret) = app.with_store(|s| s.begin_password_reset(&who)) {
+                let host = headers
+                    .get(header::HOST)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("localhost");
+                let scheme = headers
+                    .get("x-forwarded-proto")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or(if app.secure_cookies() {
+                        "https"
+                    } else {
+                        "http"
+                    });
+                let link = format!("{scheme}://{host}/reset?token={}", urlencode(&secret));
+                let body = format!(
+                    "Somebody asked to reset the password for {} on {host}.\n\n\
+                     If that was you, open this link within thirty minutes; it works once:\n\n  {link}\n\n\
+                     If it was not you, nothing has changed and you can ignore this.\n",
+                    who.as_str()
+                );
+                let sent = tokio::task::spawn_blocking(move || {
+                    mailer.send(&email, "Reset your cairn password", &body)
+                })
+                .await
+                .unwrap_or_else(|e| Err(e.to_string()));
+                if let Err(err) = sent {
+                    tracing::error!(%err, "password reset mail failed");
+                }
+            }
         }
+        _ => match app.with_store(|s| s.request_password_reset(&who)) {
+            Ok(env) => app.publish(&env),
+            Err(err) => tracing::warn!(%err, "could not record a reset request"),
+        },
     }
     Redirect::to("/forgot?done=1").into_response()
 }
@@ -803,6 +818,7 @@ async fn teams_action(
 pub struct PersonRow {
     pub principal: cairn_core::Principal,
     pub has_password: bool,
+    pub has_email: bool,
     pub admin: bool,
 }
 
@@ -826,36 +842,25 @@ async fn people_page(
             }
             rows.push(PersonRow {
                 has_password: store.has_password(&principal.id),
+                has_email: store.contact_of(&principal.id)?.is_some(),
                 admin: store.is_admin(&principal.id),
                 principal,
             });
         }
         Ok::<_, cairn_core::CoreError>(rows)
     });
-    // The invitation is a link to this forge, so it needs to know its
-    // own address; a proxy in front says so, and otherwise the cookie
-    // policy already tells us whether this is https.
-    let join_link = flash.invite.as_deref().map(|secret| {
-        let host = headers
-            .get(header::HOST)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("localhost");
-        let scheme = headers
-            .get("x-forwarded-proto")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or(if app.secure_cookies() {
-                "https"
-            } else {
-                "http"
-            });
-        format!("{scheme}://{host}/join?token={}", urlencode(secret))
-    });
+    let join_link = flash
+        .invite
+        .as_deref()
+        .map(|secret| join_link(&app, &headers, secret));
     match people {
         Ok(people) => views::people(
             theme,
             &viewer,
             &people,
+            app.mailer().is_some(),
             join_link.as_deref(),
+            flash.mailed.as_deref(),
             flash.error.as_deref(),
         )
         .into_response(),
@@ -866,17 +871,23 @@ async fn people_page(
 #[derive(Deserialize)]
 struct PersonForm {
     #[serde(default)]
+    action: String,
+    #[serde(default)]
     id: String,
     #[serde(default)]
     display: String,
+    #[serde(default)]
+    email: String,
 }
 
-/// Register a person and hand back the one thing they need: a link
-/// that signs them in once. It is a token under the hood, labelled so
-/// that /join knows to spend it, and shown exactly once like any other.
+/// Register a person, or make an existing one a fresh way in. Either
+/// way the result is a link that signs them in once; if the forge can
+/// send mail and knows where, the link goes there too, and the page
+/// still shows it in case it does not arrive.
 async fn people_action(
     State(app): State<AppState>,
     viewer: Viewer,
+    headers: HeaderMap,
     Form(form): Form<PersonForm>,
 ) -> Response {
     if !viewer.1.admin {
@@ -887,35 +898,94 @@ async fn people_action(
     let Some(id) = PrincipalId::new(form.id.trim()) else {
         return back(&format!("{:?} is not a valid name", form.id));
     };
-    let display = form.display.trim();
-    let display = if display.is_empty() {
-        id.as_str()
-    } else {
-        display
-    };
-    let registered = app.with_store(|s| {
-        s.register_principal(
-            &viewer.0,
-            &id,
-            cairn_core::PrincipalKind::Human,
-            display,
-            None,
-            None,
-        )
-    });
-    match registered {
-        Ok(env) => {
-            app.publish(&env);
-            match app.with_store(|s| s.mint_token(&viewer.0, &id, Some(INVITE_LABEL))) {
-                Ok((_, secret, env)) => {
-                    app.publish(&env);
-                    Redirect::to(&format!("/people?invite={}", urlencode(&secret))).into_response()
-                }
-                Err(err) => back(&err.to_string()),
+    let email = form.email.trim();
+    match form.action.as_str() {
+        "register" => {
+            let display = form.display.trim();
+            let display = if display.is_empty() {
+                id.as_str()
+            } else {
+                display
+            };
+            let registered = app.with_store(|s| {
+                s.register_principal(
+                    &viewer.0,
+                    &id,
+                    cairn_core::PrincipalKind::Human,
+                    display,
+                    None,
+                    None,
+                )
+            });
+            match registered {
+                Ok(env) => app.publish(&env),
+                Err(err) => return back(&err.to_string()),
+            }
+            if !email.is_empty()
+                && let Err(err) = app.with_store(|s| s.set_contact(&id, email))
+            {
+                return back(&err.to_string());
             }
         }
-        Err(err) => back(&err.to_string()),
+        "relink" => match app.with_store(|s| s.principal(&id)) {
+            Ok(Some(p)) if p.kind == cairn_core::PrincipalKind::Human => {}
+            Ok(_) => return back(&format!("{id} is not a person here")),
+            Err(err) => return oops(err),
+        },
+        _ => return back("Unknown action"),
     }
+    let secret = match app.with_store(|s| s.mint_token(&viewer.0, &id, Some(INVITE_LABEL))) {
+        Ok((_, secret, env)) => {
+            app.publish(&env);
+            secret
+        }
+        Err(err) => return back(&err.to_string()),
+    };
+    // Mail it if we can and know where; otherwise the page carries it.
+    let mut mailed = None;
+    if let Some(mailer) = app.mailer()
+        && let Ok(Some(to)) = app.with_store(|s| s.contact_of(&id))
+    {
+        let link = join_link(&app, &headers, &secret);
+        let body = format!(
+            "{} has invited you to cairn.\n\nOpen this link to sign in; it works once, and \
+             you will be asked to set a password:\n\n  {link}\n",
+            viewer.0.as_str()
+        );
+        let sent = tokio::task::spawn_blocking(move || {
+            mailer.send(&to, "You are invited to cairn", &body)
+        })
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
+        match sent {
+            Ok(()) => mailed = app.with_store(|s| s.contact_of(&id)).ok().flatten(),
+            Err(err) => tracing::error!(%err, "invitation mail failed"),
+        }
+    }
+    let mut to = format!("/people?invite={}", urlencode(&secret));
+    if let Some(mailed) = mailed {
+        to.push_str(&format!("&mailed={}", urlencode(&mailed)));
+    }
+    Redirect::to(&to).into_response()
+}
+
+/// The invitation is a link to this forge, so it needs to know its own
+/// address; a proxy in front says so, and otherwise the cookie policy
+/// already tells us whether this is https.
+fn join_link(app: &AppState, headers: &HeaderMap, secret: &str) -> String {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("localhost");
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or(if app.secure_cookies() {
+            "https"
+        } else {
+            "http"
+        });
+    format!("{scheme}://{host}/join?token={}", urlencode(secret))
 }
 
 /// The label that marks a token as an invitation rather than a credential.

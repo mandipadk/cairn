@@ -44,7 +44,8 @@ async fn an_invitation_signs_somebody_in_exactly_once() {
     let app = &forge.app;
     let (_, ada) = sign_in_as(&forge, "ada").await;
 
-    let (status, location) = post_form(app, "/people", &ada, "id=bee&display=Bee").await;
+    let (status, location) =
+        post_form(app, "/people", &ada, "action=register&id=bee&display=Bee").await;
     assert_eq!(status, StatusCode::SEE_OTHER);
     let secret = query_value(&location, "invite").expect("an invitation to hand over");
 
@@ -125,13 +126,13 @@ async fn only_whoever_runs_the_forge_sees_people() {
     let forge = boot().await;
     let app = &forge.app;
     let (_, ada) = sign_in_as(&forge, "ada").await;
-    post_form(app, "/people", &ada, "id=bee&display=Bee").await;
+    post_form(app, "/people", &ada, "action=register&id=bee&display=Bee").await;
     let (_, bee) = sign_in_as(&forge, "bee").await;
     assert_eq!(
         get_with_cookie(app, "/people", &bee).await,
         StatusCode::NOT_FOUND
     );
-    let (status, _) = post_form(app, "/people", &bee, "id=cat&display=Cat").await;
+    let (status, _) = post_form(app, "/people", &bee, "action=register&id=cat&display=Cat").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     // A bare API token is a credential, not an invitation.
     let (_, page) = page_with_cookie(app, "/", &bee).await;

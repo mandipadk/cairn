@@ -61,22 +61,29 @@ header, for local development only.
 
 ## Mail
 
-The forge does not speak SMTP itself. Give it a command that accepts one
-message on stdin, and the address to send from:
+Point the forge at an SMTP relay - your own, or a provider's - as one URL
+with the credentials in it, plus the address to send from:
 
 ```sh
-cairn serve ... --mail-command "sendmail -t" --mail-from forge@example.org
-# or CAIRN_MAIL_COMMAND and CAIRN_MAIL_FROM
+CAIRN_SMTP_URL='smtps://user:pass@smtp.example.com:465' \
+CAIRN_MAIL_FROM='forge@example.org' cairn serve ...
+# smtp://user:pass@host:587?tls=required for STARTTLS; unencrypted is refused
 ```
 
-`msmtp -t`, or anything that behaves like `sendmail -t`, works the same
-way, and no credential has to live in the forge's process. With mail
-configured, a person who has put an email address on their settings
-page can reset a forgotten password from the sign-in page: the link
-works once, for thirty minutes, and the form answers everyone the same
-way whether or not it knows them. Without mail, the page says so, and
-whoever runs the forge makes a new sign-in link from the People page
-instead.
+Put them in the service's environment file rather than on the command
+line, so the password is not in the process list. On a machine that
+already has a mail system, `--mail-command "sendmail -t"` hands each
+message to that instead.
+
+With mail configured, an invitation from the People page goes to the
+address given, and a person who has put an email address on their
+settings page can reset a forgotten password from the sign-in page: the
+link works once, for thirty minutes, and the form answers everyone the
+same way whether or not it knows them.
+
+Without mail, or for a person with no address on record, a reset request
+is not a dead end: the people who run the forge are told in their inbox
+and can send a new sign-in link from the People page in one click.
 
 ## Administration
 

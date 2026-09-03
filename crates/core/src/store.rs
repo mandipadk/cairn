@@ -740,6 +740,8 @@ fn record_scope(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
         }
 
         // Somebody's own account business.
+        PasswordResetRequested { principal } => (None, Some(principal.as_str().to_owned())),
+
         PasswordSet { principal, .. } => (None, Some(principal.as_str().to_owned())),
         TokenMinted { principal, .. } => (None, Some(principal.as_str().to_owned())),
         TokenRevoked { token } => {
@@ -1227,6 +1229,25 @@ fn record_notices(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
         _ => None,
     };
 
+    // One event with many recipients: whoever runs the forge is told
+    // that somebody needs a way back in.
+    if let PasswordResetRequested { principal } = &env.event {
+        for admin in crate::queries::raw::admins(tx)? {
+            if admin == actor {
+                continue;
+            }
+            tx.execute(
+                "INSERT OR REPLACE INTO notices (seq, recipient, kind, repo, change_id, number, what)
+                 VALUES (?, ?, 'reset-request', NULL, NULL, NULL, ?)",
+                params![
+                    env.seq.0,
+                    admin,
+                    format!("{principal} cannot sign in and asked for a new link")
+                ],
+            )?;
+        }
+    }
+
     if let Some((recipient, kind, repo, change, number, what)) = notice
         && recipient != actor
     {
@@ -1391,7 +1412,7 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
         }
         // An attempt is a fact about the outside world, not a change
         // to the graph's own state.
-        Event::MirrorPushed { .. } => {}
+        Event::MirrorPushed { .. } | Event::PasswordResetRequested { .. } => {}
         Event::PolicySet { repo, policy } => {
             tx.execute(
                 "UPDATE repos SET policy = ? WHERE name = ?",

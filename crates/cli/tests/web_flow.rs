@@ -232,7 +232,14 @@ async fn web_ui_full_journey() {
     let (_, body, _) = ada.get("/demo/tree/greeting.txt");
     assert!(body.contains("hello"));
     let (_, body, _) = ada.get("/demo/log");
-    assert!(body.contains("change_merged"));
+    assert!(
+        body.contains("landed"),
+        "the log says what happened in words: {body}"
+    );
+    assert!(
+        !body.contains("change_merged"),
+        "not in the log's own vocabulary"
+    );
 
     // Unknown paths are a page, not a stack trace.
     let (status, _, _) = ada.get("/demo/changes/999");

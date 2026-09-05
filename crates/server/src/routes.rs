@@ -1016,7 +1016,7 @@ pub async fn lessons(
             query.repo.as_deref(),
             query.q.as_deref().filter(|q| !q.trim().is_empty()),
             query.failures_only,
-            query.limit.unwrap_or(50),
+            query.limit.unwrap_or(50).min(200),
         )
     })?;
     // Searching across everything is searching across what you may see.
@@ -1096,7 +1096,8 @@ pub async fn search(
     Query(params): Query<SearchParams>,
 ) -> ApiResult<Json<Value>> {
     let query = cairn_core::SearchQuery::parse(&params.q);
-    let hits = app.with_store(|s| s.search(&actor.0, &query, params.limit.unwrap_or(50)))?;
+    let hits =
+        app.with_store(|s| s.search(&actor.0, &query, params.limit.unwrap_or(50).min(200)))?;
     Ok(Json(json!({ "hits": hits })))
 }
 
@@ -1116,7 +1117,7 @@ pub async fn inbox(
     actor: Actor,
     Query(query): Query<InboxQuery>,
 ) -> ApiResult<Json<Value>> {
-    let mut notices = app.with_store(|s| s.inbox(&actor.0, query.limit.unwrap_or(100)))?;
+    let mut notices = app.with_store(|s| s.inbox(&actor.0, query.limit.unwrap_or(100).min(500)))?;
     if query.unread {
         notices.retain(|notice| !notice.read);
     }

@@ -2221,6 +2221,11 @@ async fn render_tree(
     repo: String,
     path: String,
 ) -> Response {
+    // The clone URL is a real address only when the forge knows its own.
+    let clone_url = app
+        .public_url()
+        .map(|base| format!("{base}/git/{repo}"))
+        .unwrap_or_else(|| format!("/git/{repo}"));
     let Some(git) = app.git() else {
         return not_found();
     };
@@ -2345,6 +2350,7 @@ async fn render_tree(
         &entries,
         readme.as_deref(),
         &sidebar,
+        &clone_url,
     )
     .into_response()
 }
@@ -2402,6 +2408,22 @@ async fn blame_page(
     };
     let rev = format!("refs/heads/{}", record.default_branch);
     let text = match git.store.show_file(&repo, &rev, &path).await {
+        // Blame walks history for every line; a file this size would
+        // hold the process for longer than anyone is waiting.
+        Ok(Some(bytes)) if bytes.len() as u64 > MAX_RENDERED_BLOB => {
+            return (
+                StatusCode::OK,
+                views::plain_note(
+                    theme,
+                    &format!(
+                        "{} is {} - too large to blame here.",
+                        path,
+                        human_bytes(bytes.len() as u64)
+                    ),
+                ),
+            )
+                .into_response();
+        }
         Ok(Some(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
         Ok(None) => return not_found(),
         Err(err) => return oops(err),
@@ -2722,7 +2744,6 @@ pub(crate) struct LandingData {
     /// Change id → (number, title), for readable references.
     pub numbers: HashMap<String, (i64, String)>,
     /// The cursor a consumer would resume from right now.
-    pub latest_seq: i64,
     /// A grounded summary of the window the page is showing.
     pub brief: Brief,
 }
@@ -2809,7 +2830,6 @@ fn landing_data(
         live,
         sessions: app.with_store(|s| s.active_sessions_in(repo))?,
         numbers,
-        latest_seq: latest,
     })
 }
 

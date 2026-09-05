@@ -191,7 +191,7 @@ fn topbar(theme: Theme, viewer: &Viewer) -> Markup {
                     button class="quiet" type="submit" { (theme.switch_label()) }
                 }
                 form method="post" action="/logout" {
-                    button class="quiet" type="submit" { "Sign out" }
+                    button class="quiet danger" type="submit" { "Sign out" }
                 }
                 span class="avatar" title=(viewer.0.as_str()) {
                     (viewer.0.as_str().chars().next().unwrap_or('?').to_uppercase())
@@ -234,9 +234,13 @@ fn sidebar(viewer: &Viewer, current: Option<&str>) -> Markup {
             a class={ @if current == Some("inbox") { "on" } @else { "" } } href="/inbox" {
                 span { "Inbox" } span class="n" { @if chrome.unread > 0 { (chrome.unread) } }
             }
-            a href="/you" { span { "Your changes" } span class="n" { @if chrome.yours > 0 { (chrome.yours) } } }
+            a class={ @if current == Some("you") { "on" } @else { "" } } href="/you" {
+                span { "Your changes" } span class="n" { @if chrome.yours > 0 { (chrome.yours) } }
+            }
             @if chrome.admin {
-                a href="/agents" { span { "Agents" } span class="n" {} }
+                a class={ @if current == Some("agents") { "on" } @else { "" } } href="/agents" {
+                    span { "Agents" } span class="n" {}
+                }
                 a class={ @if current == Some("people") { "on" } @else { "" } } href="/people" {
                     span { "People" } span class="n" {}
                 }
@@ -244,9 +248,15 @@ fn sidebar(viewer: &Viewer, current: Option<&str>) -> Markup {
                     span { "Teams" } span class="n" {}
                 }
             }
-            a href="/you/tokens" { span { "Tokens" } span class="n" {} }
-            a href="/you/sessions" { span { "Sessions" } span class="n" {} }
-            a href="/you/settings" { span { "Settings" } span class="n" {} }
+            a class={ @if current == Some("tokens") { "on" } @else { "" } } href="/you/tokens" {
+                span { "Tokens" } span class="n" {}
+            }
+            a class={ @if current == Some("sessions") { "on" } @else { "" } } href="/you/sessions" {
+                span { "Sessions" } span class="n" {}
+            }
+            a class={ @if current == Some("settings") { "on" } @else { "" } } href="/you/settings" {
+                span { "Settings" } span class="n" {}
+            }
         }
     }
 }
@@ -415,7 +425,7 @@ pub fn forgot(theme: Theme, can_mail: bool, sent: bool, error: Option<&str>) -> 
                 form class="stack" method="post" action="/forgot" {
                     div {
                         label for="who" { "Your name or email" }
-                        input id="who" name="who" type="text" autocomplete="username" autofocus;
+                        input id="who" name="who" type="text" autocomplete="username" autofocus required;
                     }
                     button class="btn" type="submit" { @if can_mail { "Send a reset link" } @else { "Ask for a new link" } }
                     p class="hint" { a href="/login" { "Back to sign in" } }
@@ -435,11 +445,11 @@ pub fn reset(theme: Theme, token: &str, error: Option<&str>) -> Markup {
                 input type="hidden" name="token" value=(token);
                 div {
                     label for="password" { "New password" }
-                    input id="password" name="password" type="password" autocomplete="new-password" minlength="12" autofocus;
+                    input id="password" name="password" type="password" autocomplete="new-password" minlength="12" autofocus required;
                 }
                 div {
                     label for="confirm" { "Again" }
-                    input id="confirm" name="confirm" type="password" autocomplete="new-password" minlength="12";
+                    input id="confirm" name="confirm" type="password" autocomplete="new-password" minlength="12" required;
                 }
                 button class="btn" type="submit" { "Set password" }
             }
@@ -480,7 +490,7 @@ pub fn login(
                         div {
                             label for="principal" { "Name" }
                             input id="principal" name="principal" type="text"
-                                autocomplete="username webauthn" autocapitalize="none" autofocus;
+                                autocomplete="username webauthn" autocapitalize="none" autofocus required;
                         }
                         div {
                             label for="password" { "Password" }
@@ -504,7 +514,7 @@ pub fn login(
                                 summary { "Email me a sign-in link" }
                                 div {
                                     label for="who" { "Your name or email" }
-                                    input id="who" name="who" type="text" autocomplete="username";
+                                    input id="who" name="who" type="text" autocomplete="username" required;
                                 }
                                 button class="vbtn wide" type="submit" { "Send the link" }
                             }
@@ -518,7 +528,7 @@ pub fn login(
                                 input id="token" name="token" type="password" autocomplete="off";
                             }
                             button class="vbtn wide" type="submit" { "Sign in with the token" }
-                            p class="hint" { "Mint one with " code { "cairn admin mint-token" } }
+                            p class="hint" { "From your Tokens page, once signed in." }
                         }
                     }
                     @if dev {
@@ -753,7 +763,7 @@ pub fn new_repo(theme: Theme, viewer: &Viewer, error: Option<&str>) -> Markup {
                     div {
                         label for="name" { "Name" }
                         input id="name" name="name" type="text" autofocus autocomplete="off"
-                              placeholder="lowercase, digits and hyphens";
+                              placeholder="lowercase, digits and hyphens" required;
                     }
                     div {
                         label for="default_branch" { "Default branch" }
@@ -778,11 +788,10 @@ pub fn new_repo(theme: Theme, viewer: &Viewer, error: Option<&str>) -> Markup {
 }
 
 pub fn you(theme: Theme, viewer: &Viewer, mine: &[(String, Change)]) -> Markup {
-    layout(
+    layout_section(
         theme,
-        Some(viewer),
-        None,
-        None,
+        viewer,
+        "you",
         "Your changes",
         html! {
             div class="sechead" { b { "Your open changes" } span { (mine.len()) } }
@@ -921,7 +930,7 @@ pub fn repo_settings(
                     p class="note" { "Offered to " b { (pending.as_str()) } ". Nothing changes until they accept." }
                     form class="stack" method="post" action={ "/" (repo.name) "/settings/transfer" } {
                         input type="hidden" name="action" value="withdraw";
-                        button class="btn" type="submit" { "Withdraw the offer" }
+                        button class="vbtn danger" type="submit" { "Withdraw the offer" }
                     }
                 } @else {
                     p class="note" { "Owning a repository carries every capability on it. Offer it to a person; it moves when they accept." }
@@ -929,7 +938,7 @@ pub fn repo_settings(
                         input type="hidden" name="action" value="offer";
                         div {
                             label for="to" { "Offer to" }
-                            input id="to" name="to" type="text" autocomplete="off" placeholder="their name";
+                            input id="to" name="to" type="text" autocomplete="off" placeholder="their name" required;
                         }
                         button class="btn" type="submit" { "Offer ownership" }
                     }
@@ -1030,11 +1039,10 @@ fn browser_family(agent: Option<&str>) -> &'static str {
 
 pub fn sessions(theme: Theme, viewer: &Viewer, sessions: &[BrowserSession], done: bool) -> Markup {
     let others = sessions.iter().filter(|s| !s.current).count();
-    layout(
+    layout_section(
         theme,
-        Some(viewer),
-        None,
-        None,
+        viewer,
+        "sessions",
         "Sessions",
         html! {
             div class="sechead" {
@@ -1092,11 +1100,10 @@ pub fn settings(
         sent,
         first,
     } = note;
-    layout(
+    layout_section(
         theme,
-        Some(viewer),
-        None,
-        None,
+        viewer,
+        "settings",
         "Settings",
         html! {
             div class="narrowcol" {
@@ -1149,7 +1156,7 @@ pub fn settings(
                                 }
                                 form method="post" action="/you/passkeys/remove" {
                                     input type="hidden" name="cred_id" value=(key.cred_id);
-                                    button class="quiet" type="submit" { "Remove" }
+                                    button class="quiet danger" type="submit" { "Remove" }
                                 }
                             }
                         }
@@ -1167,12 +1174,12 @@ pub fn settings(
                         div {
                             label for="password" { "New password" }
                             input id="password" name="password" type="password"
-                                  autocomplete="new-password" minlength="12";
+                                  autocomplete="new-password" minlength="12" required;
                         }
                         div {
                             label for="confirm" { "Again" }
                             input id="confirm" name="confirm" type="password"
-                                  autocomplete="new-password" minlength="12";
+                                  autocomplete="new-password" minlength="12" required;
                         }
                         p class="hint" {
                             "Changing this signs out everywhere, including here — a password \
@@ -1198,11 +1205,10 @@ pub fn tokens(
         .iter()
         .filter(|t| !t.revoked && t.until.as_deref().is_none_or(|u| u > now.as_str()))
         .count();
-    layout(
+    layout_section(
         theme,
-        Some(viewer),
-        None,
-        None,
+        viewer,
+        "tokens",
         "Tokens",
         html! {
             div class="sechead" { b { "Your tokens" } span { (live) } }
@@ -1233,7 +1239,7 @@ pub fn tokens(
             @for token in tokens {
                 div class="trow tokens" {
                     span { (token.label.as_deref().unwrap_or("unlabelled")) }
-                    span class="sec3" { (token.id.0) }
+                    code class="sec3" { (token.id.0) }
                     span class="sec3" {
                         @match &token.until {
                             Some(until) if until.as_str() <= now.as_str() => { "expired" }
@@ -1248,7 +1254,7 @@ pub fn tokens(
                             form method="post" action="/you/tokens" {
                                 input type="hidden" name="action" value="revoke";
                                 input type="hidden" name="token" value=(token.id.0);
-                                button class="quiet" type="submit" { "Revoke" }
+                                button class="quiet danger" type="submit" { "Revoke" }
                             }
                         }
                     }
@@ -1305,7 +1311,7 @@ pub fn teams(
                                 input type="hidden" name="action" value="remove";
                                 input type="hidden" name="team" value=(row.principal.id.as_str());
                                 input type="hidden" name="member" value=(member.as_str());
-                                button class="quiet" type="submit" { "remove " (member.as_str()) }
+                                button class="quiet danger" type="submit" { "Remove " (member.as_str()) }
                             }
                         }
                     }
@@ -1330,7 +1336,7 @@ pub fn teams(
                 div {
                     label for="id" { "Name" }
                     input id="id" name="id" type="text" autocomplete="off"
-                          placeholder="lowercase, digits and hyphens";
+                          placeholder="lowercase, digits and hyphens" required;
                 }
                 div {
                     label for="display" { "Display name" }
@@ -1401,7 +1407,7 @@ pub fn people(
                             form method="post" action="/people" {
                                 input type="hidden" name="action" value="cancel";
                                 input type="hidden" name="id" value=(row.principal.id.as_str());
-                                button class="quiet" type="submit" { "Cancel invitation" }
+                                button class="quiet danger" type="submit" { "Cancel invitation" }
                             }
                         }
                     }
@@ -1414,7 +1420,7 @@ pub fn people(
                 div {
                     label for="id" { "Name" }
                     input id="id" name="id" type="text" autocomplete="off"
-                          placeholder="lowercase, digits and hyphens";
+                          placeholder="lowercase, digits and hyphens" required;
                 }
                 div {
                     label for="display" { "Display name" }
@@ -1441,11 +1447,10 @@ pub fn agents(
     fresh: Option<&str>,
     error: Option<&str>,
 ) -> Markup {
-    layout(
+    layout_section(
         theme,
-        Some(viewer),
-        None,
-        None,
+        viewer,
+        "agents",
         "Agents",
         html! {
             div class="sechead" { b { "Agents" } span { (agents.len()) } }
@@ -1483,7 +1488,7 @@ pub fn agents(
                             form method="post" action="/agents" {
                                 input type="hidden" name="action" value="revoke";
                                 input type="hidden" name="grant" value=(grant.id.0);
-                                button class="quiet" type="submit" { "Revoke" }
+                                button class="quiet danger" type="submit" { "Revoke" }
                             }
                         }
                     }
@@ -1495,7 +1500,7 @@ pub fn agents(
                         input type="hidden" name="action" value="grant";
                         input type="hidden" name="grantee" value=(row.principal.id.as_str());
                         @for capability in ["task", "push", "review", "merge", "verify"] {
-                            label class="check" {
+                            label class="tick" {
                                 input type="checkbox" name=(capability) value="on";
                                 (capability)
                             }
@@ -1504,7 +1509,7 @@ pub fn agents(
                             option value="" { "every repository" }
                             @for repo in repos { option value=(repo) { (repo) } }
                         }
-                        button class="btn" type="submit" { "Grant" }
+                        button class="vbtn" type="submit" { "Grant" }
                     }
                 }
             }
@@ -1515,7 +1520,7 @@ pub fn agents(
                 div {
                     label for="id" { "Name" }
                     input id="id" name="id" type="text" autocomplete="off"
-                          placeholder="lowercase, digits and hyphens";
+                          placeholder="lowercase, digits and hyphens" required;
                 }
                 div {
                     label for="display" { "Display name" }
@@ -1524,7 +1529,7 @@ pub fn agents(
                 div {
                     label for="model" { "Model" }
                     input id="model" name="model" type="text" autocomplete="off"
-                          placeholder="policy can require judgment from distinct models";
+                          placeholder="claude-fable-5";
                 }
                 p class="hint" {
                     "A token is minted at the same time, because an agent without one \
@@ -1533,6 +1538,15 @@ pub fn agents(
                 button class="btn" type="submit" { "Add" }
             }
         },
+    )
+}
+
+/// One sentence, framed like the other pages a stranger can meet.
+pub fn plain_note(theme: Theme, text: &str) -> Markup {
+    outside(
+        theme,
+        "Not shown",
+        html! { p class="plain" { (text) } p class="hint" { a href="/" { "Home" } } },
     )
 }
 
@@ -1569,6 +1583,7 @@ pub fn repository(
     entries: &[Entry],
     readme: Option<&str>,
     sidebar: &Sidebar,
+    clone_url: &str,
 ) -> Markup {
     layout(
         theme,
@@ -1584,7 +1599,7 @@ pub fn repository(
                         @if let Some(tip) = tip {
                             span class="tip" { code { (short(tip)) } }
                         }
-                        span class="stats" { "clone " code { "/git/" (repo) } }
+                        span class="stats" { "clone " code { (clone_url) } }
                     }
                     @if !path.is_empty() {
                         div class="crumbs" { (breadcrumbs(repo, path)) }
@@ -1781,6 +1796,9 @@ pub fn changes(theme: Theme, viewer: &Viewer, repo: &str, changes: &[Change]) ->
         "Changes",
         html! {
             div class="sechead" { b { "Changes" } span { (changes.len()) } }
+            @if changes.is_empty() {
+                p class="empty" { "No changes yet. Push to " code { "refs/for/main" } " to open one." }
+            }
             div class="ctable" {
                 @for change in changes {
                     a class="trow" href={ "/" (repo) "/changes/" (change.number) } {
@@ -1909,7 +1927,7 @@ pub fn change(page: ChangePage) -> Markup {
                             button class="vbtn" type="submit" name="disposition" value="approve" { "Approve" }
                             button class="vbtn" type="submit" name="disposition" value="concern" { "Concern" }
                             button class="vbtn" type="submit" name="disposition" value="block" { "Block" }
-                            input type="text" name="rationale" placeholder="Why — required" required;
+                            input type="text" name="rationale" placeholder="Why" required;
                         }
                     }
                 }
@@ -1934,7 +1952,7 @@ pub fn change(page: ChangePage) -> Markup {
                                     }
                                     input type="text" name="command" placeholder="Command that produced it" autocomplete="off";
                                 }
-                                input type="text" name="summary" placeholder="What you saw — required" required;
+                                input type="text" name="summary" placeholder="What you saw" required;
                                 input type="text" name="unchecked" placeholder="What this did not check, comma-separated";
                                 div class="line" {
                                     button class="vbtn" type="submit" name="passed" value="yes" { "Passed" }
@@ -2160,8 +2178,9 @@ pub fn landing(
                     section class="side-sec" {
                         header {
                             h2 { "Live" }
-                            span { "seq " (data.latest_seq) }
+                            span {}
                         }
+                        @if data.live.is_empty() { div class="none" { "Nothing in flight." } }
                         @for envelope in &data.live {
                             (event_row(&numbers, envelope))
                         }
@@ -2506,13 +2525,24 @@ pub fn log(
         Some(Tab::Log),
         "Log",
         html! {
-            div class="sechead" { b { "Log" } span { "from " (after + 1) } }
+            div class="sechead" {
+                b { "Log" }
+                span {
+                    @match (events.first(), events.last()) {
+                        (Some(first), Some(last)) if day_of(&first.ts) == day_of(&last.ts) => { (day_of(&first.ts)) }
+                        (Some(first), Some(last)) => { (day_of(&first.ts)) " to " (day_of(&last.ts)) }
+                        _ => {}
+                    }
+                }
+            }
+            @if events.is_empty() {
+                p class="empty" { @if after == 0 { "Nothing has happened here yet." } @else { "Nothing more recent." } }
+            }
             div class="log" {
                 @for envelope in events {
                     @let (_, text) = describe(&refs, envelope);
                     div class="trow" {
-                        span class="sec3" { (envelope.seq.0) }
-                        span class="sec3" { (envelope.event.kind()) }
+                        span class="sec3" { (day_of(&envelope.ts)) " " (clock_of(&envelope.ts)) }
                         span class="sec2" { (envelope.actor) }
                         span { (text) }
                     }
@@ -2520,7 +2550,7 @@ pub fn log(
             }
             @if let Some(last) = events.last() {
                 div class="pager" {
-                    a href={ "/" (repo) "/log?after=" (last.seq.0) } { "Older → newer, next page" }
+                    a class="quiet" href={ "/" (repo) "/log?after=" (last.seq.0) } { "Later events" }
                 }
             }
         },
@@ -2682,7 +2712,7 @@ fn brief(repo: &str, brief: &Brief) -> Markup {
                 }
             }
             div class="src" {
-                "counted from the log after " (brief.since)
+                "counted from the log"
                 @if !brief.failed_sessions.is_empty() {
                     " · "
                     a class="link" href={ "/" (repo) "/lessons" } { "all lessons" }

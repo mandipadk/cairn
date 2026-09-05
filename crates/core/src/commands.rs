@@ -1782,6 +1782,7 @@ impl Store {
         actor: &PrincipalId,
         principal: &PrincipalId,
         label: Option<&str>,
+        until: Option<&str>,
     ) -> CoreResult<(TokenId, String, Envelope)> {
         let tx = self.conn.transaction()?;
         let acting = ensure_actor(&tx, actor)?;
@@ -1805,6 +1806,7 @@ impl Store {
                 principal: principal.clone(),
                 label: label.map(str::to_owned),
                 hash: token_hash(&secret),
+                until: until.map(str::to_owned),
             },
         )?;
         tx.commit()?;
@@ -1958,4 +1960,11 @@ impl Store {
         tx.commit()?;
         Ok(env)
     }
+}
+
+/// An expiry this many days from now, as the log records instants.
+/// Days here are 24-hour spans: an expiry is an instant, and civil days
+/// mean different amounts of elapsed time across a DST boundary.
+pub fn until_in_days(days: i64) -> String {
+    (jiff::Timestamp::now() + jiff::Span::new().hours(days * 24)).to_string()
 }

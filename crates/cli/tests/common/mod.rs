@@ -107,8 +107,10 @@ async fn boot_inner(object_format: &str, dev: bool, mailer: Option<cairn_server:
             None,
         )
         .unwrap();
-    let (_, scout_token, _) = store.mint_token(&scout, &scout, Some("test")).unwrap();
-    let (_, ada_token, _) = store.mint_token(&ada, &ada, Some("test")).unwrap();
+    let (_, scout_token, _) = store
+        .mint_token(&scout, &scout, Some("test"), None)
+        .unwrap();
+    let (_, ada_token, _) = store.mint_token(&ada, &ada, Some("test"), None).unwrap();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

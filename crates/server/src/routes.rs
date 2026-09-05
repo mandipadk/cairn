@@ -681,6 +681,8 @@ pub async fn list_events(
 #[derive(Deserialize)]
 pub struct MintToken {
     pub label: Option<String>,
+    /// Days until the token expires. None means until revoked.
+    pub days: Option<u32>,
 }
 
 /// Mint a token. The response is the only place the secret ever exists;
@@ -692,8 +694,16 @@ pub async fn mint_token(
     Json(body): Json<MintToken>,
 ) -> ApiResult<Json<Value>> {
     let principal = PrincipalId(id);
-    let (token, secret, env) =
-        app.with_store(|s| s.mint_token(&actor.0, &principal, body.label.as_deref()))?;
+    let (token, secret, env) = app.with_store(|s| {
+        s.mint_token(
+            &actor.0,
+            &principal,
+            body.label.as_deref(),
+            body.days
+                .map(|d| cairn_core::until_in_days(i64::from(d)))
+                .as_deref(),
+        )
+    })?;
     app.publish(&env);
     Ok(Json(
         json!({ "id": token, "token": secret, "seq": env.seq.0 }),

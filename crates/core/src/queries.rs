@@ -522,21 +522,29 @@ pub(crate) mod raw {
         hash: &str,
     ) -> CoreResult<Option<PrincipalId>> {
         Ok(conn
-            .prepare_cached("SELECT principal FROM tokens WHERE hash = ? AND revoked = 0")?
-            .query_row(params![hash], |row| row.get::<_, String>(0))
+            .prepare_cached(
+                "SELECT principal FROM tokens
+                  WHERE hash = ? AND revoked = 0 AND (until_ts IS NULL OR until_ts > ?)",
+            )?
+            .query_row(params![hash, jiff::Timestamp::now().to_string()], |row| {
+                row.get::<_, String>(0)
+            })
             .optional()?
             .map(PrincipalId))
     }
 
     pub fn token(conn: &Connection, id: &str) -> CoreResult<Option<TokenInfo>> {
         Ok(conn
-            .prepare_cached("SELECT id, principal, label, revoked FROM tokens WHERE id = ?")?
+            .prepare_cached(
+                "SELECT id, principal, label, revoked, until_ts FROM tokens WHERE id = ?",
+            )?
             .query_row(params![id], |row| {
                 Ok(TokenInfo {
                     id: crate::id::TokenId(row.get(0)?),
                     principal: PrincipalId(row.get(1)?),
                     label: row.get(2)?,
                     revoked: row.get::<_, i64>(3)? != 0,
+                    until: row.get(4)?,
                 })
             })
             .optional()?)
@@ -545,7 +553,7 @@ pub(crate) mod raw {
     pub fn tokens_of(conn: &Connection, principal: &str) -> CoreResult<Vec<TokenInfo>> {
         Ok(conn
             .prepare_cached(
-                "SELECT id, principal, label, revoked FROM tokens
+                "SELECT id, principal, label, revoked, until_ts FROM tokens
                  WHERE principal = ? ORDER BY rowid",
             )?
             .query_map(params![principal], |row| {
@@ -554,6 +562,7 @@ pub(crate) mod raw {
                     principal: PrincipalId(row.get(1)?),
                     label: row.get(2)?,
                     revoked: row.get::<_, i64>(3)? != 0,
+                    until: row.get(4)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?)
@@ -904,16 +913,24 @@ impl Store {
         Ok(self
             .conn
             .prepare_cached(
-                "SELECT id, principal, label, revoked FROM tokens WHERE hash = ? AND revoked = 0",
+                "SELECT id, principal, label, revoked, until_ts FROM tokens
+                  WHERE hash = ? AND revoked = 0 AND (until_ts IS NULL OR until_ts > ?)",
             )?
-            .query_row(params![crate::commands::token_hash(secret)], |row| {
-                Ok(TokenInfo {
-                    id: crate::id::TokenId(row.get(0)?),
-                    principal: PrincipalId(row.get(1)?),
-                    label: row.get(2)?,
-                    revoked: row.get::<_, i64>(3)? != 0,
-                })
-            })
+            .query_row(
+                params![
+                    crate::commands::token_hash(secret),
+                    jiff::Timestamp::now().to_string()
+                ],
+                |row| {
+                    Ok(TokenInfo {
+                        id: crate::id::TokenId(row.get(0)?),
+                        principal: PrincipalId(row.get(1)?),
+                        label: row.get(2)?,
+                        revoked: row.get::<_, i64>(3)? != 0,
+                        until: row.get(4)?,
+                    })
+                },
+            )
             .optional()?)
     }
 

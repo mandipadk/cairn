@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -125,6 +125,7 @@ CREATE TABLE IF NOT EXISTS tokens (
   principal TEXT NOT NULL,
   label     TEXT,
   hash      TEXT NOT NULL,
+  until_ts  TEXT,
   revoked   INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_tokens_hash ON tokens (hash);
@@ -1299,10 +1300,11 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             principal,
             label,
             hash,
+            until,
         } => {
             tx.execute(
-                "INSERT INTO tokens (id, principal, label, hash) VALUES (?, ?, ?, ?)",
-                params![token.as_str(), principal.as_str(), label, hash],
+                "INSERT INTO tokens (id, principal, label, hash, until_ts) VALUES (?, ?, ?, ?, ?)",
+                params![token.as_str(), principal.as_str(), label, hash, until],
             )?;
         }
         Event::TokenRevoked { token } => {

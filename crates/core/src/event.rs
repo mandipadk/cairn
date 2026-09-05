@@ -72,6 +72,10 @@ pub enum Event {
         /// SHA-256 of the secret. The secret itself never enters the
         /// log; it exists once, in the mint response.
         hash: String,
+        /// RFC 3339 expiry; None means until revoked. Absent on tokens
+        /// minted before expiry existed, which is the same thing.
+        #[serde(default)]
+        until: Option<String>,
     },
     TokenRevoked {
         token: TokenId,

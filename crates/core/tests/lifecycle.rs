@@ -507,7 +507,9 @@ fn tokens_authenticate_and_revoke_immediately() {
     let (mut store, human, scout, _) = seeded();
 
     // Self-mint; the secret resolves to its owner exactly while live.
-    let (token, secret, _) = store.mint_token(&scout, &scout, Some("laptop")).unwrap();
+    let (token, secret, _) = store
+        .mint_token(&scout, &scout, Some("laptop"), None)
+        .unwrap();
     assert!(secret.starts_with("cairn_"));
     assert_eq!(
         store.principal_for_token(&secret).unwrap(),
@@ -517,10 +519,12 @@ fn tokens_authenticate_and_revoke_immediately() {
 
     // An agent may not mint for someone else; a human may.
     assert!(matches!(
-        store.mint_token(&scout, &human, None).unwrap_err(),
+        store.mint_token(&scout, &human, None, None).unwrap_err(),
         CoreError::Forbidden(_)
     ));
-    let (_, human_secret, _) = store.mint_token(&human, &scout, Some("issued")).unwrap();
+    let (_, human_secret, _) = store
+        .mint_token(&human, &scout, Some("issued"), None)
+        .unwrap();
     assert_eq!(
         store.principal_for_token(&human_secret).unwrap(),
         Some(scout.clone())
@@ -2001,7 +2005,7 @@ fn a_team_holds_authority_and_its_members_carry_it() {
             .unwrap_err(),
         CoreError::Forbidden(_)
     ));
-    assert!(store.mint_token(&human, &crew, None).is_err());
+    assert!(store.mint_token(&human, &crew, None, None).is_err());
     let other = principal("other-team");
     store
         .register_principal(&human, &other, PrincipalKind::Team, "Other", None, None)
@@ -2009,5 +2013,27 @@ fn a_team_holds_authority_and_its_members_carry_it() {
     assert!(store.add_team_member(&human, &other, &crew).is_err());
     assert!(store.offer_transfer(&human, "forge", &crew).is_err());
 
+    assert!(store.fsck().unwrap().is_empty());
+}
+
+#[test]
+fn an_expired_token_identifies_nobody() {
+    let (mut store, human, _, _) = seeded();
+    let yesterday = (jiff::Timestamp::now() - jiff::Span::new().hours(24)).to_string();
+    let (_, stale, _) = store
+        .mint_token(&human, &human, Some("stale"), Some(&yesterday))
+        .unwrap();
+    let tomorrow = cairn_core::until_in_days(1);
+    let (_, fresh, _) = store
+        .mint_token(&human, &human, Some("fresh"), Some(&tomorrow))
+        .unwrap();
+    assert!(store.principal_for_token(&stale).unwrap().is_none());
+    assert!(store.token_for_secret(&stale).unwrap().is_none());
+    assert_eq!(
+        store.principal_for_token(&fresh).unwrap(),
+        Some(human.clone())
+    );
+    let info = store.token_for_secret(&fresh).unwrap().unwrap();
+    assert_eq!(info.until.as_deref(), Some(tomorrow.as_str()));
     assert!(store.fsck().unwrap().is_empty());
 }

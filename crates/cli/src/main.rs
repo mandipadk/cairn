@@ -130,6 +130,9 @@ enum AdminCommand {
         principal: String,
         #[arg(long)]
         label: Option<String>,
+        /// Days until it expires; omit for a token that lasts until revoked.
+        #[arg(long)]
+        days: Option<u32>,
     },
     /// Set a human's password. The password is read from stdin, never
     /// from the command line, where it would sit in shell history and in
@@ -286,7 +289,7 @@ async fn main() -> anyhow::Result<()> {
                 // first person gets an unscoped admin grant — recorded
                 // like any other, and revocable like any other.
                 store.grant_bootstrap_admin(&id)?;
-                let (_, secret, _) = store.mint_token(&id, &id, Some("bootstrap"))?;
+                let (_, secret, _) = store.mint_token(&id, &id, Some("bootstrap"), None)?;
                 println!("registered human {principal} with an admin grant");
                 println!("token (shown once, store it safely): {secret}");
             }
@@ -294,12 +297,19 @@ async fn main() -> anyhow::Result<()> {
                 db,
                 principal,
                 label,
+                days,
             } => {
                 let mut store = Store::open(&db)
                     .with_context(|| format!("opening forge database at {}", db.display()))?;
                 let id = PrincipalId::new(&principal)
                     .with_context(|| format!("{principal:?} is not a valid principal slug"))?;
-                let (_, secret, _) = store.mint_token(&id, &id, label.as_deref())?;
+                let (_, secret, _) = store.mint_token(
+                    &id,
+                    &id,
+                    label.as_deref(),
+                    days.map(|d| cairn_core::until_in_days(i64::from(d)))
+                        .as_deref(),
+                )?;
                 println!("token (shown once, store it safely): {secret}");
             }
             AdminCommand::SetPassword { db, principal } => {

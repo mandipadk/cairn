@@ -333,7 +333,7 @@ async fn push_requires_a_live_token_without_dev_mode() {
     store
         .issue_grant(&ada, &scout, None, vec![cairn_core::Capability::Push], None)
         .unwrap();
-    let (_, token, _) = store.mint_token(&scout, &scout, None).unwrap();
+    let (_, token, _) = store.mint_token(&scout, &scout, None, None).unwrap();
     store
         .create_repo(&ada, "demo", "main", cairn_core::ObjectFormat::Sha1)
         .unwrap();

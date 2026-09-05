@@ -141,3 +141,32 @@ async fn only_whoever_runs_the_forge_sees_people() {
         "no People link for bee"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_invitation_can_be_cancelled_and_only_the_newest_link_works() {
+    let forge = boot().await;
+    let app = &forge.app;
+    let (_, ada) = sign_in_as(&forge, "ada").await;
+
+    let (_, first) = post_form(app, "/people", &ada, "action=register&id=bee&display=Bee").await;
+    let first = query_value(&first, "invite").unwrap();
+    let (_, page) = page_with_cookie(app, "/people", &ada).await;
+    assert!(page.contains("invited, link good until"), "{page}");
+
+    // A new link retires the old one.
+    let (_, second) = post_form(app, "/people", &ada, "action=relink&id=bee").await;
+    let second = query_value(&second, "invite").unwrap();
+    let (status, location) = get_redirect(app, &format!("/join?token={first}"), "").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert!(
+        location.starts_with("/login?error="),
+        "the old link is dead: {location}"
+    );
+
+    // Cancelling retires the newest too, and the page stops saying invited.
+    post_form(app, "/people", &ada, "action=cancel&id=bee").await;
+    let (_, location) = get_redirect(app, &format!("/join?token={second}"), "").await;
+    assert!(location.starts_with("/login?error="), "{location}");
+    let (_, page) = page_with_cookie(app, "/people", &ada).await;
+    assert!(!page.contains("invited, link good until"), "{page}");
+}

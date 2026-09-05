@@ -713,6 +713,8 @@ struct TokenForm {
     label: String,
     #[serde(default)]
     token: String,
+    #[serde(default)]
+    days: Option<String>,
 }
 
 async fn token_action(
@@ -730,7 +732,15 @@ async fn token_action(
         _ => {
             let label = form.label.trim();
             let label = (!label.is_empty()).then_some(label);
-            app.with_store(|s| s.mint_token(&viewer.0, &viewer.0, label))
+            // Ninety days unless asked otherwise: long enough for a
+            // script to matter, short enough that a forgotten one dies.
+            let until = match form.days.as_deref().unwrap_or("90") {
+                "0" | "never" => None,
+                d => Some(cairn_core::until_in_days(
+                    d.parse::<i64>().unwrap_or(90).clamp(1, 3650),
+                )),
+            };
+            app.with_store(|s| s.mint_token(&viewer.0, &viewer.0, label, until.as_deref()))
                 .map(|(_, secret, env)| {
                     app.publish(&env);
                     Some(secret)
@@ -911,6 +921,8 @@ pub struct PersonRow {
     pub has_password: bool,
     pub contact: cairn_core::Contact,
     pub admin: bool,
+    /// The open invitation, if one is out.
+    pub invitation: Option<cairn_core::TokenInfo>,
 }
 
 /// Who is here, and a way to bring somebody in. Running the forge is
@@ -935,6 +947,14 @@ async fn people_page(
                 has_password: store.has_password(&principal.id),
                 contact: store.contact_of(&principal.id)?,
                 admin: store.is_admin(&principal.id),
+                invitation: {
+                    let now = jiff::Timestamp::now().to_string();
+                    store.tokens_of(&principal.id)?.into_iter().rfind(|t| {
+                        !t.revoked
+                            && is_invitation(t)
+                            && t.until.as_deref().is_none_or(|u| u > now.as_str())
+                    })
+                },
                 principal,
             });
         }
@@ -1018,11 +1038,30 @@ async fn people_action(
                 return back(&err.to_string());
             }
         }
-        "relink" => match app.with_store(|s| s.principal(&id)) {
-            Ok(Some(p)) if p.kind == cairn_core::PrincipalKind::Human => {}
-            Ok(_) => return back(&format!("{id} is not a person here")),
-            Err(err) => return oops(err),
-        },
+        "relink" | "cancel" => {
+            match app.with_store(|s| s.principal(&id)) {
+                Ok(Some(p)) if p.kind == cairn_core::PrincipalKind::Human => {}
+                Ok(_) => return back(&format!("{id} is not a person here")),
+                Err(err) => return oops(err),
+            }
+            // Only one invitation is ever live: a new link kills the old,
+            // and cancelling kills it without a new one.
+            let open: Vec<cairn_core::TokenInfo> = app
+                .with_store(|s| s.tokens_of(&id))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|t| !t.revoked && is_invitation(t))
+                .collect();
+            for token in open {
+                match app.with_store(|s| s.revoke_token(&viewer.0, &token.id)) {
+                    Ok(env) => app.publish(&env),
+                    Err(err) => return back(&err.to_string()),
+                }
+            }
+            if form.action == "cancel" {
+                return Redirect::to("/people").into_response();
+            }
+        }
         _ => return back("Unknown action"),
     }
     // Mail it if we can and know where: the verified address, or the
@@ -1035,7 +1074,14 @@ async fn people_action(
     } else {
         INVITE_LABEL
     };
-    let secret = match app.with_store(|s| s.mint_token(&viewer.0, &id, Some(label))) {
+    let secret = match app.with_store(|s| {
+        s.mint_token(
+            &viewer.0,
+            &id,
+            Some(label),
+            Some(&cairn_core::until_in_days(INVITATION_DAYS)),
+        )
+    }) {
         Ok((_, secret, env)) => {
             app.publish(&env);
             secret
@@ -1093,6 +1139,15 @@ fn join_link(app: &AppState, headers: &HeaderMap, secret: &str) -> String {
 const INVITE_LABEL: &str = "invitation";
 /// An invitation that went out by mail: following it proves the address.
 const MAILED_INVITE_LABEL: &str = "invitation:mailed";
+/// How long an invitation stays open. A week is what everyone expects.
+const INVITATION_DAYS: i64 = 7;
+
+fn is_invitation(token: &cairn_core::TokenInfo) -> bool {
+    token
+        .label
+        .as_deref()
+        .is_some_and(|l| l.starts_with(INVITE_LABEL))
+}
 
 #[derive(Deserialize)]
 struct JoinQuery {
@@ -1245,7 +1300,9 @@ async fn agent_action(
                     // A registered agent with no token cannot do
                     // anything, so mint one here rather than making
                     // somebody find the second form.
-                    match app.with_store(|s| s.mint_token(&viewer.0, &id, Some("created here"))) {
+                    match app
+                        .with_store(|s| s.mint_token(&viewer.0, &id, Some("created here"), None))
+                    {
                         Ok((_, secret, env)) => {
                             app.publish(&env);
                             back(None, Some(secret))

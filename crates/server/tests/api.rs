@@ -719,7 +719,9 @@ async fn tokens_and_grants_enforce_without_dev_identity() {
         )
         .unwrap();
     store.grant_bootstrap_admin(&ada).unwrap();
-    let (_, ada_token, _) = store.mint_token(&ada, &ada, Some("bootstrap")).unwrap();
+    let (_, ada_token, _) = store
+        .mint_token(&ada, &ada, Some("bootstrap"), None)
+        .unwrap();
     let app = router(AppState::new(store));
 
     async fn call_auth(

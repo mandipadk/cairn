@@ -1013,7 +1013,11 @@ pub fn tokens(
     fresh: Option<&str>,
     error: Option<&str>,
 ) -> Markup {
-    let live = tokens.iter().filter(|t| !t.revoked).count();
+    let now = jiff::Timestamp::now().to_string();
+    let live = tokens
+        .iter()
+        .filter(|t| !t.revoked && t.until.as_deref().is_none_or(|u| u > now.as_str()))
+        .count();
     layout(
         theme,
         Some(viewer),
@@ -1034,6 +1038,12 @@ pub fn tokens(
             form class="inline" method="post" action="/you/tokens" {
                 input type="hidden" name="action" value="mint";
                 input name="label" type="text" placeholder="what it is for" autocomplete="off";
+                select name="days" aria-label="Expires" {
+                    option value="30" { "expires in 30 days" }
+                    option value="90" selected { "expires in 90 days" }
+                    option value="365" { "expires in a year" }
+                    option value="never" { "until revoked" }
+                }
                 button class="btn" type="submit" { "Mint a token" }
             }
 
@@ -1041,9 +1051,16 @@ pub fn tokens(
                 p class="empty" { "None yet." }
             }
             @for token in tokens {
-                div class="trow" style="grid-template-columns: minmax(0,1fr) 130px 90px;" {
+                div class="trow" style="grid-template-columns: minmax(0,1fr) 150px 130px 90px;" {
                     span { (token.label.as_deref().unwrap_or("unlabelled")) }
                     span class="sec3" { (token.id.0) }
+                    span class="sec3" {
+                        @match &token.until {
+                            Some(until) if until.as_str() <= now.as_str() => { "expired" }
+                            Some(until) => { "until " (day_of(until)) }
+                            None => { "until revoked" }
+                        }
+                    }
                     span {
                         @if token.revoked {
                             span class="sec3" { "revoked" }
@@ -1175,7 +1192,7 @@ pub fn people(
             }
 
             @for row in people {
-                div class="trow" style="grid-template-columns: 150px minmax(0,1fr) 140px auto;" {
+                div class="trow" style="grid-template-columns: 150px minmax(0,1fr) auto auto;" {
                     span style="font-weight: 500;" { (row.principal.id.as_str()) }
                     span class="sec3" { (row.principal.display) }
                     span class="sec3" {
@@ -1186,6 +1203,17 @@ pub fn people(
                             (Some(_), _) => { " · email confirmed" }
                             (None, Some(_)) => { " · email pending" }
                             (None, None) => { " · no email" }
+                        }
+                        @if let Some(invite) = &row.invitation {
+                            " · invited"
+                            @if let Some(until) = &invite.until { ", link good until " (day_of(until)) }
+                        }
+                    }
+                    @if row.invitation.is_some() {
+                        form method="post" action="/people" {
+                            input type="hidden" name="action" value="cancel";
+                            input type="hidden" name="id" value=(row.principal.id.as_str());
+                            button class="quiet" type="submit" { "Cancel invitation" }
                         }
                     }
                     form method="post" action="/people" {

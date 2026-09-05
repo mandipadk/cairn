@@ -277,6 +277,8 @@ pub struct TokenInfo {
     pub id: TokenId,
     pub principal: PrincipalId,
     pub label: Option<String>,
+    /// RFC 3339 expiry; None means until revoked.
+    pub until: Option<String>,
     pub revoked: bool,
 }
 

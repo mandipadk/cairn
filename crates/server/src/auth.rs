@@ -117,7 +117,7 @@ mod tests {
         store
             .register_principal(&ada, &ada, PrincipalKind::Human, "Ada", None, None)
             .unwrap();
-        let (_, secret, _) = store.mint_token(&ada, &ada, Some("test")).unwrap();
+        let (_, secret, _) = store.mint_token(&ada, &ada, Some("test"), None).unwrap();
         (AppState::new(store), secret)
     }
 

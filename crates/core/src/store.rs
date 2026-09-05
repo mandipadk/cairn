@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 20;
+const SCHEMA_VERSION: i64 = 21;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -2693,4 +2693,27 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Co
         conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl};"))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod projection_shape {
+    /// The policy is stored in the repos projection as JSON, so its
+    /// serialized shape is part of the projection. Changing it - a new
+    /// field, a renamed one - means the rows a running forge holds no
+    /// longer match what replaying the log would write, and fsck says
+    /// so (it did, on 2026-09-05, after runner_quorum was added without
+    /// this). The remedy is to bump SCHEMA_VERSION so they are rebuilt
+    /// at open; this test exists to make that step impossible to forget.
+    #[test]
+    fn the_stored_policy_shape_is_pinned_to_the_schema_version() {
+        let shape = serde_json::to_string(&crate::types::Policy::default()).unwrap();
+        assert_eq!(
+            (super::SCHEMA_VERSION, shape.as_str()),
+            (
+                21,
+                r#"{"require_executed_check":true,"independence":"human_or_two_models","require_runner_verification":false,"runner_quorum":1,"required_domains":[],"require_concerns_resolved":true,"attention_budget":null,"agents_act_in_sessions":false}"#
+            ),
+            "the policy's stored shape changed: bump SCHEMA_VERSION and pin the new shape here"
+        );
+    }
 }

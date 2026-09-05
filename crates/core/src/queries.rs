@@ -1469,7 +1469,27 @@ impl Store {
     /// Open changes whose latest revision carries a claim that names
     /// a command nobody has re-run. This is the work queue for a
     /// runner: everything currently taken on trust.
-    pub fn awaiting_verification(&self, repo: &str) -> CoreResult<Vec<Change>> {
+    ///
+    /// Answered for one runner: a claim is owed a re-run by it while
+    /// this runner has not re-run it and fewer third-party provenances
+    /// than the policy asks for have weighed in on it - one, where the
+    /// policy asks for none. A dispute is a position too: with a quorum
+    /// of one a disputed claim is a person's problem, not another
+    /// runner's; with more, the other runners are owed their say, which
+    /// is how a flaky machine gets caught rather than retried.
+    pub fn awaiting_verification(
+        &self,
+        repo: &str,
+        runner: &PrincipalId,
+    ) -> CoreResult<Vec<Change>> {
+        let policy = raw::repo(&self.conn, repo)?
+            .map(|r| r.policy)
+            .unwrap_or_default();
+        let needed = if policy.require_runner_verification {
+            policy.runner_quorum.max(1) as usize
+        } else {
+            1
+        };
         let mut waiting = Vec::new();
         for change in raw::changes_in_repo(&self.conn, repo)? {
             if change.state != ChangeState::Open || change.latest_revision == 0 {
@@ -1478,10 +1498,19 @@ impl Store {
             let revision = change.latest_revision;
             let claims = raw::claims_on(&self.conn, change.id.as_str(), revision)?;
             let verifications = raw::verifications_on(&self.conn, change.id.as_str(), revision)?;
-            let unrun = claims.iter().any(|claim| {
-                claim.command.is_some() && !verifications.iter().any(|v| v.claim == claim.id)
+            let standing = crate::policy::standing_positions(&verifications);
+            let counted = crate::policy::reproductions(&self.conn, repo, &standing)?;
+            let owed = claims.iter().any(|claim| {
+                claim.command.is_some()
+                    && !verifications
+                        .iter()
+                        .any(|v| v.claim == claim.id && v.by == *runner)
+                    && counted
+                        .positions
+                        .get(claim.id.as_str())
+                        .is_none_or(|provenances| provenances.len() < needed)
             });
-            if unrun {
+            if owed {
                 waiting.push(change);
             }
         }

@@ -125,10 +125,31 @@ from landing until the dispute is resolved.
 A runner's verdict on a claim is its current position, not a permanent
 artefact: its own later re-run supersedes its earlier one, with both kept
 in the log. Two different runners disagreeing is not superseded by
-either, because that disagreement is real information. A runner that
-could not run the command at all — a missing toolchain, a full disk —
-refuses and records nothing, since "I could not check" is not evidence
-that the claim is false.
+either, because that disagreement is real information; it surfaces in
+attention as `runners_disagree`, ranked just under reviewers disagreeing,
+with both observations as evidence. A runner that could not run the
+command at all — a missing toolchain, a full disk — refuses and records
+nothing, since "I could not check" is not evidence that the claim is
+false.
+
+A policy can ask for more than one machine's word. `runner_quorum` says
+how many runners of distinct provenance must have reproduced the same
+claim on the latest revision before it counts as verified. Provenance is
+where a runner runs, as well as the forge knows it: the issuer that proved
+its identity through a workload binding; failing that, the harness it
+declared when it was registered; failing that, the principal itself. Two
+runners on the same harness count once. Only a third party makes quorum:
+a principal for whom verify is all it may do on that repository - not the
+owner, not an admin, holding no push, review or merge there. An author's
+own CI still records what it saw and a dispute from it still blocks, but
+it does not stand in for an independent runner; the readiness trace names
+every reproduction it did not count, and why. The runner's work list,
+`awaiting-verification`, is answered per caller: what this runner has not
+re-run, while fewer provenances than the policy asks have weighed in on
+it. A dispute is a position too: with a quorum of one, a disputed claim
+is a person's problem rather than another runner's; with a quorum of two,
+the second runner is owed its say, which is how a flaky machine is caught
+instead of retried.
 
 ## Attention as a budget
 

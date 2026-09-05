@@ -16,11 +16,11 @@
 use crate::error::CoreResult;
 use crate::queries::raw;
 use crate::types::{
-    Change, ClaimKind, Disposition, Independence, Policy, PrincipalKind, Verification,
+    Capability, Change, ClaimKind, Disposition, Independence, Policy, PrincipalKind, Verification,
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Requirement {
@@ -154,16 +154,7 @@ pub(crate) fn evaluate_against(
     // it was not. Two *different* runners disagreeing is not superseded
     // by either of them: that disagreement is real information, and it
     // is exactly the case a person should look at.
-    let standing: Vec<&Verification> = {
-        let mut latest: BTreeMap<(&str, &str), &Verification> = BTreeMap::new();
-        for verification in &verifications {
-            latest.insert(
-                (verification.claim.as_str(), verification.by.as_str()),
-                verification,
-            );
-        }
-        latest.into_values().collect()
-    };
+    let standing = standing_positions(&verifications);
     let disputed: Vec<_> = standing.iter().filter(|v| !v.agrees).collect();
     requirements.push(Requirement {
         description: "no claim on the latest revision is disputed by a runner".into(),
@@ -183,19 +174,50 @@ pub(crate) fn evaluate_against(
     });
 
     if policy.require_runner_verification {
-        let reproduced: Vec<_> = standing.iter().filter(|v| v.agrees).collect();
-        requirements.push(Requirement {
-            description: "a runner reproduced a claim on the latest revision".into(),
-            satisfied: !reproduced.is_empty(),
-            evidence: if reproduced.is_empty() {
-                "nobody has re-run anything on this revision".into()
-            } else {
-                reproduced
+        let quorum = policy.runner_quorum.max(1) as usize;
+        let counted = reproductions(conn, &change.repo, &standing)?;
+        // The claim with the most provenances behind it is the one that
+        // decides; corroboration is per claim, not across them.
+        let best = counted
+            .by_claim
+            .iter()
+            .max_by_key(|(_, runners)| runners.len());
+        let reached = best.map_or(0, |(_, runners)| runners.len());
+        let mut evidence = match best {
+            None => "nobody has re-run anything on this revision".to_owned(),
+            Some((claim, runners)) => {
+                let who = runners
                     .iter()
-                    .map(|v| format!("{} reproduced {}", v.by, v.claim))
+                    .map(|(provenance, runner)| {
+                        if quorum > 1 {
+                            format!("{runner} ({provenance}) reproduced {claim}")
+                        } else {
+                            format!("{runner} reproduced {claim}")
+                        }
+                    })
                     .collect::<Vec<_>>()
-                    .join(", ")
+                    .join(", ");
+                if quorum > 1 {
+                    format!("{who} · {reached} of {quorum} provenances")
+                } else {
+                    who
+                }
+            }
+        };
+        if !counted.not_counted.is_empty() {
+            evidence.push_str("; ");
+            evidence.push_str(&counted.not_counted.join("; "));
+        }
+        requirements.push(Requirement {
+            description: if quorum > 1 {
+                format!(
+                    "{quorum} runners of distinct provenance reproduced the same claim on the latest revision"
+                )
+            } else {
+                "a runner reproduced a claim on the latest revision".into()
             },
+            satisfied: reached >= quorum,
+            evidence,
         });
     }
 
@@ -295,4 +317,125 @@ pub(crate) fn evaluate_against(
         satisfied: requirements.iter().all(|r| r.satisfied),
         requirements,
     })
+}
+
+/// Each runner's current position on each claim. A runner's later
+/// re-run supersedes its own earlier one; nobody's supersedes anybody
+/// else's, which is what keeps two runners' disagreement on the record.
+pub(crate) fn standing_positions(verifications: &[Verification]) -> Vec<&Verification> {
+    let mut latest: BTreeMap<(&str, &str), &Verification> = BTreeMap::new();
+    for verification in verifications {
+        latest.insert(
+            (verification.claim.as_str(), verification.by.as_str()),
+            verification,
+        );
+    }
+    latest.into_values().collect()
+}
+
+/// What a runner's word is worth on a repository.
+pub struct RunnerStanding {
+    /// Where it runs, as well as the forge knows: the issuer that proved
+    /// its identity; failing that, the harness it declared; failing that,
+    /// the principal itself.
+    pub provenance: String,
+    /// Verify is all it may do here: not the owner, not an admin, no
+    /// push, review or merge. Only such a runner is a third party to the
+    /// change, and only a third party's word makes quorum.
+    pub third_party: bool,
+}
+
+pub(crate) fn runner_standing(
+    conn: &Connection,
+    principal: &str,
+    repo: &str,
+) -> CoreResult<RunnerStanding> {
+    let record = raw::principal(conn, principal)?;
+    let issuer = raw::workload_bindings_of(conn, principal)?
+        .into_iter()
+        .next()
+        .map(|binding| binding.issuer);
+    let harness = record
+        .as_ref()
+        .and_then(|p| p.harness.as_deref())
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .map(str::to_owned);
+    let provenance = issuer.or(harness).unwrap_or_else(|| principal.to_owned());
+
+    let owner = raw::repo(conn, repo)?.is_some_and(|r| r.owner.as_str() == principal);
+    let grants = raw::effective_grants(conn, principal)?;
+    let now = jiff::Timestamp::now().to_string();
+    let holds =
+        |action: Capability, scope: Option<&str>| raw::grants_cover(&grants, action, scope, &now);
+    let third_party = !owner
+        && !holds(Capability::Admin, None)
+        && !holds(Capability::Push, Some(repo))
+        && !holds(Capability::Review, Some(repo))
+        && !holds(Capability::Merge, Some(repo));
+    Ok(RunnerStanding {
+        provenance,
+        third_party,
+    })
+}
+
+/// Who reproduced what, counted the way quorum counts: third parties
+/// only, once per provenance, per claim.
+pub(crate) struct Reproductions {
+    /// claim → provenance → the runner counted for it
+    pub by_claim: BTreeMap<String, BTreeMap<String, String>>,
+    /// claim → every third-party provenance with a standing position on
+    /// it, agreeing or not. A dispute is a position too.
+    pub positions: BTreeMap<String, BTreeSet<String>>,
+    /// Reproductions that did not count, each saying why.
+    pub not_counted: Vec<String>,
+}
+
+pub(crate) fn reproductions(
+    conn: &Connection,
+    repo: &str,
+    standing: &[&Verification],
+) -> CoreResult<Reproductions> {
+    let mut standings: BTreeMap<&str, RunnerStanding> = BTreeMap::new();
+    let mut out = Reproductions {
+        by_claim: BTreeMap::new(),
+        positions: BTreeMap::new(),
+        not_counted: Vec::new(),
+    };
+    for verification in standing {
+        let by = verification.by.as_str();
+        if !standings.contains_key(by) {
+            standings.insert(by, runner_standing(conn, by, repo)?);
+        }
+        let who = &standings[by];
+        if who.third_party {
+            out.positions
+                .entry(verification.claim.to_string())
+                .or_default()
+                .insert(who.provenance.clone());
+        }
+        if !verification.agrees {
+            continue;
+        }
+        if !who.third_party {
+            out.not_counted.push(format!(
+                "{by} reproduced {} but holds more than verify here",
+                verification.claim
+            ));
+            continue;
+        }
+        let runners = out
+            .by_claim
+            .entry(verification.claim.to_string())
+            .or_default();
+        if let Some(first) = runners.get(&who.provenance) {
+            out.not_counted.push(format!(
+                "{by} reproduced {} but is also {} like {first}",
+                verification.claim, who.provenance
+            ));
+            continue;
+        }
+        runners.insert(who.provenance.clone(), by.to_owned());
+    }
+    Ok(out)
 }

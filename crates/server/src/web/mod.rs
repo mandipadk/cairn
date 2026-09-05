@@ -3461,6 +3461,8 @@ struct PolicyForm {
     #[serde(default)]
     agents_act_in_sessions: Option<String>,
     #[serde(default)]
+    runner_quorum: String,
+    #[serde(default)]
     independence: String,
     #[serde(default)]
     domains: Vec<String>,
@@ -3477,6 +3479,7 @@ fn parse_policy_form(body: &str) -> Option<PolicyForm> {
         require_runner_verification: None,
         require_concerns_resolved: None,
         agents_act_in_sessions: None,
+        runner_quorum: String::new(),
         independence: String::new(),
         domains: Vec::new(),
         attention_budget: String::new(),
@@ -3490,6 +3493,7 @@ fn parse_policy_form(body: &str) -> Option<PolicyForm> {
             "require_runner_verification" => form.require_runner_verification = Some(value),
             "require_concerns_resolved" => form.require_concerns_resolved = Some(value),
             "agents_act_in_sessions" => form.agents_act_in_sessions = Some(value),
+            "runner_quorum" => form.runner_quorum = value,
             "independence" => form.independence = value,
             "domains" => form.domains.push(value),
             "attention_budget" => form.attention_budget = value,
@@ -3533,10 +3537,19 @@ fn policy_from(form: &PolicyForm) -> Result<cairn_core::Policy, &'static str> {
                 .map_err(|_| "The daily budget is a small whole number")?,
         ),
     };
+    let runner_quorum = match form.runner_quorum.trim() {
+        "" => 1,
+        n => n
+            .parse::<u32>()
+            .ok()
+            .filter(|n| (1..=9).contains(n))
+            .ok_or("Runners that must agree is a number from 1 to 9")?,
+    };
     Ok(cairn_core::Policy {
         require_executed_check: form.require_executed_check.is_some(),
         independence,
         require_runner_verification: form.require_runner_verification.is_some(),
+        runner_quorum,
         required_domains,
         require_concerns_resolved: form.require_concerns_resolved.is_some(),
         attention_budget,

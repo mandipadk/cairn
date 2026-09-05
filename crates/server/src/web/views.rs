@@ -1241,6 +1241,10 @@ pub fn repo_settings(
                 form class="stack" method="post" action={ "/" (repo.name) "/settings/policy" } {
                     label class="tick" { input type="checkbox" name="require_executed_check" checked[policy.require_executed_check]; "A passing executed check on the landing revision" }
                     label class="tick" { input type="checkbox" name="require_runner_verification" checked[policy.require_runner_verification]; "A runner has reproduced a claim" }
+                    div {
+                        label for="runner_quorum" { "Runners of distinct provenance that must agree on it" }
+                        input id="runner_quorum" name="runner_quorum" type="number" min="1" max="9" value=(policy.runner_quorum.to_string());
+                    }
                     label class="tick" { input type="checkbox" name="require_concerns_resolved" checked[policy.require_concerns_resolved]; "No concern raised in discussion is left unresolved" }
                     label class="tick" { input type="checkbox" name="agents_act_in_sessions" checked[policy.agents_act_in_sessions]; "Agents act inside sessions; their standing tokens cannot push, review or merge" }
                     div {

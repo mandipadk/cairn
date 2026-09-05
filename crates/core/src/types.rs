@@ -549,6 +549,10 @@ pub struct Policy {
     pub independence: Independence,
     /// A runner must have reproduced at least one claim.
     pub require_runner_verification: bool,
+    /// How many runners of distinct provenance must have reproduced the
+    /// same claim, when a runner is required at all. One unless said.
+    #[serde(default = "one")]
+    pub runner_quorum: u32,
     /// Reviewers may be required to cover particular domains.
     pub required_domains: Vec<ReviewDomain>,
     /// No concern raised in discussion may be left unresolved.
@@ -570,12 +574,17 @@ fn yes() -> bool {
     true
 }
 
+fn one() -> u32 {
+    1
+}
+
 impl Default for Policy {
     fn default() -> Self {
         Policy {
             require_executed_check: true,
             independence: Independence::HumanOrTwoModels,
             require_runner_verification: false,
+            runner_quorum: 1,
             required_domains: Vec::new(),
             require_concerns_resolved: true,
             attention_budget: None,

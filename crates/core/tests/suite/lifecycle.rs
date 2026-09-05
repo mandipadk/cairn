@@ -1472,6 +1472,7 @@ fn a_repo_chooses_the_rules_its_work_must_meet() {
     // security must have signed off.
     let strict = cairn_core::Policy {
         require_runner_verification: true,
+        runner_quorum: 1,
         required_domains: vec![ReviewDomain::Security],
         require_concerns_resolved: true,
         attention_budget: None,
@@ -1516,7 +1517,9 @@ fn a_repo_chooses_the_rules_its_work_must_meet() {
     assert!(unmet.iter().any(|d| d.contains("runner reproduced")));
     assert!(unmet.iter().any(|d| d.contains("approved for security")));
 
-    // Satisfy them and it lands again.
+    // Satisfy them and it lands again. The arbiter's re-run is recorded
+    // but does not count as a runner's: it can also review here, so it
+    // is not a third party to the change, and the trace says so.
     let claim = store.claims_on(&change, 1).unwrap()[0].id.clone();
     store
         .verify_claim(&arbiter, &claim, true, "cargo test", "reproduced")
@@ -1531,6 +1534,36 @@ fn a_repo_chooses_the_rules_its_work_must_meet() {
             "safe",
         )
         .unwrap();
+    let trace = store.merge_readiness(&change).unwrap();
+    assert!(!trace.satisfied);
+    let runner_line = trace
+        .requirements
+        .iter()
+        .find(|r| r.description.contains("runner reproduced"))
+        .unwrap();
+    assert!(
+        runner_line.evidence.contains("arbiter reproduced")
+            && runner_line.evidence.contains("holds more than verify here"),
+        "{}",
+        runner_line.evidence
+    );
+    let ci = PrincipalId::new("ci").unwrap();
+    store
+        .register_principal(
+            &human,
+            &ci,
+            PrincipalKind::Agent,
+            "CI",
+            None,
+            Some("actions"),
+        )
+        .unwrap();
+    store
+        .issue_grant(&human, &ci, None, vec![Capability::Verify], None)
+        .unwrap();
+    store
+        .verify_claim(&ci, &claim, true, "cargo test", "reproduced")
+        .unwrap();
     assert!(store.merge_readiness(&change).unwrap().satisfied);
 
     // Loosening is equally possible, and equally recorded.
@@ -1542,6 +1575,7 @@ fn a_repo_chooses_the_rules_its_work_must_meet() {
                 require_executed_check: false,
                 independence: cairn_core::Independence::None,
                 require_runner_verification: false,
+                runner_quorum: 1,
                 required_domains: vec![],
                 require_concerns_resolved: true,
                 attention_budget: None,

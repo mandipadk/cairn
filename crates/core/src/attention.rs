@@ -17,7 +17,7 @@
 
 use crate::error::CoreResult;
 use crate::queries::raw;
-use crate::types::{Change, ChangeState, ClaimKind, Disposition, PrincipalKind};
+use crate::types::{Change, ChangeState, ClaimKind, Disposition, PrincipalKind, Verification};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -54,6 +54,8 @@ signal_kinds! {
     ReviewersDisagree => "reviewers_disagree", 100;
     /// The policy drew this for a human look and none has come yet.
     Drawn => "drawn", 95;
+    /// Two runners re-ran the same claim and saw different things.
+    RunnersDisagree => "runners_disagree", 92;
     /// A runner could not reproduce a claim.
     DisputedClaim => "disputed_claim", 90;
     /// Someone blocked it and it has not moved since.
@@ -186,6 +188,48 @@ pub(crate) fn evaluate(conn: &Connection, repo: &str) -> CoreResult<Vec<Attentio
                 evidence: blocks
                     .iter()
                     .map(|v| format!("{}: {}", v.id, v.rationale))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            });
+        }
+
+        // Same claim, two runners, two answers: neither supersedes the
+        // other, and a person is the one to say which environment lied.
+        let standing = crate::policy::standing_positions(&verifications);
+        let mut split: Vec<(&str, Vec<&&Verification>)> = Vec::new();
+        for position in &standing {
+            let claim = position.claim.as_str();
+            match split.iter_mut().find(|(c, _)| *c == claim) {
+                Some((_, positions)) => positions.push(position),
+                None => split.push((claim, vec![position])),
+            }
+        }
+        split.retain(|(_, positions)| {
+            positions.iter().any(|v| v.agrees) && positions.iter().any(|v| !v.agrees)
+        });
+        if let Some((claim, positions)) = split.first() {
+            let agreed = positions.iter().filter(|v| v.agrees).count();
+            signals.push(Signal {
+                kind: SignalKind::RunnersDisagree,
+                weight: SignalKind::RunnersDisagree.weight(),
+                description: format!(
+                    "{agreed} runner(s) reproduced {claim}, {} could not — runners disagree",
+                    positions.len() - agreed
+                ),
+                evidence: positions
+                    .iter()
+                    .map(|v| {
+                        format!(
+                            "{} {}: {}",
+                            v.by,
+                            if v.agrees {
+                                "reproduced"
+                            } else {
+                                "could not reproduce"
+                            },
+                            v.observed
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join("; "),
             });

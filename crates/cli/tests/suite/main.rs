@@ -36,6 +36,7 @@ mod pages_more_flow;
 mod passkeys_flow;
 mod password_flow;
 mod public_flow;
+mod quorum_flow;
 mod read_boundary_flow;
 mod recovery_flow;
 mod repo_lifecycle_flow;

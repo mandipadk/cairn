@@ -1792,14 +1792,18 @@ pub async fn health(State(app): State<AppState>) -> Response {
     }
 }
 
-/// The changes a runner should pick up: open work whose claims name a
-/// command nobody has re-run.
+/// The changes this runner should pick up: open work whose claims name
+/// a command it has not re-run, while fewer runners than the policy
+/// asks for have reproduced them.
 pub async fn awaiting_verification(
     State(app): State<AppState>,
     actor: Actor,
     Path(repo): Path<String>,
 ) -> ApiResult<Json<Value>> {
     readable_repo(&app, &actor, &repo)?;
-    let waiting = app.with_store(|s| s.acting_as(actor.1.as_ref()).awaiting_verification(&repo))?;
+    let waiting = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .awaiting_verification(&repo, &actor.0)
+    })?;
     Ok(Json(json!(waiting)))
 }

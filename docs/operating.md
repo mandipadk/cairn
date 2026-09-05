@@ -196,6 +196,16 @@ all, because a runner must be able to say "I could not check" rather than
 "the claim is false". `.github/workflows/verify.yml.example` is a working
 configuration; nothing about the runner is specific to any CI product.
 
+A second runner is a second principal. Register it as an agent with a
+`harness` naming where it runs (`POST /api/principals` with
+`"harness": "github-actions"`, or the name of a box), or bind it to a
+workload identity issuer so the forge has the issuer's word for it, and
+give it the `verify` capability and nothing else: a runner that could
+also push or review is not a third party to the change, and its word does
+not count toward a quorum. Then set `runner_quorum` on the repositories
+that want two machines to agree. Each runner asks `awaiting-verification`
+under its own token and is handed only what it still owes.
+
 ## Mirroring
 
 ```sh

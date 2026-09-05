@@ -2330,6 +2330,7 @@ mod concurrency_tests {
                 Policy {
                     require_executed_check: false,
                     require_runner_verification: false,
+                    runner_quorum: 1,
                     independence: Independence::None,
                     required_domains: Vec::new(),
                     require_concerns_resolved: true,

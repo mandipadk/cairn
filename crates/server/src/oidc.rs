@@ -273,7 +273,7 @@ pub async fn login_begin(State(app): State<AppState>) -> Response {
     to_provider(&app, "oidc-login", None)
 }
 
-/// `POST /you/settings/oidc/link`: off to the provider, to come back
+/// `GET /you/settings/oidc/link`: off to the provider, to come back
 /// linked to whoever is signed in now.
 pub async fn link_begin(State(app): State<AppState>, viewer: crate::web::Viewer) -> Response {
     to_provider(&app, "oidc-link", Some(&viewer.0))
@@ -561,6 +561,9 @@ pub fn web_routes() -> axum::Router<AppState> {
     axum::Router::new()
         .route("/login/oidc", axum::routing::get(login_begin))
         .route("/login/oidc/callback", axum::routing::get(callback))
-        .route("/you/settings/oidc/link", axum::routing::post(link_begin))
+        // A link, not a form: `form-action 'self'` in the CSP also covers
+        // the redirect a form's answer makes, and this one leaves for the
+        // provider. Nothing changes here until the provider sends them back.
+        .route("/you/settings/oidc/link", axum::routing::get(link_begin))
         .route("/you/settings/oidc/unlink", axum::routing::post(unlink))
 }

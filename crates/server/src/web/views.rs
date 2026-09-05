@@ -1297,9 +1297,7 @@ pub fn settings(
                             }
                         }
                         @if links.is_empty() {
-                            form method="post" action="/you/settings/oidc/link" {
-                                button class="vbtn" type="submit" { "Link " (provider) }
-                            }
+                            a class="vbtn" href="/you/settings/oidc/link" { "Link " (provider) }
                         }
                     }
                 }

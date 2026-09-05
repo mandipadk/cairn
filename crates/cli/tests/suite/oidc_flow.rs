@@ -123,11 +123,7 @@ async fn round_trip(
     start: &str,
     cookie: &str,
 ) -> (StatusCode, String, String) {
-    let (status, to_provider) = if start.starts_with("/you/") {
-        post_form(&forge.app, start, cookie, "").await
-    } else {
-        get_redirect(&forge.app, start, cookie).await
-    };
+    let (status, to_provider) = get_redirect(&forge.app, start, cookie).await;
     assert_eq!(status, StatusCode::SEE_OTHER, "{to_provider}");
     assert!(
         to_provider.starts_with(&format!("{}/authorize?", provider.issuer)),

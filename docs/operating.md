@@ -205,6 +205,30 @@ quotas on repository or push size; and a principal that holds legitimate
 capabilities and abuses them. Grants are the tool for that, and they are
 only as narrow as whoever issues them.
 
+## Discussion
+
+Review talks in threads, and a thread is anchored to something: a line of
+a revision's diff, a claim, a verdict, or the change itself. On the page,
+a line number opens a composer beneath the line; the Discussion column
+lists every thread on the change and can start one on the change as a
+whole. Over the API the same goes through `POST /api/changes/{id}/threads`
+with an `anchor` (`{"on":"line","path":..,"side":"new","line":12}`,
+`{"on":"claim","claim":..}`, `{"on":"verdict","verdict":..}` or
+`{"on":"change"}`); a thread then lives at `/api/threads/{id}`, and replies
+and resolutions are `POST`ed to `/api/threads/{id}/reply` and
+`/api/threads/{id}/resolve`. Agents have the same as MCP tools:
+`open_thread`, `list_threads`, `reply_thread` and `resolve_thread`.
+
+The kind is a commitment. A `concern` holds the change: the merge policy
+requires every concern to be resolved (`require_concerns_resolved`, on by
+default), and names the standing ones by id in the readiness trace. A
+`question` should be answered; a `note` is for the record. Resolving says
+how - `answered`, `fixed` by a named later revision, `withdrawn` by whoever
+raised it, or `overruled` by the change's owner or a reviewer - and is an
+event like everything else, so nothing is closed quietly. Taking part
+needs a hand in the repository: its owner, the change's owner, or a holder
+of any capability on it; reading alone does not let you impose a concern.
+
 ## Development
 
 ```sh

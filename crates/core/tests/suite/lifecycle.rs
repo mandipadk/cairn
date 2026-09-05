@@ -2043,3 +2043,39 @@ fn an_expired_token_identifies_nobody() {
     assert_eq!(info.until.as_deref(), Some(tomorrow.as_str()));
     assert!(store.fsck().unwrap().is_empty());
 }
+
+/// A database made before verified email has a contact table of three
+/// columns. Opening it must add what today's reads ask for, or every
+/// settings page on an older forge fails.
+#[test]
+fn an_older_contact_table_gains_its_columns_on_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("old.db");
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE contact (principal TEXT PRIMARY KEY, email TEXT, set_at TEXT NOT NULL) STRICT;",
+        )
+        .unwrap();
+    }
+    let mut store = cairn_core::Store::open(&path).unwrap();
+    let ada = cairn_core::PrincipalId::new("ada").unwrap();
+    store
+        .register_principal(
+            &ada,
+            &ada,
+            cairn_core::PrincipalKind::Human,
+            "Ada",
+            None,
+            None,
+        )
+        .unwrap();
+    let contact = store.contact_of(&ada).unwrap();
+    assert!(contact.email.is_none() && contact.pending.is_none());
+    assert!(
+        store
+            .principal_by_email("nobody@example.test")
+            .unwrap()
+            .is_none()
+    );
+}

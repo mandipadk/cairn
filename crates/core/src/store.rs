@@ -525,6 +525,10 @@ impl Store {
         // column is added in place, once, and only if it is missing.
         ensure_column(&conn, "browser_sessions", "last_seen", "TEXT")?;
         ensure_column(&conn, "browser_sessions", "agent", "TEXT")?;
+        // A database from before verified email has a contact table of
+        // three columns; the two it lacks are what every read here asks for.
+        ensure_column(&conn, "contact", "verified_at", "TEXT")?;
+        ensure_column(&conn, "contact", "pending", "TEXT")?;
 
         // Projections are derived, so a schema change is not a
         // migration problem: drop them and replay the log. This is the

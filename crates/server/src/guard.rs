@@ -30,7 +30,10 @@ pub async fn security_headers(request: Request, next: Next) -> Response {
     for (name, value) in [
         (header::CONTENT_SECURITY_POLICY, CSP),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-        (header::REFERRER_POLICY, "no-referrer"),
+        // Not `no-referrer`: under that policy a browser sends
+        // `Origin: null` on our own forms too, and the write guard below
+        // could no longer tell our pages from anyone else's.
+        (header::REFERRER_POLICY, "same-origin"),
         (
             header::STRICT_TRANSPORT_SECURITY,
             "max-age=31536000; includeSubDomains",
@@ -47,10 +50,12 @@ pub async fn security_headers(request: Request, next: Next) -> Response {
 /// The session cookie is SameSite=Lax, which already keeps a foreign
 /// page's form from carrying it. This is the second lock: a browser
 /// says where a request came from (`Sec-Fetch-Site`, and `Origin` on
-/// any cross-origin POST), and a write claiming to come from another
-/// site is refused before any handler sees it. Git clients, curl and
-/// agents send neither header and are unaffected; they authenticate
-/// with a bearer token, which no other site can attach.
+/// any POST), and a write claiming to come from another site is refused
+/// before any handler sees it. `Sec-Fetch-Site: same-origin` is the
+/// browser's own word and settles it; `Origin` decides only when the
+/// browser did not say. Git clients, curl and agents send neither header
+/// and are unaffected; they authenticate with a bearer token, which no
+/// other site can attach.
 pub async fn same_origin_writes(request: Request, next: Next) -> Response {
     let method = request.method();
     let reads = matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS);
@@ -60,23 +65,24 @@ pub async fn same_origin_writes(request: Request, next: Next) -> Response {
             .get("sec-fetch-site")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        if fetch_site == "cross-site" {
-            return refused("cross-site writes are not accepted");
-        }
-        if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
-            // "null" is what a browser sends from a sandboxed or opaque
-            // context; nothing of ours is served from one.
-            if origin == "null" {
-                return refused("this write did not come from here");
-            }
-            let host = headers
-                .get(header::HOST)
-                .and_then(|v| v.to_str().ok())
-                .map(str::to_owned)
-                .or_else(|| request.uri().authority().map(|a| a.to_string()));
-            match host {
-                Some(host) if origin_matches(origin, &host) => {}
-                _ => return refused("this write did not come from here"),
+        match fetch_site {
+            "cross-site" => return refused("cross-site writes are not accepted"),
+            "same-origin" => {}
+            _ => {
+                // An older browser, or a sibling site: `Origin` has to
+                // name us. "null" never does - it is what a browser sends
+                // from a sandboxed or opaque context, none of which is ours.
+                if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+                    let host = headers
+                        .get(header::HOST)
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::to_owned)
+                        .or_else(|| request.uri().authority().map(|a| a.to_string()));
+                    match host {
+                        Some(host) if origin_matches(origin, &host) => {}
+                        _ => return refused("this write did not come from here"),
+                    }
+                }
             }
         }
     }

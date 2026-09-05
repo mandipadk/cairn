@@ -305,7 +305,7 @@ async fn small_doors_are_shut_too() {
         post_form(app, "/theme", &cookie, "to=light&back=//evil.example/x").await;
     assert_eq!(status, StatusCode::SEE_OTHER);
     assert_eq!(location, "/", "{location}");
-    // Origin: null is nobody's.
+    // Origin: null with nothing to vouch for the page is nobody's.
     let request = Request::builder()
         .method("POST")
         .uri("/inbox/read")

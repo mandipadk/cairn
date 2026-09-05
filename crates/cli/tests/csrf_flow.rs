@@ -67,6 +67,52 @@ async fn a_write_from_another_site_is_refused_and_one_from_here_is_not() {
     );
     // A non-browser client says nothing about where it came from.
     assert_eq!(post_from(app, &cookie, &[]).await, StatusCode::SEE_OTHER);
+    // A browser under a strict referrer policy sends `Origin: null` on
+    // its own forms; its `Sec-Fetch-Site` still vouches for the page.
+    assert_eq!(
+        post_from(
+            app,
+            &cookie,
+            &[("sec-fetch-site", "same-origin"), ("origin", "null")]
+        )
+        .await,
+        StatusCode::SEE_OTHER
+    );
+    // Without that word, null is nobody.
+    assert_eq!(
+        post_from(app, &cookie, &[("origin", "null")]).await,
+        StatusCode::FORBIDDEN
+    );
+    // A sibling site is not this site.
+    assert_eq!(
+        post_from(
+            app,
+            &cookie,
+            &[
+                ("sec-fetch-site", "same-site"),
+                ("origin", "https://other.forge.example")
+            ]
+        )
+        .await,
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_referrer_policy_keeps_origin_meaningful_on_our_own_forms() {
+    let forge = boot().await;
+    let request = Request::builder()
+        .uri("/login")
+        .body(Body::empty())
+        .unwrap();
+    let response = tower::ServiceExt::oneshot(forge.app.clone(), request)
+        .await
+        .unwrap();
+    // `no-referrer` would make browsers send `Origin: null` to us.
+    assert_eq!(
+        response.headers()["referrer-policy"].to_str().unwrap(),
+        "same-origin"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

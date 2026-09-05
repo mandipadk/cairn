@@ -708,3 +708,46 @@ pre { overflow-x: auto; }
 .log .trow { grid-template-columns: 150px 120px minmax(0, 1fr); font-size: 12.5px; }
 .pager a { border: none; padding: 0; }
 .agent .composer { border-top: none; }
+
+/* Discussion: threads under the line they are about. */
+.ln a.no { color: var(--ink3); text-decoration: none; }
+.ln a.no:hover { color: var(--ink); text-decoration: underline; text-decoration-color: var(--ink3); }
+.chg-title .meta .stands { color: var(--ink); }
+.hunk .thread, .hunk .composer.thread-new { font-family: var(--sans); font-size: 13px; line-height: 1.45; white-space: normal; }
+.thread { margin-left: 64px; padding: 9px 14px 11px; border-top: 1px solid var(--hair); border-bottom: 1px solid var(--hair); background: var(--bg); max-width: 720px; box-sizing: border-box; }
+.thread .trow { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; }
+.thread .trow b, .thread .reply b { font-weight: 500; }
+.thread .when, .thread .where { color: var(--ink3); font-size: 12px; }
+.thread .where { font-family: var(--mono); font-size: 11px; }
+.thread .body { margin: 3px 0 0 22px; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.thread .reply { margin: 8px 0 0 22px; padding-left: 10px; border-left: 1px solid var(--hair); }
+.thread .reply .when { margin-left: 6px; }
+.thread .reply p { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.thread .closed, .thread .closed-inline { color: var(--ink2); font-size: 12.5px; }
+.thread .closed { margin: 8px 0 0 22px; }
+.thread .act { margin: 10px 0 0 22px; display: grid; gap: 8px; }
+.thread .act form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.thread .act form.resolve { grid-template-columns: auto minmax(0, 1fr) auto; }
+.thread .act input[type="text"], .thread .act select,
+.composer.thread-new input[type="text"], .composer.thread-new select {
+  font: inherit; font-size: 12.5px; color: var(--ink); background: var(--raise);
+  border: 1px solid var(--hair); border-radius: 6px; padding: 6px 9px; min-width: 0; width: auto;
+}
+.thread .act input[type="text"]:focus, .composer.thread-new input[type="text"]:focus { outline: none; border-color: var(--ink2); }
+details.thread > summary { list-style: none; cursor: pointer; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: baseline; }
+details.thread > summary::-webkit-details-marker { display: none; }
+details.thread[open] > summary .closed-inline { visibility: hidden; }
+.dot.open { background: none; border: 1.5px solid var(--ink); box-sizing: border-box; width: 7px; height: 7px; }
+.composer.thread-new { margin-left: 64px; padding: 9px 14px 11px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 8px; align-items: center; border-bottom: 1px solid var(--hair); max-width: 720px; box-sizing: border-box; }
+.composer.thread-new .at { grid-column: 1 / -1; color: var(--ink3); font-size: 12px; }
+.rsec .composer.thread-new { margin-left: 0; border-top: none; border-bottom: none; padding: 8px 0 4px; max-width: none; grid-template-columns: minmax(0, 1fr) auto; }
+.rsec .composer.thread-new select { grid-column: 1 / -1; }
+.rsec .thread-link { color: var(--ink); text-decoration: none; }
+.rsec .thread-link:hover { text-decoration: underline; }
+.rsec .vrow .s .dot { vertical-align: 0; }
+.rsec a.thread-start, .rsec a.discuss { display: inline-block; margin: 2px 0 6px 24px; text-decoration: none; }
+@media (max-width: 760px) { .thread, .composer.thread-new { margin-left: 0; } }
+.loose { border-top: 1px solid var(--hair); }
+.loose .thread, .loose .composer.thread-new { margin-left: 0; max-width: none; border-top: none; padding-left: 22px; padding-right: 22px; }
+.loose .thread + .thread, .loose .thread + .composer.thread-new { border-top: none; }
+

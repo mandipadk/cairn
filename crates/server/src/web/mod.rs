@@ -87,6 +87,15 @@ pub fn routes() -> Router<AppState> {
         .route("/{repo}/changes", get(changes_page))
         .route("/{repo}/changes/{number}", get(change_page))
         .route("/{repo}/changes/{number}/verdict", post(submit_verdict))
+        .route("/{repo}/changes/{number}/threads", post(submit_thread))
+        .route(
+            "/{repo}/changes/{number}/threads/{thread}/reply",
+            post(submit_reply),
+        )
+        .route(
+            "/{repo}/changes/{number}/threads/{thread}/resolve",
+            post(submit_resolve),
+        )
         .route("/{repo}/changes/{number}/claim", post(submit_claim))
         .route("/{repo}/changes/{number}/enqueue", post(submit_enqueue))
         .route("/{repo}/landing", get(landing_page))
@@ -1790,7 +1799,7 @@ async fn join_waitlist(
 }
 
 /// Percent-encode for a query string. Small enough to own.
-fn urlencode(value: &str) -> String {
+pub(crate) fn urlencode(value: &str) -> String {
     value
         .bytes()
         .map(|b| match b {
@@ -2482,6 +2491,9 @@ async fn changes_page(
 struct ChangeQuery {
     r: Option<i64>,
     error: Option<String>,
+    /// Where a new thread is being composed: `new:12:src/x.rs`,
+    /// `claim:<id>`, `verdict:<id>`, or `change`.
+    at: Option<String>,
 }
 
 async fn change_page(
@@ -2551,6 +2563,11 @@ async fn change_page(
         _ => String::new(),
     };
     let files = diff::parse(&patch);
+    let threads = match app.with_store(|s| s.threads_on(&change.id)) {
+        Ok(threads) => threads,
+        Err(err) => return oops(err),
+    };
+    let composer = query.at.as_deref().and_then(views::ThreadAt::parse);
 
     views::change(views::ChangePage {
         theme,
@@ -2566,6 +2583,8 @@ async fn change_page(
         verdicts: &verdicts,
         trace: &trace,
         queued: queued.is_some(),
+        threads: &threads,
+        composer,
         error: query.error.as_deref(),
     })
     .into_response()
@@ -2676,6 +2695,153 @@ async fn submit_verdict(
         Ok((_, env)) => {
             app.publish(&env);
             Redirect::to(&back).into_response()
+        }
+        Err(err) => flash(&back, &humane(&err)),
+    }
+}
+
+#[derive(Deserialize)]
+struct ThreadForm {
+    revision: i64,
+    kind: String,
+    body: String,
+    /// `change`, `line`, `claim` or `verdict`; the matching fields follow.
+    on: String,
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    side: String,
+    #[serde(default)]
+    line: Option<i64>,
+    #[serde(default)]
+    claim: String,
+    #[serde(default)]
+    verdict: String,
+}
+
+async fn submit_thread(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Path((repo, number)): Path<(String, i64)>,
+    Form(form): Form<ThreadForm>,
+) -> Response {
+    let back = format!("/{repo}/changes/{number}");
+    let Some(kind) = cairn_core::ThreadKind::parse(&form.kind) else {
+        return flash(&back, "Pick a kind");
+    };
+    let anchor = match form.on.as_str() {
+        "change" => cairn_core::Anchor::Change,
+        "line" => {
+            let Some(side) = cairn_core::Side::parse(&form.side) else {
+                return flash(&back, "Pick a side of the diff");
+            };
+            let Some(line) = form.line else {
+                return flash(&back, "Pick a line");
+            };
+            cairn_core::Anchor::Line {
+                path: form.path.trim().to_owned(),
+                side,
+                line,
+            }
+        }
+        "claim" => cairn_core::Anchor::Claim {
+            claim: cairn_core::ClaimId(form.claim.trim().to_owned()),
+        },
+        "verdict" => cairn_core::Anchor::Verdict {
+            verdict: cairn_core::VerdictId(form.verdict.trim().to_owned()),
+        },
+        _ => return flash(&back, "Say what the thread is about"),
+    };
+    if let Err(response) = readable(&app, &viewer, &repo) {
+        return *response;
+    }
+    let change = match app.with_store(|s| s.change_by_number(&repo, number)) {
+        Ok(Some(change)) => change.id,
+        Ok(None) => return not_found(),
+        Err(err) => return oops(err),
+    };
+    match app.with_store(|s| {
+        s.open_thread(
+            &viewer.0,
+            &change,
+            Some(form.revision),
+            anchor,
+            kind,
+            form.body.trim(),
+        )
+    }) {
+        Ok((thread, env)) => {
+            app.publish(&env);
+            let revision = match &env.event {
+                cairn_core::Event::ThreadOpened { revision, .. } => *revision,
+                _ => form.revision,
+            };
+            Redirect::to(&format!("{back}?r={revision}#{}", thread.as_str())).into_response()
+        }
+        Err(err) => flash(&back, &humane(&err)),
+    }
+}
+
+#[derive(Deserialize)]
+struct ReplyForm {
+    revision: i64,
+    body: String,
+}
+
+async fn submit_reply(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Path((repo, number, thread)): Path<(String, i64, String)>,
+    Form(form): Form<ReplyForm>,
+) -> Response {
+    let back = format!("/{repo}/changes/{number}");
+    if let Err(response) = readable(&app, &viewer, &repo) {
+        return *response;
+    }
+    let id = cairn_core::ThreadId(thread);
+    match app.with_store(|s| s.reply_thread(&viewer.0, &id, form.body.trim())) {
+        Ok(env) => {
+            app.publish(&env);
+            Redirect::to(&format!("{back}?r={}#{}", form.revision, id.as_str())).into_response()
+        }
+        Err(err) => flash(&back, &humane(&err)),
+    }
+}
+
+#[derive(Deserialize)]
+struct ResolveForm {
+    revision: i64,
+    /// `answered`, `fixed:<revision>`, `withdrawn` or `overruled`.
+    how: String,
+    #[serde(default)]
+    note: String,
+}
+
+async fn submit_resolve(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Path((repo, number, thread)): Path<(String, i64, String)>,
+    Form(form): Form<ResolveForm>,
+) -> Response {
+    let back = format!("/{repo}/changes/{number}");
+    if let Err(response) = readable(&app, &viewer, &repo) {
+        return *response;
+    }
+    let (how, fixed) = match form.how.split_once(':') {
+        Some(("fixed", revision)) => (
+            cairn_core::Resolution::Fixed,
+            revision.trim().parse::<i64>().ok(),
+        ),
+        _ => match cairn_core::Resolution::parse(&form.how) {
+            Some(how) => (how, None),
+            None => return flash(&back, "Say how it was resolved"),
+        },
+    };
+    let id = cairn_core::ThreadId(thread);
+    match app.with_store(|s| s.resolve_thread(&viewer.0, &id, how, fixed, form.note.trim())) {
+        Ok(env) => {
+            app.publish(&env);
+            Redirect::to(&format!("{back}?r={}#{}", form.revision, id.as_str())).into_response()
         }
         Err(err) => flash(&back, &humane(&err)),
     }

@@ -4,7 +4,7 @@
 
 use super::diff::{FileDiff, LineKind};
 use super::{Brief, LandingData, Sidebar, Viewer};
-use cairn_core::Anchor;
+use cairn_core::{Anchor, Resolution, Side, Thread, ThreadKind};
 use cairn_core::{
     BrowserSession, Change, ChangeState, Claim, Contact, Disposition, Envelope, Event, HitKind,
     Notice, PasskeyRecord, PolicyTrace, Repo, Revision, Task, Verdict, Verification, Visibility,
@@ -1829,7 +1829,55 @@ pub struct ChangePage<'a> {
     pub verdicts: &'a [Verdict],
     pub trace: &'a PolicyTrace,
     pub queued: bool,
+    pub threads: &'a [Thread],
+    pub composer: Option<ThreadAt>,
     pub error: Option<&'a str>,
+}
+
+/// Where a new thread is being composed, from `?at=`: `new:12:src/x.rs`
+/// or `old:3:src/x.rs` for a line, `claim:<id>`, `verdict:<id>`, or
+/// `change`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ThreadAt {
+    Change,
+    Line { path: String, side: Side, line: i64 },
+    Claim(String),
+    Verdict(String),
+}
+
+impl ThreadAt {
+    pub fn parse(raw: &str) -> Option<Self> {
+        if raw == "change" {
+            return Some(Self::Change);
+        }
+        let (head, rest) = raw.split_once(':')?;
+        match head {
+            "claim" if !rest.is_empty() => Some(Self::Claim(rest.to_owned())),
+            "verdict" if !rest.is_empty() => Some(Self::Verdict(rest.to_owned())),
+            "old" | "new" => {
+                let (line, path) = rest.split_once(':')?;
+                let line: i64 = line.parse().ok().filter(|l| *l >= 1)?;
+                if path.is_empty() {
+                    return None;
+                }
+                Some(Self::Line {
+                    path: path.to_owned(),
+                    side: if head == "old" { Side::Old } else { Side::New },
+                    line,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn words(&self) -> String {
+        match self {
+            Self::Change => "on the change".into(),
+            Self::Line { path, line, .. } => format!("at {path}:{line}"),
+            Self::Claim(_) => "on a claim".into(),
+            Self::Verdict(_) => "on a verdict".into(),
+        }
+    }
 }
 
 pub fn change(page: ChangePage) -> Markup {
@@ -1847,9 +1895,31 @@ pub fn change(page: ChangePage) -> Markup {
         verdicts,
         trace,
         queued,
+        threads,
+        composer,
         error,
     } = page;
     let title = format!("#{} {}", change.number, change.title);
+    let standing = threads
+        .iter()
+        .filter(|t| t.kind == ThreadKind::Concern && t.resolved.is_none())
+        .count();
+    // Threads sit under the line they are about, on the revision they
+    // were raised on; other revisions list them in the Discussion column.
+    let mut inline: HashMap<(&str, &str, i64), Vec<&Thread>> = HashMap::new();
+    for thread in threads.iter().filter(|t| t.revision == shown) {
+        if let Anchor::Line { path, side, line } = &thread.anchor {
+            inline
+                .entry((path.as_str(), side.as_str(), *line))
+                .or_default()
+                .push(thread);
+        }
+    }
+    let composer_line = match &composer {
+        Some(ThreadAt::Line { path, side, line }) => Some((path.as_str(), side.as_str(), *line)),
+        _ => None,
+    };
+    let can_discuss = change.state == ChangeState::Open;
     let satisfied = trace.requirements.iter().filter(|r| r.satisfied).count();
     layout(
         theme,
@@ -1876,6 +1946,12 @@ pub fn change(page: ChangePage) -> Markup {
                     }
                     span class="sep" { "·" }
                     span { "targets " (change.target) }
+                    @if standing > 0 {
+                        span class="sep" { "·" }
+                        span class="stands" {
+                            (standing) @if standing == 1 { " concern stands" } @else { " concerns stand" }
+                        }
+                    }
                     @if queued {
                         span class="sep" { "·" }
                         span { "in the landing queue" }
@@ -1907,11 +1983,43 @@ pub fn change(page: ChangePage) -> Markup {
                                         LineKind::Del => ("ln del", "−"),
                                         LineKind::Context => ("ln ctx", ""),
                                     };
+                                    @let side = if line.kind == LineKind::Del { "old" } else { "new" };
                                     div class=(class) {
-                                        span class="no" { (line.number) }
+                                        @if can_discuss {
+                                            a class="no" href={ "/" (repo) "/changes/" (change.number) "?r=" (shown) "&at=" (side) ":" (line.number) ":" (query_path(&file.path)) "#at" } { (line.number) }
+                                        } @else {
+                                            span class="no" { (line.number) }
+                                        }
                                         span class="sign" { (sign) }
                                         span class="code" { (line.text) }
                                     }
+                                    @if let Some(here) = inline.get(&(file.path.as_str(), side, line.number)) {
+                                        @for thread in here {
+                                            (thread_block(repo, change, shown, thread))
+                                        }
+                                    }
+                                    @if composer_line == Some((file.path.as_str(), side, line.number)) {
+                                        @if let Some(at) = &composer {
+                                            (thread_composer(repo, change, shown, at))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    @let loose: Vec<&Thread> = threads
+                        .iter()
+                        .filter(|t| !(t.revision == shown && matches!(t.anchor, Anchor::Line { .. })))
+                        .collect();
+                    @let composing_loose = matches!(&composer, Some(ThreadAt::Change | ThreadAt::Claim(_) | ThreadAt::Verdict(_)));
+                    @if !loose.is_empty() || (can_discuss && composing_loose) {
+                        div class="loose" {
+                            @for thread in &loose {
+                                (thread_block(repo, change, shown, thread))
+                            }
+                            @if can_discuss && composing_loose {
+                                @if let Some(at) = &composer {
+                                    (thread_composer(repo, change, shown, at))
                                 }
                             }
                         }
@@ -1938,6 +2046,9 @@ pub fn change(page: ChangePage) -> Markup {
                         @if claims.is_empty() { div class="vrow" { span class="s un" { "○" } span { "No claims on r" (shown) } } }
                         @for claim in claims {
                             (claim_row(claim, verifications))
+                            @if can_discuss {
+                                a class="quiet discuss" href={ "/" (repo) "/changes/" (change.number) "?r=" (shown) "&at=claim:" (claim.id.as_str()) "#at" } { "Discuss" }
+                            }
                         }
                         @if change.state == ChangeState::Open {
                             form class="composer claim" method="post" action={ "/" (repo) "/changes/" (change.number) "/claim" } {
@@ -1967,6 +2078,29 @@ pub fn change(page: ChangePage) -> Markup {
                         @if verdicts.is_empty() { div class="vrow" { span class="s un" { "○" } span { "No verdicts on r" (shown) } } }
                         @for verdict in verdicts {
                             (verdict_row(verdict))
+                            @if can_discuss {
+                                a class="quiet discuss" href={ "/" (repo) "/changes/" (change.number) "?r=" (shown) "&at=verdict:" (verdict.id.as_str()) "#at" } { "Discuss" }
+                            }
+                        }
+                    }
+                    div class="rsec" {
+                        span class="cap" { "Discussion" }
+                        @if threads.is_empty() { div class="vrow" { span class="s un" { "○" } span { "No discussion on this change" } } }
+                        @for thread in threads {
+                            div class="vrow" {
+                                span class="s" { span class=(thread_dot(thread)) {} }
+                                div {
+                                    a class="thread-link" href={ "/" (repo) "/changes/" (change.number) "?r=" (thread.revision) "#" (thread.id.as_str()) } {
+                                        (anchor_label(&thread.anchor))
+                                    }
+                                    " · " (thread.kind.as_str()) " · " (thread.by)
+                                    @if thread.revision != shown { " · r" (thread.revision) }
+                                    div class="run" { (closure_words(thread)) }
+                                }
+                            }
+                        }
+                        @if can_discuss {
+                            a class="quiet thread-start" href={ "/" (repo) "/changes/" (change.number) "?r=" (shown) "&at=change#at" } { "Start a thread on the change" }
                         }
                     }
                     @if change.state == ChangeState::Open {
@@ -2047,6 +2181,167 @@ fn position(verdict: &Verdict) -> Markup {
                 span class="sec3" { (verdict.domain.as_str()) }
             }
             q { (verdict.rationale) }
+        }
+    }
+}
+
+/// A path inside a query string: `/` and `:` are legal there and worth
+/// keeping readable; anything that could be mistaken for syntax is not.
+fn query_path(path: &str) -> String {
+    path.bytes()
+        .map(|b| match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
+                (b as char).to_string()
+            }
+            other => format!("%{other:02X}"),
+        })
+        .collect()
+}
+
+fn thread_dot(thread: &Thread) -> &'static str {
+    match (&thread.resolved, thread.kind) {
+        (Some(_), _) => "dot ok",
+        (None, ThreadKind::Concern) => "dot open",
+        (None, _) => "dot idle",
+    }
+}
+
+fn anchor_label(anchor: &Anchor) -> String {
+    match anchor {
+        Anchor::Change => "the change".into(),
+        Anchor::Line { path, line, .. } => format!("{path}:{line}"),
+        Anchor::Claim { .. } => "a claim".into(),
+        Anchor::Verdict { .. } => "a verdict".into(),
+    }
+}
+
+/// What became of a thread, in a few words.
+fn closure_words(thread: &Thread) -> String {
+    match &thread.resolved {
+        None => match thread.kind {
+            ThreadKind::Concern => "stands".into(),
+            ThreadKind::Question => "open".into(),
+            ThreadKind::Note => "noted".into(),
+        },
+        Some(done) => match done.how {
+            Resolution::Answered => format!("answered by {}", done.by),
+            Resolution::Fixed => format!(
+                "fixed in r{} by {}",
+                done.revision.unwrap_or_default(),
+                done.by
+            ),
+            Resolution::Withdrawn => "withdrawn".into(),
+            Resolution::Overruled => format!("overruled by {}", done.by),
+        },
+    }
+}
+
+/// One thread under the line it is about. Open threads show everything
+/// and take replies; resolved ones fold to a line that says how they
+/// closed, with the whole exchange a click away.
+fn thread_block(repo: &str, change: &Change, shown: i64, thread: &Thread) -> Markup {
+    let verb = match thread.kind {
+        ThreadKind::Question => "asked",
+        ThreadKind::Concern => "raised a concern",
+        ThreadKind::Note => "noted",
+    };
+    let id = thread.id.as_str();
+    let head = html! {
+        span class=(thread_dot(thread)) {}
+        span {
+            b { (thread.by) } " " (verb) " "
+            span class="when" { (day_of(&thread.at)) " " (clock_of(&thread.at)) }
+            @if thread.revision != shown { span class="when" { " · on r" (thread.revision) } }
+        }
+        span class="where" { (anchor_label(&thread.anchor)) }
+    };
+    let exchange = html! {
+        p class="body" { (thread.body) }
+        @for reply in &thread.replies {
+            div class="reply" {
+                b { (reply.by) } span class="when" { (clock_of(&reply.at)) }
+                p { (reply.body) }
+            }
+        }
+    };
+    match &thread.resolved {
+        None => html! {
+            div class="thread" id=(id) {
+                div class="trow" { (head) }
+                (exchange)
+                @if change.state == ChangeState::Open {
+                    div class="act" {
+                        form method="post" action={ "/" (repo) "/changes/" (change.number) "/threads/" (thread.id.as_str()) "/reply" } {
+                            input type="hidden" name="revision" value=(shown);
+                            input type="text" name="body" placeholder="Reply" required autocomplete="off";
+                            button class="vbtn" type="submit" { "Reply" }
+                        }
+                        form class="resolve" method="post" action={ "/" (repo) "/changes/" (change.number) "/threads/" (thread.id.as_str()) "/resolve" } {
+                            input type="hidden" name="revision" value=(shown);
+                            select name="how" aria-label="Resolve as" {
+                                option value="answered" { "answered" }
+                                @for fixed in (thread.revision + 1)..=change.latest_revision {
+                                    option value={ "fixed:" (fixed) } { "fixed in r" (fixed) }
+                                }
+                                option value="withdrawn" { "withdrawn" }
+                                option value="overruled" { "overruled" }
+                            }
+                            input type="text" name="note" placeholder="Why (optional)" autocomplete="off";
+                            button class="vbtn" type="submit" { "Resolve" }
+                        }
+                    }
+                }
+            }
+        },
+        Some(done) => html! {
+            details class="thread folded" id=(id) {
+                summary {
+                    span class="trow" { (head) }
+                    span class="closed-inline" { (closure_words(thread)) }
+                }
+                (exchange)
+                p class="closed" {
+                    (closure_words(thread))
+                    @if !done.note.is_empty() { " — " (done.note) }
+                }
+            }
+        },
+    }
+}
+
+/// The form a line number opens beneath itself, or the Discussion column
+/// opens for a claim, a verdict or the change. No script: `?at=` says
+/// where, and the page renders the form there.
+fn thread_composer(repo: &str, change: &Change, shown: i64, at: &ThreadAt) -> Markup {
+    html! {
+        form class="composer thread-new" id="at" method="post" action={ "/" (repo) "/changes/" (change.number) "/threads" } {
+            input type="hidden" name="revision" value=(shown);
+            @match at {
+                ThreadAt::Change => { input type="hidden" name="on" value="change"; }
+                ThreadAt::Line { path, side, line } => {
+                    input type="hidden" name="on" value="line";
+                    input type="hidden" name="path" value=(path);
+                    input type="hidden" name="side" value=(side.as_str());
+                    input type="hidden" name="line" value=(line);
+                }
+                ThreadAt::Claim(claim) => {
+                    input type="hidden" name="on" value="claim";
+                    input type="hidden" name="claim" value=(claim);
+                }
+                ThreadAt::Verdict(verdict) => {
+                    input type="hidden" name="on" value="verdict";
+                    input type="hidden" name="verdict" value=(verdict);
+                }
+            }
+            span class="at" { "New thread " (at.words()) ", r" (shown) }
+            select name="kind" aria-label="Kind" {
+                option value="question" { "question" }
+                option value="concern" { "concern" }
+                option value="note" { "note" }
+            }
+            input type="text" name="body" placeholder="What do you want to say?" required autofocus autocomplete="off";
+            button class="vbtn" type="submit" { "Open" }
+            a class="quiet" href={ "/" (repo) "/changes/" (change.number) "?r=" (shown) } { "Cancel" }
         }
     }
 }

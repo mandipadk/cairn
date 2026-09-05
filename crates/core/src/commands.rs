@@ -346,7 +346,12 @@ impl Store {
                 principal: principal.clone(),
             }
         };
-        let env = append(&tx, actor, self.acting.as_ref().map(|s| &s.session), event)?;
+        let env = append(
+            &tx,
+            actor,
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
+            event,
+        )?;
         tx.commit()?;
         Ok(env)
     }
@@ -386,7 +391,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::PrincipalRegistered {
                 principal: id.clone(),
                 principal_kind: kind,
@@ -450,7 +455,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::PasswordSet {
                 principal: principal.clone(),
                 hash: None,
@@ -805,7 +810,7 @@ impl Store {
         let env = append(
             &tx,
             who,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::PasswordResetRequested {
                 principal: who.clone(),
             },
@@ -1178,7 +1183,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::RepoCreated {
                 repo: name.to_owned(),
                 default_branch: default_branch.to_owned(),
@@ -1264,7 +1269,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::HistoryImported {
                 repo: repo.to_owned(),
                 branch: branch.to_owned(),
@@ -1397,7 +1402,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::RepoTransferOffered {
                 repo: repo.to_owned(),
                 to: to.clone(),
@@ -1419,7 +1424,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::RepoTransferAccepted {
                 repo: repo.to_owned(),
             },
@@ -1450,7 +1455,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::RepoTransferDeclined {
                 repo: repo.to_owned(),
             },
@@ -1483,7 +1488,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::TeamMemberAdded {
                 team: team.clone(),
                 member: member.clone(),
@@ -1510,7 +1515,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::TeamMemberRemoved {
                 team: team.clone(),
                 member: member.clone(),
@@ -1518,6 +1523,181 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(env)
+    }
+
+    /// Tie a provider identity to yourself. One identity links to one
+    /// principal; linking it again to somebody else is refused.
+    pub fn link_identity(
+        &mut self,
+        actor: &PrincipalId,
+        issuer: &str,
+        subject: &str,
+        email: Option<&str>,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        let principal = ensure_actor(&tx, actor)?;
+        require(principal.kind == PrincipalKind::Human, || {
+            format!("{actor} is not a person; agents prove who they are as workloads")
+        })?;
+        require(
+            !issuer.trim().is_empty() && !subject.trim().is_empty(),
+            || "an identity needs an issuer and a subject".into(),
+        )?;
+        if let Some(holder) = raw::identity_of(&tx, issuer, subject)?
+            && holder != *actor
+        {
+            return Err(CoreError::Conflict(format!(
+                "that {issuer} identity is already linked to {holder}"
+            )));
+        }
+        let env = append(
+            &tx,
+            actor,
+            None,
+            Event::IdentityLinked {
+                principal: actor.clone(),
+                issuer: issuer.to_owned(),
+                subject: subject.to_owned(),
+                email: email.map(str::to_owned),
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
+    /// The forge itself links an identity by a verified email, when it
+    /// was told to trust that. Attributed to the person it is about.
+    pub fn link_identity_by_email(
+        &mut self,
+        issuer: &str,
+        subject: &str,
+        email: &str,
+    ) -> CoreResult<Option<(PrincipalId, Envelope)>> {
+        let Some(principal) = self.principal_by_email(email)? else {
+            return Ok(None);
+        };
+        let env = self.link_identity(&principal, issuer, subject, Some(email))?;
+        Ok(Some((principal, env)))
+    }
+
+    pub fn unlink_identity(
+        &mut self,
+        actor: &PrincipalId,
+        issuer: &str,
+        subject: &str,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        ensure_actor(&tx, actor)?;
+        match raw::identity_of(&tx, issuer, subject)? {
+            Some(holder) if holder == *actor => {}
+            _ => {
+                return Err(CoreError::NotFound(format!(
+                    "no {issuer} identity of yours is linked here"
+                )));
+            }
+        }
+        let env = append(
+            &tx,
+            actor,
+            None,
+            Event::IdentityUnlinked {
+                principal: actor.clone(),
+                issuer: issuer.to_owned(),
+                subject: subject.to_owned(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
+    /// Say which workload may act as an agent. Running the forge decides.
+    pub fn bind_workload(
+        &mut self,
+        actor: &PrincipalId,
+        principal: &PrincipalId,
+        issuer: &str,
+        subject: &str,
+        bound: bool,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
+        let subject_principal = raw::principal(&tx, principal.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("principal {principal}")))?;
+        require(subject_principal.kind == PrincipalKind::Agent, || {
+            format!("{principal} is not an agent; people link identities themselves")
+        })?;
+        require(
+            !issuer.trim().is_empty() && !subject.trim().is_empty(),
+            || "a binding needs an issuer and a subject".into(),
+        )?;
+        let existing = raw::workload_binding(&tx, issuer, subject)?;
+        let event = if bound {
+            if let Some(holder) = existing
+                && holder != *principal
+            {
+                return Err(CoreError::Conflict(format!(
+                    "that workload is already bound to {holder}"
+                )));
+            }
+            Event::WorkloadBound {
+                principal: principal.clone(),
+                issuer: issuer.to_owned(),
+                subject: subject.to_owned(),
+            }
+        } else {
+            require(existing.as_ref() == Some(principal), || {
+                format!("{principal} has no such binding")
+            })?;
+            Event::WorkloadUnbound {
+                principal: principal.clone(),
+                issuer: issuer.to_owned(),
+                subject: subject.to_owned(),
+            }
+        };
+        let env = append(
+            &tx,
+            actor,
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
+            event,
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
+    /// A workload proved who it is; hand it a credential that can only
+    /// claim a task and open a session, for a quarter of an hour. The
+    /// event is the bound principal's own: the workload acts as it.
+    pub fn mint_workload_credential(
+        &mut self,
+        issuer: &str,
+        subject: &str,
+    ) -> CoreResult<(PrincipalId, TokenId, String, String, Envelope)> {
+        let tx = self.conn.transaction()?;
+        let principal = raw::workload_binding(&tx, issuer, subject)?.ok_or_else(|| {
+            CoreError::Forbidden(format!(
+                "no agent is bound to {subject} at {issuer}; whoever runs the forge can bind one \
+                 (POST /api/principals/{{agent}}/workload)"
+            ))
+        })?;
+        ensure_actor(&tx, &principal)?;
+        let until = (jiff::Timestamp::now() + jiff::Span::new().minutes(15)).to_string();
+        let token = TokenId::generate();
+        let secret = random_token_secret();
+        let env = append(
+            &tx,
+            &principal,
+            None,
+            Event::WorkloadCredentialMinted {
+                token: token.clone(),
+                principal: principal.clone(),
+                issuer: issuer.to_owned(),
+                subject: subject.to_owned(),
+                hash: token_hash(&secret),
+                until: until.clone(),
+            },
+        )?;
+        tx.commit()?;
+        Ok((principal, token, secret, until, env))
     }
 
     /// Everything `rename_repo` will insist on, checked ahead of moving
@@ -1570,7 +1750,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::RepoRenamed {
                 repo: repo.to_owned(),
                 to: to.to_owned(),
@@ -1612,7 +1792,12 @@ impl Store {
                 repo: repo.to_owned(),
             }
         };
-        let env = append(&tx, actor, self.acting.as_ref().map(|s| &s.session), event)?;
+        let env = append(
+            &tx,
+            actor,
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
+            event,
+        )?;
         tx.commit()?;
         Ok(env)
     }
@@ -1651,7 +1836,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::RepoDeleted {
                 repo: repo.to_owned(),
             },
@@ -1678,7 +1863,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::VisibilitySet {
                 repo: repo.to_owned(),
                 visibility,
@@ -1711,7 +1896,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::PolicySet {
                 repo: repo.to_owned(),
                 policy,
@@ -1754,7 +1939,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::MirrorSet {
                 repo: repo.to_owned(),
                 mirror,
@@ -1781,7 +1966,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::MirrorPushed {
                 repo: repo.to_owned(),
                 branch: branch.to_owned(),
@@ -1826,7 +2011,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::TaskCreated {
                 task: task.clone(),
                 repo: repo.map(str::to_owned),
@@ -1859,7 +2044,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::TaskClaimed { task: task.clone() },
         )?;
         tx.commit()?;
@@ -1888,7 +2073,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::TaskStateChanged {
                 task: task.clone(),
                 state,
@@ -1925,7 +2110,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::SessionOpened {
                 session: session.clone(),
                 task: task.clone(),
@@ -1990,9 +2175,13 @@ impl Store {
         .into_iter()
         .filter(|&c| raw::grants_cover(&grants, c, repo.as_deref(), &now_text))
         .filter(|&c| {
+            // A session credential drawn under another can only be
+            // narrower. A workload's bootstrap credential is different in
+            // kind: it exists to begin work, and the session it opens
+            // carries what the agent actually holds here.
             self.acting
                 .as_ref()
-                .is_none_or(|s| s.covers(c, repo.as_deref()))
+                .is_none_or(|parent| parent.session.is_none() || parent.covers(c, repo.as_deref()))
         })
         .collect();
         let actions = match actions {
@@ -2022,7 +2211,7 @@ impl Store {
         })?;
         let until = (now + jiff::Span::new().minutes(i64::from(minutes))).to_string();
         let scope = Scope {
-            session: session.clone(),
+            session: Some(session.clone()),
             repo,
             actions,
         };
@@ -2031,7 +2220,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::SessionCredentialMinted {
                 token: token.clone(),
                 session: session.clone(),
@@ -2088,7 +2277,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::SessionEnded {
                 session: session.clone(),
                 state,
@@ -2105,7 +2294,7 @@ impl Store {
             append(
                 &tx,
                 actor,
-                self.acting.as_ref().map(|s| &s.session),
+                self.acting.as_ref().and_then(|s| s.session.as_ref()),
                 Event::SessionCredentialsRevoked {
                     session: session.clone(),
                     revoked: live,
@@ -2173,7 +2362,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::ChangeOpened {
                 change: change.clone(),
                 repo: spec.repo,
@@ -2231,7 +2420,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::RevisionPushed {
                 change: change.clone(),
                 revision,
@@ -2281,7 +2470,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::ClaimAttached {
                 claim: claim.clone(),
                 change: change.clone(),
@@ -2333,7 +2522,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::VerdictGiven {
                 verdict: verdict.clone(),
                 change: change.clone(),
@@ -2392,7 +2581,7 @@ impl Store {
             drawn.push(append(
                 &tx,
                 &record.owner,
-                self.acting.as_ref().map(|s| &s.session),
+                self.acting.as_ref().and_then(|s| s.session.as_ref()),
                 Event::AttentionDrawn {
                     repo: repo.to_owned(),
                     day: day.to_owned(),
@@ -2490,7 +2679,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::ThreadOpened {
                 thread: thread.clone(),
                 change: change.clone(),
@@ -2529,7 +2718,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::ThreadReplied {
                 thread: thread.clone(),
                 change: existing.change.clone(),
@@ -2619,7 +2808,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::ThreadResolved {
                 thread: thread.clone(),
                 change: existing.change.clone(),
@@ -2681,7 +2870,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::PathsDeclared {
                 session: session.clone(),
                 repo: repo.to_owned(),
@@ -2733,7 +2922,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::RebaseFailed {
                 change: change.clone(),
                 onto: onto.to_owned(),
@@ -2784,7 +2973,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::ClaimVerified {
                 verification: verification.clone(),
                 claim: claim.clone(),
@@ -2851,7 +3040,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::ChangeMerged {
                 change: change.clone(),
                 revision: current.latest_revision,
@@ -2911,7 +3100,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::ChangeEnqueued {
                 change: change.clone(),
             },
@@ -2952,7 +3141,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::ChangeDequeued {
                 change: change.clone(),
                 reason: reason.to_owned(),
@@ -2991,7 +3180,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::ChangeAbandoned {
                 change: change.clone(),
                 reason: reason.to_owned(),
@@ -3028,7 +3217,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::TokenMinted {
                 token: token.clone(),
                 principal: principal.clone(),
@@ -3058,7 +3247,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::TokenRevoked {
                 token: token.clone(),
             },
@@ -3111,7 +3300,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::GrantIssued {
                 grant: grant.clone(),
                 grantee: grantee.clone(),
@@ -3139,7 +3328,7 @@ impl Store {
         let env = append(
             &tx,
             id,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::GrantIssued {
                 grant,
                 grantee: id.clone(),
@@ -3177,7 +3366,7 @@ impl Store {
         let env = append(
             &tx,
             actor,
-            self.acting.as_ref().map(|s| &s.session),
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::GrantRevoked {
                 grant: grant.clone(),
                 reason: reason.to_owned(),

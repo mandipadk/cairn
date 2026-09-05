@@ -159,7 +159,9 @@ str_enum!(
 /// leaked credential buys exactly this and nothing further.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Scope {
-    pub session: SessionId,
+    /// The session the credential was drawn from; none for a workload
+    /// credential, which exists only to claim a task and open one.
+    pub session: Option<SessionId>,
     pub repo: Option<String>,
     pub actions: Vec<Capability>,
 }
@@ -185,6 +187,25 @@ impl Scope {
             self.repo.as_deref().unwrap_or("every repository")
         )
     }
+}
+
+/// An identity at an OpenID provider, linked to a principal here on
+/// purpose. Nothing links itself.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdentityLink {
+    pub issuer: String,
+    pub subject: String,
+    pub email: Option<String>,
+    pub linked_at: String,
+}
+
+/// A workload - a CI job, an agent runtime - that may prove who it is
+/// with a token from its issuer and act as this principal for the little
+/// a workload credential allows.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkloadBinding {
+    pub issuer: String,
+    pub subject: String,
 }
 
 /// What a thread is about. Discussion is anchored to a thing in the

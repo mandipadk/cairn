@@ -1139,6 +1139,56 @@ pub async fn attention(
 }
 
 #[derive(Deserialize)]
+pub struct WorkloadBody {
+    pub issuer: String,
+    pub subject: String,
+    /// Bind by default; `false` removes the binding.
+    #[serde(default = "yes")]
+    pub bound: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+pub async fn bind_workload(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Json(body): Json<WorkloadBody>,
+) -> ApiResult<Json<Value>> {
+    let principal = PrincipalId(id);
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref()).bind_workload(
+            &actor.0,
+            &principal,
+            body.issuer.trim(),
+            body.subject.trim(),
+            body.bound,
+        )
+    })?;
+    app.publish(&env);
+    Ok(committed(None, &env))
+}
+
+pub async fn list_workload(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let principal = PrincipalId(id);
+    if actor.0 != principal && !app.with_store(|s| s.is_admin(&actor.0)) {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "principal not found",
+        ));
+    }
+    let bindings = app.with_store(|s| s.workload_bindings_of(&principal))?;
+    Ok(Json(json!(bindings)))
+}
+
+#[derive(Deserialize)]
 pub struct PrincipalStateBody {
     pub active: bool,
 }

@@ -54,8 +54,8 @@ pub use store::Store;
 pub use types::Anchor;
 pub use types::{
     BrowserSession, Capability, Change, ChangeSpec, ChangeState, Claim, ClaimKind, ClaimSpec,
-    Contact, Disposition, Grant, Independence, Lease, Lesson, Mirror, Notice, ObjectFormat,
-    PasskeyRecord, Policy, Principal, PrincipalKind, Provenance, QueueEntry, Reply, Repo,
-    Resolution, Resolved, ReviewDomain, Revision, Scope, Session, SessionState, Side, Task,
-    TaskState, Thread, ThreadKind, TokenInfo, Verdict, Verification, Visibility,
+    Contact, Disposition, Grant, IdentityLink, Independence, Lease, Lesson, Mirror, Notice,
+    ObjectFormat, PasskeyRecord, Policy, Principal, PrincipalKind, Provenance, QueueEntry, Reply,
+    Repo, Resolution, Resolved, ReviewDomain, Revision, Scope, Session, SessionState, Side, Task,
+    TaskState, Thread, ThreadKind, TokenInfo, Verdict, Verification, Visibility, WorkloadBinding,
 };

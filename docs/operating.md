@@ -131,6 +131,33 @@ offline against it.
   exactly the log applied; exits non-zero on any divergence, so it can
   run from cron or a health check.
 
+## Single sign-on and workload identity
+
+People can sign in with an OpenID Connect provider:
+
+```sh
+cairn serve ... --oidc-issuer https://accounts.google.com \
+  --oidc-client-id <id> --oidc-client-secret-file /data/cairn/oidc.secret \
+  --oidc-label Google
+```
+
+The login page then offers "Continue with Google". A provider identity
+signs somebody in only once it is linked: the person signs in another way
+and links it in Settings, or - with `--oidc-link-by-email` - the identity's
+verified email matches exactly one person here. Nothing links itself, and
+every link and unlink is an event. The public URL must be set: the
+provider sends people back to `<public URL>/login/oidc/callback`.
+
+Agents need not hold a standing token either. Trust an issuer with
+`--workload-issuer https://token.actions.githubusercontent.com`
+(repeatable), bind its subjects to agents (`POST /api/principals/{agent}/workload
+{"issuer": .., "subject": ..}`, whoever runs the forge), and a workload
+exchanges its token at `POST /api/identity/exchange {"token": ..}` for a
+fifteen-minute credential that can only claim a task and open a session;
+the session then draws its own scoped credential. The token must name
+the forge's public URL as its audience unless `--workload-audience` says
+otherwise.
+
 ## Account states
 
 Whoever runs the forge can deactivate a person or an agent from the

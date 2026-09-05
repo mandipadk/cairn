@@ -76,6 +76,7 @@ pub fn routes() -> Router<AppState> {
             post(crate::passkeys::login_finish),
         )
         .route("/you/passkeys/remove", post(crate::passkeys::remove))
+        .merge(crate::oidc::web_routes())
         .route("/you/tokens", get(tokens_page).post(token_action))
         .route("/agents", get(agents_page).post(agent_action))
         .route("/people", get(people_page).post(people_action))
@@ -433,12 +434,19 @@ async fn settings_page(
     let passkeys = app
         .with_store(|s| s.passkeys_of(&viewer.0))
         .unwrap_or_default();
+    let identities = app
+        .with_store(|s| s.identities_of(&viewer.0))
+        .unwrap_or_default();
+    let provider = crate::oidc::label(&app);
     views::settings(
         theme,
         &viewer,
         &contact,
         app.mailer().is_some(),
         crate::passkeys::enabled(&app).then_some(passkeys.as_slice()),
+        provider
+            .as_deref()
+            .map(|label| (label, identities.as_slice())),
         views::SettingsNote {
             error: flash.error.as_deref(),
             done: flash.done.is_some(),
@@ -449,7 +457,7 @@ async fn settings_page(
     .into_response()
 }
 
-fn user_agent(headers: &HeaderMap) -> Option<&str> {
+pub(crate) fn user_agent(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
@@ -2015,6 +2023,7 @@ async fn login_page(
         app.dev_identity(),
         app.mailer().is_some(),
         crate::passkeys::enabled(&app),
+        crate::oidc::label(&app).as_deref(),
         flash.sent.is_some(),
         flash.done.as_deref(),
         flash.error.as_deref(),
@@ -2170,7 +2179,7 @@ async fn login_submit(
         .into_response()
 }
 
-fn signed_in(app: &AppState, name: &str, value: &str) -> Response {
+pub(crate) fn signed_in(app: &AppState, name: &str, value: &str) -> Response {
     signed_in_to(app, name, value, "/")
 }
 

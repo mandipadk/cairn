@@ -27,6 +27,7 @@ mod lease_flow;
 mod limits_flow;
 mod mcp;
 mod mirror_flow;
+mod oidc_flow;
 mod pages_flow;
 mod passkeys_flow;
 mod password_flow;

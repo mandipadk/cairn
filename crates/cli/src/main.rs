@@ -18,6 +18,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum Command {
     /// Run the forge server.
     Serve {
@@ -67,6 +68,29 @@ enum Command {
         /// from CAIRN_PUBLIC_URL when unset; passkeys are off without it.
         #[arg(long)]
         public_url: Option<String>,
+        /// OpenID Connect issuer people may sign in with (e.g. https://accounts.google.com).
+        #[arg(long)]
+        oidc_issuer: Option<String>,
+        /// The client id registered at that issuer.
+        #[arg(long)]
+        oidc_client_id: Option<String>,
+        /// File holding the client secret; never the secret itself.
+        #[arg(long)]
+        oidc_client_secret_file: Option<std::path::PathBuf>,
+        /// What the sign-in button says.
+        #[arg(long, default_value = "SSO")]
+        oidc_label: String,
+        /// Link an unknown provider identity to the one person whose
+        /// verified email matches. Off by default: nothing links itself.
+        #[arg(long)]
+        oidc_link_by_email: bool,
+        /// Issuers whose tokens a workload may exchange for a credential
+        /// to claim a task and open a session. Repeatable.
+        #[arg(long)]
+        workload_issuer: Vec<String>,
+        /// The audience a workload token must name; the public URL when absent.
+        #[arg(long)]
+        workload_audience: Option<String>,
     },
     /// Offline administration against the forge database. Having file
     /// access to the database is the root authority.
@@ -215,6 +239,13 @@ async fn main() -> anyhow::Result<()> {
             mail_command,
             mail_from,
             public_url,
+            oidc_issuer,
+            oidc_client_id,
+            oidc_client_secret_file,
+            oidc_label,
+            oidc_link_by_email,
+            workload_issuer,
+            workload_audience,
         } => {
             let git_version = cairn_git::preflight().context("checking the git on PATH")?;
             let store = Store::open(&db)
@@ -263,6 +294,46 @@ async fn main() -> anyhow::Result<()> {
             }
             if secure_cookies {
                 state = state.with_secure_cookies();
+
+                let provider = match (oidc_issuer, oidc_client_id, oidc_client_secret_file) {
+                    (Some(issuer), Some(client_id), Some(secret_file)) => {
+                        let client_secret = std::fs::read_to_string(&secret_file)
+                            .with_context(|| format!("reading {}", secret_file.display()))?
+                            .trim()
+                            .to_owned();
+                        anyhow::ensure!(
+                            !client_secret.is_empty(),
+                            "the client secret file is empty"
+                        );
+                        Some(cairn_server::oidc::Provider {
+                            issuer: issuer.trim_end_matches('/').to_owned(),
+                            client_id,
+                            client_secret,
+                            label: oidc_label,
+                            link_by_email: oidc_link_by_email,
+                        })
+                    }
+                    (None, None, None) => None,
+                    _ => anyhow::bail!(
+                        "sign-in with a provider needs all three of --oidc-issuer, --oidc-client-id and --oidc-client-secret-file"
+                    ),
+                };
+                if provider.is_some() || !workload_issuer.is_empty() {
+                    if let Some(p) = &provider {
+                        tracing::info!("sign-in with {} at {}", p.label, p.issuer);
+                    }
+                    for issuer in &workload_issuer {
+                        tracing::info!("workload identity trusted from {issuer}");
+                    }
+                    state = state.with_oidc(cairn_server::oidc::Trust::new(
+                        provider,
+                        workload_issuer
+                            .iter()
+                            .map(|i| i.trim_end_matches('/').to_owned())
+                            .collect(),
+                        workload_audience,
+                    ));
+                }
             } else if !listen.ip().is_loopback() {
                 tracing::warn!(
                     "serving on a non-loopback address without --secure-cookies: \

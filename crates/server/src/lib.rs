@@ -16,6 +16,7 @@ mod error;
 mod git_http;
 mod guard;
 pub mod mail;
+pub mod oidc;
 pub mod passkeys;
 mod queue;
 mod routes;
@@ -48,6 +49,11 @@ pub fn router(state: AppState) -> Router {
             "/api/principals/{id}/state",
             post(routes::set_principal_state),
         )
+        .route(
+            "/api/principals/{id}/workload",
+            post(routes::bind_workload).get(routes::list_workload),
+        )
+        .route("/api/identity/exchange", post(oidc::exchange))
         .route("/api/repos", post(routes::create_repo))
         .route("/api/repos/{name}", get(routes::get_repo))
         .route("/api/repos/{name}/import", post(routes::import_history))

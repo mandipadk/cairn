@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 17;
+const SCHEMA_VERSION: i64 = 18;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -371,6 +371,23 @@ CREATE TABLE IF NOT EXISTS thread_replies (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_thread_replies_thread ON thread_replies (thread_id);
 
+CREATE TABLE IF NOT EXISTS identity_links (
+  issuer    TEXT NOT NULL,
+  subject   TEXT NOT NULL,
+  principal TEXT NOT NULL,
+  email     TEXT,
+  linked_at TEXT NOT NULL,
+  PRIMARY KEY (issuer, subject)
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_identity_links_principal ON identity_links (principal);
+
+CREATE TABLE IF NOT EXISTS workload_bindings (
+  issuer    TEXT NOT NULL,
+  subject   TEXT NOT NULL,
+  principal TEXT NOT NULL,
+  PRIMARY KEY (issuer, subject)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS attention_draws (
   change_id TEXT PRIMARY KEY,
   repo      TEXT NOT NULL,
@@ -410,6 +427,8 @@ const PROJECTION_TABLES: &[&str] = &[
     "threads",
     "thread_replies",
     "attention_draws",
+    "identity_links",
+    "workload_bindings",
 ];
 
 /// An event together with the audience its scope implies: the repository
@@ -877,6 +896,11 @@ fn record_scope(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
         PasswordResetRequested { principal } => (None, Some(principal.as_str().to_owned())),
 
         PasswordSet { principal, .. }
+        | IdentityLinked { principal, .. }
+        | IdentityUnlinked { principal, .. }
+        | WorkloadBound { principal, .. }
+        | WorkloadUnbound { principal, .. }
+        | WorkloadCredentialMinted { principal, .. }
         | PrincipalDeactivated { principal }
         | PrincipalReactivated { principal } => (None, Some(principal.as_str().to_owned())),
         TokenMinted { principal, .. } => (None, Some(principal.as_str().to_owned())),
@@ -1543,6 +1567,70 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                     until,
                     session.as_str(),
                     serde_json::to_string(scope).expect("scope serializes")
+                ],
+            )?;
+        }
+        Event::IdentityLinked {
+            principal,
+            issuer,
+            subject,
+            email,
+        } => {
+            tx.execute(
+                "INSERT OR REPLACE INTO identity_links (issuer, subject, principal, email, linked_at)
+                 VALUES (?, ?, ?, ?, ?)",
+                params![issuer, subject, principal.as_str(), email, env.ts],
+            )?;
+        }
+        Event::IdentityUnlinked {
+            issuer, subject, ..
+        } => {
+            tx.execute(
+                "DELETE FROM identity_links WHERE issuer = ? AND subject = ?",
+                params![issuer, subject],
+            )?;
+        }
+        Event::WorkloadBound {
+            principal,
+            issuer,
+            subject,
+        } => {
+            tx.execute(
+                "INSERT OR REPLACE INTO workload_bindings (issuer, subject, principal) VALUES (?, ?, ?)",
+                params![issuer, subject, principal.as_str()],
+            )?;
+        }
+        Event::WorkloadUnbound {
+            issuer, subject, ..
+        } => {
+            tx.execute(
+                "DELETE FROM workload_bindings WHERE issuer = ? AND subject = ?",
+                params![issuer, subject],
+            )?;
+        }
+        Event::WorkloadCredentialMinted {
+            token,
+            principal,
+            issuer,
+            hash,
+            until,
+            ..
+        } => {
+            let scope = crate::types::Scope {
+                session: None,
+                repo: None,
+                actions: vec![crate::types::Capability::Task],
+            };
+            tx.execute(
+                "INSERT INTO tokens (id, principal, label, hash, until_ts, session, scope)
+                 VALUES (?, ?, ?, ?, ?, NULL, ?)",
+                params![
+                    token.as_str(),
+                    principal.as_str(),
+                    format!("workload:{issuer}"),
+                    hash,
+                    until,
+                    serde_json::to_string(&scope).expect("scope serializes")
                 ],
             )?;
         }

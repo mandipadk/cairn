@@ -531,6 +531,7 @@ pub fn login(
     dev: bool,
     can_mail: bool,
     can_passkey: bool,
+    provider: Option<&str>,
     sent: bool,
     done: Option<&str>,
     error: Option<&str>,
@@ -570,6 +571,9 @@ pub fn login(
                     }
 
                     div class="or" { span { "or" } }
+                    @if let Some(provider) = provider {
+                        a class="vbtn wide" href="/login/oidc" { "Continue with " (provider) }
+                    }
                     @if can_passkey {
                         button class="vbtn wide" type="button" data-passkey="login" data-say="passkey-note" {
                             "Sign in with a passkey"
@@ -1198,6 +1202,7 @@ pub fn settings(
     contact: &Contact,
     can_mail: bool,
     passkeys: Option<&[PasskeyRecord]>,
+    identities: Option<(&str, &[cairn_core::IdentityLink])>,
     note: SettingsNote<'_>,
 ) -> Markup {
     let SettingsNote {
@@ -1271,6 +1276,31 @@ pub fn settings(
                             button class="btn" type="button" data-passkey="register" data-say="passkey-note" { "Add a passkey" }
                         }
                         p class="hint" id="passkey-note" { "Your device asks you to confirm; nothing leaves it but a public key." }
+                    }
+                }
+
+                @if let Some((provider, links)) = identities {
+                    section class="pref" {
+                        h3 { "Sign in with " (provider) }
+                        p class="status" {
+                            @if links.is_empty() { "Not linked. Link your " (provider) " account and it signs you in here; nothing links itself." }
+                            @else { "Linked." }
+                        }
+                        @for link in links {
+                            div class="keyrow" {
+                                span { (link.email.as_deref().unwrap_or(&link.subject)) }
+                                span class="sec3" { "linked " (day_of(&link.linked_at)) }
+                                form method="post" action="/you/settings/oidc/unlink" {
+                                    input type="hidden" name="subject" value=(link.subject);
+                                    button class="quiet danger" type="submit" { "Unlink" }
+                                }
+                            }
+                        }
+                        @if links.is_empty() {
+                            form method="post" action="/you/settings/oidc/link" {
+                                button class="vbtn" type="submit" { "Link " (provider) }
+                            }
+                        }
                     }
                 }
 
@@ -2904,6 +2934,38 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
                 "session " code { (short(session.as_str())) } " ended; "
                 (revoked) @if *revoked == 1 { " credential died with it" } @else { " credentials died with it" }
             },
+        ),
+        Event::IdentityLinked {
+            principal, issuer, ..
+        } => (
+            "dot idle",
+            html! { b { (principal.as_str()) } " linked an identity at " (issuer) },
+        ),
+        Event::IdentityUnlinked {
+            principal, issuer, ..
+        } => (
+            "dot idle",
+            html! { b { (principal.as_str()) } " unlinked an identity at " (issuer) },
+        ),
+        Event::WorkloadBound {
+            principal,
+            issuer,
+            subject,
+        } => (
+            "dot idle",
+            html! { b { (actor) } " bound workload " (subject) " at " (issuer) " to " (principal.as_str()) },
+        ),
+        Event::WorkloadUnbound {
+            principal,
+            issuer,
+            subject,
+        } => (
+            "dot idle",
+            html! { b { (actor) } " unbound workload " (subject) " at " (issuer) " from " (principal.as_str()) },
+        ),
+        Event::WorkloadCredentialMinted { issuer, until, .. } => (
+            "dot idle",
+            html! { b { (actor) } " proved itself to " (issuer) " and drew a credential to claim a task, until " (day_of(until)) " " (clock_of(until)) },
         ),
         Event::PrincipalDeactivated { principal } => (
             "dot bad",

@@ -68,6 +68,9 @@ pub struct AppState {
     webauthn: Option<Arc<webauthn_rs::prelude::Webauthn>>,
     /// Where people reach this forge, for every link it writes down.
     public_url: Option<String>,
+    /// Sign-in with an OpenID provider, and which workload issuers to
+    /// believe, when configured.
+    oidc: Option<Arc<crate::oidc::Trust>>,
     /// Ephemeral secrets handed to proc-receive hooks, mapped to the
     /// authenticated pusher. In-memory only, expiring, never logged.
     push_tokens: Arc<Mutex<HashMap<String, PushToken>>>,
@@ -85,6 +88,7 @@ impl AppState {
             git: None,
             dev_identity: false,
             automatic_draws: true,
+            oidc: None,
             secure_cookies: false,
             proxy_trust: crate::guard::ProxyTrust::Connection,
             login_limiter: crate::guard::LoginLimiter::default(),
@@ -255,6 +259,15 @@ impl AppState {
 
     pub(crate) fn webauthn(&self) -> Option<Arc<webauthn_rs::prelude::Webauthn>> {
         self.webauthn.clone()
+    }
+
+    pub fn with_oidc(mut self, trust: crate::oidc::Trust) -> Self {
+        self.oidc = Some(Arc::new(trust));
+        self
+    }
+
+    pub(crate) fn oidc(&self) -> Option<Arc<crate::oidc::Trust>> {
+        self.oidc.clone()
     }
 
     pub fn with_mailer(mut self, mailer: crate::mail::Mailer) -> Self {

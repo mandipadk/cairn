@@ -231,6 +231,40 @@ pub enum Event {
         paths: Vec<String>,
     },
 
+    /// A provider identity was tied to a principal, by that principal or
+    /// by a verified email the forge was told to trust.
+    IdentityLinked {
+        principal: PrincipalId,
+        issuer: String,
+        subject: String,
+        email: Option<String>,
+    },
+    IdentityUnlinked {
+        principal: PrincipalId,
+        issuer: String,
+        subject: String,
+    },
+    /// Whoever runs the forge said which workload may act as an agent.
+    WorkloadBound {
+        principal: PrincipalId,
+        issuer: String,
+        subject: String,
+    },
+    WorkloadUnbound {
+        principal: PrincipalId,
+        issuer: String,
+        subject: String,
+    },
+    /// A workload proved who it was and received a credential that can
+    /// only claim a task and open a session; the secret is not recorded.
+    WorkloadCredentialMinted {
+        token: TokenId,
+        principal: PrincipalId,
+        issuer: String,
+        subject: String,
+        hash: String,
+        until: String,
+    },
     /// A session drew a credential of its own: short-lived, scoped to the
     /// task's repository and the verbs the agent holds there, dead when
     /// the session ends. The secret is never recorded; its hash is.
@@ -430,6 +464,11 @@ impl Event {
             Event::ThreadOpened { .. } => "thread_opened",
             Event::ThreadReplied { .. } => "thread_replied",
             Event::AttentionDrawn { .. } => "attention_drawn",
+            Event::IdentityLinked { .. } => "identity_linked",
+            Event::IdentityUnlinked { .. } => "identity_unlinked",
+            Event::WorkloadBound { .. } => "workload_bound",
+            Event::WorkloadUnbound { .. } => "workload_unbound",
+            Event::WorkloadCredentialMinted { .. } => "workload_credential_minted",
             Event::SessionCredentialMinted { .. } => "session_credential_minted",
             Event::SessionCredentialsRevoked { .. } => "session_credentials_revoked",
             Event::ThreadResolved { .. } => "thread_resolved",

@@ -24,6 +24,9 @@ ureq = { version = "3.4.0", features = ["json"] }
 workspace = true
 
 [dev-dependencies]
+jsonwebtoken = "9"
+ring = "0.17"
+base64 = "0.23.1"
 http = "1.5.0"
 http-body-util = "0.1.4"
 tempfile = "3.27.0"

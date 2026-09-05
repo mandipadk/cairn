@@ -53,6 +53,26 @@ pub async fn boot_with_passkeys() -> Forge {
     forge
 }
 
+/// A forge with a public URL that signs people in with `provider` and
+/// trusts it for workloads too.
+pub async fn boot_with_oidc(provider: cairn_server::oidc::Provider) -> Forge {
+    let mut forge = boot_inner("sha1", true, None).await;
+    let issuer = provider.issuer.clone();
+    let state = forge
+        .state
+        .clone()
+        .with_public_url("https://forge.example")
+        .expect("a valid public URL")
+        .with_oidc(cairn_server::oidc::Trust::new(
+            Some(provider),
+            vec![issuer],
+            None,
+        ));
+    forge.app = router(state.clone());
+    forge.state = state;
+    forge
+}
+
 /// A forge that can send mail and knows its public URL - a deployment.
 pub async fn boot_mailing_public(command: &str) -> Forge {
     let mut forge = boot_inner(
@@ -587,6 +607,36 @@ pub async fn post_form(app: &Router, path: &str, cookie: &str, body: &str) -> (S
 }
 
 /// GET a path as a signed-in browser and report where it was sent.
+/// Like `get_redirect`, and also hand back the `set-cookie` header the
+/// response carried, for flows that sign a browser in on the way.
+pub async fn get_redirect_with_cookie(
+    app: &Router,
+    path: &str,
+    cookie: &str,
+) -> (StatusCode, String, String) {
+    let request = Request::builder()
+        .method("GET")
+        .uri(path)
+        .header("cookie", cookie)
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    let set_cookie = response
+        .headers()
+        .get("set-cookie")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    (status, location, set_cookie)
+}
+
 pub async fn get_redirect(app: &Router, path: &str, cookie: &str) -> (StatusCode, String) {
     let request = Request::builder()
         .method("GET")

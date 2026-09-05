@@ -547,6 +547,69 @@ pub(crate) mod raw {
             .optional()?)
     }
 
+    pub fn identity_of(
+        conn: &Connection,
+        issuer: &str,
+        subject: &str,
+    ) -> CoreResult<Option<PrincipalId>> {
+        Ok(conn
+            .prepare_cached(
+                "SELECT principal FROM identity_links WHERE issuer = ? AND subject = ?",
+            )?
+            .query_row(params![issuer, subject], |row| row.get::<_, String>(0))
+            .optional()?
+            .map(PrincipalId))
+    }
+
+    pub fn identities_of(
+        conn: &Connection,
+        principal: &str,
+    ) -> CoreResult<Vec<crate::types::IdentityLink>> {
+        Ok(conn
+            .prepare_cached(
+                "SELECT issuer, subject, email, linked_at FROM identity_links
+                  WHERE principal = ? ORDER BY linked_at",
+            )?
+            .query_map(params![principal], |row| {
+                Ok(crate::types::IdentityLink {
+                    issuer: row.get(0)?,
+                    subject: row.get(1)?,
+                    email: row.get(2)?,
+                    linked_at: row.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn workload_binding(
+        conn: &Connection,
+        issuer: &str,
+        subject: &str,
+    ) -> CoreResult<Option<PrincipalId>> {
+        Ok(conn
+            .prepare_cached(
+                "SELECT principal FROM workload_bindings WHERE issuer = ? AND subject = ?",
+            )?
+            .query_row(params![issuer, subject], |row| row.get::<_, String>(0))
+            .optional()?
+            .map(PrincipalId))
+    }
+
+    pub fn workload_bindings_of(
+        conn: &Connection,
+        principal: &str,
+    ) -> CoreResult<Vec<crate::types::WorkloadBinding>> {
+        Ok(conn
+            .prepare_cached("SELECT issuer, subject FROM workload_bindings WHERE principal = ? ORDER BY issuer, subject")?
+            .query_map(params![principal], |row| {
+                Ok(crate::types::WorkloadBinding {
+                    issuer: row.get(0)?,
+                    subject: row.get(1)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
     pub fn verdict_ref(conn: &Connection, id: &str) -> CoreResult<Option<(String, i64)>> {
         Ok(conn
             .prepare_cached("SELECT change_id, revision FROM verdicts WHERE id = ?")?
@@ -1391,6 +1454,24 @@ impl Store {
 
     pub fn verdicts_on(&self, change: &ChangeId, revision: i64) -> CoreResult<Vec<Verdict>> {
         raw::verdicts_on(&self.conn, change.as_str(), revision)
+    }
+
+    pub fn identity_of(&self, issuer: &str, subject: &str) -> CoreResult<Option<PrincipalId>> {
+        raw::identity_of(&self.conn, issuer, subject)
+    }
+
+    pub fn identities_of(
+        &self,
+        principal: &PrincipalId,
+    ) -> CoreResult<Vec<crate::types::IdentityLink>> {
+        raw::identities_of(&self.conn, principal.as_str())
+    }
+
+    pub fn workload_bindings_of(
+        &self,
+        principal: &PrincipalId,
+    ) -> CoreResult<Vec<crate::types::WorkloadBinding>> {
+        raw::workload_bindings_of(&self.conn, principal.as_str())
     }
 
     pub fn draw_of(&self, change: &ChangeId) -> CoreResult<Option<crate::attention::Draw>> {

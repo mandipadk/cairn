@@ -1416,6 +1416,7 @@ impl Store {
         Ok(Some(Provenance {
             claims: raw::claims_on(&self.conn, change.id.as_str(), revision)?,
             verdicts: raw::verdicts_on(&self.conn, change.id.as_str(), revision)?,
+            verifications: raw::verifications_on(&self.conn, change.id.as_str(), revision)?,
             change,
         }))
     }

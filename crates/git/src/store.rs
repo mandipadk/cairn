@@ -575,6 +575,19 @@ impl GitStore {
         Ok(entries)
     }
 
+    /// Every blob path under `rev`, recursively, in tree order.
+    pub async fn list_files(&self, name: &str, rev: &str) -> GitResult<Vec<String>> {
+        let repo = self.existing_repo_path(name)?;
+        let stdout = self
+            .run(Some(&repo), &["ls-tree", "-r", "-z", "--name-only", rev])
+            .await?;
+        Ok(String::from_utf8_lossy(&stdout)
+            .split('\0')
+            .filter(|p| !p.is_empty())
+            .map(str::to_owned)
+            .collect())
+    }
+
     /// The last commit to touch `path` at `rev`: (oid, subject).
     pub async fn last_commit_for(
         &self,

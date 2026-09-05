@@ -156,6 +156,17 @@ two and what became of it, and a merge trace shows which concerns stood
 and how each was closed. Taking part needs a hand in the repository: its
 owner, the change's owner, or a holder of any capability on it.
 
+## Verification debt
+
+Every line of a repository carries one state, from what the log knows
+about the change that landed it: reproduced (a runner re-ran the claim),
+claimed (its author ran something nobody re-ran), gap (a claim named it
+unchecked), argued (only a reasoning claim), or imported (from before the
+forge; nothing here ever judged it). `GET /api/repos/{name}/debt` rolls the
+states up for the default branch, by file with the most debt first, and
+the blame API carries the state per line; agents have both as MCP tools.
+"27% coverage" becomes "these lines shipped on a promise".
+
 ## Blame
 
 Blame answers a different question here. Instead of who typed a line,

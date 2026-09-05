@@ -417,6 +417,55 @@ pub struct Provenance {
     pub change: Change,
     pub claims: Vec<Claim>,
     pub verdicts: Vec<Verdict>,
+    /// What runners saw when they re-ran the claims on the landed revision.
+    #[serde(default)]
+    pub verifications: Vec<Verification>,
+}
+
+str_enum!(
+    /// What backs a line of code, in one word. The order is the order
+    /// of trust: a runner reproduced it; its author ran something; a
+    /// claim named this as unchecked; only an argument was made; or it
+    /// arrived from before the forge and nothing here ever judged it.
+    LineState {
+        Reproduced => "reproduced",
+        Claimed => "claimed",
+        Gap => "gap",
+        Argued => "argued",
+        Imported => "imported",
+    }
+);
+
+impl LineState {
+    /// Whether this state is a debt: anything short of a reproduced claim.
+    pub fn is_debt(self) -> bool {
+        self != LineState::Reproduced
+    }
+}
+
+/// What backs a line whose landing change is `provenance`, or nothing
+/// when the log knows no change that landed it.
+pub fn line_state(provenance: Option<&Provenance>) -> LineState {
+    let Some(p) = provenance else {
+        return LineState::Imported;
+    };
+    if !p.unchecked().is_empty() {
+        return LineState::Gap;
+    }
+    if !p.executed_check() {
+        return LineState::Argued;
+    }
+    let reproduced = p.verifications.iter().any(|v| {
+        v.agrees
+            && p.claims
+                .iter()
+                .any(|c| c.id == v.claim && c.kind != ClaimKind::Reasoning && c.passed)
+    });
+    if reproduced {
+        LineState::Reproduced
+    } else {
+        LineState::Claimed
+    }
 }
 
 impl Provenance {

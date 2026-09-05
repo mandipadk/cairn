@@ -612,6 +612,7 @@ pub async fn blame(
     let oids = git.store.blame_lines(&repo, &rev, &query.path).await?;
 
     let mut known: HashMap<String, Option<cairn_core::Provenance>> = HashMap::new();
+    let mut states: std::collections::BTreeMap<&'static str, usize> = Default::default();
     let mut lines = Vec::with_capacity(oids.len());
     for (index, oid) in oids.iter().enumerate() {
         if !known.contains_key(oid) {
@@ -621,10 +622,13 @@ pub async fn blame(
             );
         }
         let provenance = known.get(oid).and_then(Option::as_ref);
+        let state = cairn_core::line_state(provenance);
+        *states.entry(state.as_str()).or_insert(0usize) += 1;
         lines.push(json!({
             "line": index + 1,
             "commit": oid,
             "change": provenance.map(|p| p.change.number),
+            "state": state.as_str(),
             "executed_check": provenance.map(|p| p.executed_check()),
             "unchecked": provenance.map(|p| p.unchecked()).unwrap_or_default(),
         }));
@@ -633,9 +637,12 @@ pub async fn blame(
         .iter()
         .filter(|l| l["executed_check"] == Value::Bool(false))
         .count();
+    let debt = lines.iter().filter(|l| l["state"] != "reproduced").count();
     Ok(Json(json!({
         "path": query.path,
         "lines": lines,
         "unverified_lines": unverified,
+        "states": states,
+        "debt_lines": debt,
     })))
 }

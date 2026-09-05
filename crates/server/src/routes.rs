@@ -53,7 +53,7 @@ fn readable_repo(app: &AppState, actor: &Actor, name: &str) -> ApiResult<Repo> {
 
 /// The read boundary for strangers: a public repository answers anyone,
 /// a private or missing one answers a stranger as if nothing were there.
-fn readable_repo_by(app: &AppState, who: &MaybeActor, name: &str) -> ApiResult<Repo> {
+pub(crate) fn readable_repo_by(app: &AppState, who: &MaybeActor, name: &str) -> ApiResult<Repo> {
     let record = found(app.with_store(|s| s.repo(name))?, "repo")?;
     if record.visibility == cairn_core::Visibility::Public {
         return Ok(record);

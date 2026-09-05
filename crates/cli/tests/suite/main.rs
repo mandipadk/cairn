@@ -15,6 +15,7 @@ mod common;
 mod concurrency_flow;
 mod credential_flow;
 mod csrf_flow;
+mod debt_flow;
 mod event_scope_flow;
 mod fsck_flow;
 mod git_flow;

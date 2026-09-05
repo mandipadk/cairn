@@ -243,6 +243,7 @@ fn dispatch(client: &ApiClient, name: &str, args: &Value) -> Result<(u16, Value)
             &format!("/api/claims/{}/verify", need(args, "claim")?),
             args,
         ),
+        "debt" => client.get(&format!("/api/repos/{}/debt", need(args, "repo")?)),
         "blame" => client.get(&format!(
             "/api/repos/{}/blame?path={}",
             need(args, "repo")?,
@@ -553,12 +554,22 @@ fn tool_definitions() -> Vec<Value> {
             }),
         ),
         tool(
+            "debt",
+            "What backs every line of a repository, by file, most debt first. Each line is \
+             one of: reproduced (a runner re-ran the claim that landed it), claimed (its \
+             author ran something nobody re-ran), gap (a claim named it unchecked), argued \
+             (only a reasoning claim), imported (from before the forge; never judged here). \
+             Use it to see where your own verification is worth most before you touch a file.",
+            &["repo"],
+            json!({ "repo": s("Repo name") }),
+        ),
+        tool(
             "blame",
             "Before changing code you did not write: what is known about each line of a \
-             file — the change that landed it, whether an executed check ever covered it, \
-             and what its claims explicitly left unverified. Lines with executed_check \
-             false, or with entries in unchecked, are where your own verification matters \
-             most.",
+             file — the change that landed it, its state (reproduced, claimed, gap, argued, \
+             imported), whether an executed check ever covered it, and what its claims \
+             explicitly left unverified. Anything but reproduced is where your own \
+             verification matters most.",
             &["repo", "path"],
             json!({ "repo": s("Repo name"), "path": s("File path within the repo") }),
         ),

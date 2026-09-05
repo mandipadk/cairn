@@ -161,6 +161,7 @@ async fn full_agent_workflow_over_mcp() {
         "attach_claim",
         "give_verdict",
         "open_thread",
+        "debt",
         "resolve_thread",
         "merge_readiness",
         "merge_change",

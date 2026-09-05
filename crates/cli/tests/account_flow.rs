@@ -25,17 +25,19 @@ async fn a_minted_token_is_shown_once_and_then_never_again() {
         "action=mint&label=laptop",
     )
     .await;
+    let secret = shown_once(app, &location, "cairn_dev=ada").await;
     assert!(
-        location.contains("secret="),
-        "the secret has to come back somehow: {location}"
+        secret.starts_with("cairn_"),
+        "and actually be there: {secret}"
     );
 
-    let (status, body) = page_with_cookie(app, &location, "cairn_dev=ada").await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(body.contains("Copy this now"), "and be unmissable");
-    assert!(body.contains("cairn_"), "and actually be there");
-
-    // Coming back later shows the token but not the secret.
+    // Coming back - even to the same address - shows the token but not
+    // the secret: the flash was spent on the first page.
+    let (_, again) = page_with_cookie(app, &location, "cairn_dev=ada").await;
+    assert!(
+        !again.contains("Copy this now"),
+        "the same URL shows nothing twice"
+    );
     let (_, later) = page_with_cookie(app, "/you/tokens", "cairn_dev=ada").await;
     assert!(later.contains("laptop"), "the token is listed");
     assert!(
@@ -55,12 +57,7 @@ async fn a_token_can_be_revoked_from_the_page() {
     };
 
     let (_, location) = post_form(app, "/you/tokens", &cookie, "action=mint&label=doomed").await;
-    let secret = location
-        .split("secret=")
-        .nth(1)
-        .expect("a secret")
-        .to_owned();
-    let secret = percent_decode(&secret);
+    let secret = shown_once(app, &location, &cookie).await;
     assert_eq!(
         api_with_token(app, "GET", "/api/repos/demo", &secret, None)
             .await
@@ -116,11 +113,7 @@ async fn a_new_agent_gets_a_token_but_no_capability() {
         "action=register&id=helper&display=Helper&model=some-model",
     )
     .await;
-    assert!(
-        location.contains("secret="),
-        "an agent needs a token to exist usefully"
-    );
-    let secret = percent_decode(location.split("secret=").nth(1).unwrap());
+    let secret = shown_once(app, &location, "cairn_dev=ada").await;
 
     // It can authenticate - its own record is the one thing a credential
     // with no authority may read - and do nothing else.
@@ -218,28 +211,4 @@ async fn a_mistyped_confirmation_changes_nothing() {
         StatusCode::OK,
         "and the session survives"
     );
-}
-
-fn percent_decode(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'%' if i + 2 < bytes.len() => {
-                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("20");
-                out.push(u8::from_str_radix(hex, 16).unwrap_or(b' '));
-                i += 3;
-            }
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            other => {
-                out.push(other);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }

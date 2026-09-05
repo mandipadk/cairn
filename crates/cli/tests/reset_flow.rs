@@ -162,7 +162,7 @@ async fn without_mail_the_request_reaches_whoever_runs_the_forge() {
     assert!(inbox.contains(r#"href="/people""#));
     let (status, location) = post_form(app, "/people", &ada, "action=relink&id=bee").await;
     assert_eq!(status, StatusCode::SEE_OTHER);
-    assert!(location.starts_with("/people?invite="), "{location}");
+    assert!(location.starts_with("/people?once="), "{location}");
 
     // A name nobody has, or an agent's, gets the same answer and tells nobody new.
     let (_, location) = post_form(app, "/forgot", "", "who=nobody").await;
@@ -187,7 +187,7 @@ async fn an_invitation_goes_by_mail_when_the_forge_can_send_it() {
     )
     .await;
     assert_eq!(status, StatusCode::SEE_OTHER);
-    assert!(location.contains("&mailed=bee%40example.org"), "{location}");
+    assert!(location.starts_with("/people?once="), "{location}");
     let mail = std::fs::read_to_string(&mail_file).unwrap();
     assert!(mail.contains("To: bee@example.org"), "{mail}");
     assert!(mail.contains("/join?token="), "{mail}");

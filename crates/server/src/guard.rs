@@ -63,12 +63,21 @@ pub async fn same_origin_writes(request: Request, next: Next) -> Response {
         if fetch_site == "cross-site" {
             return refused("cross-site writes are not accepted");
         }
-        if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok())
-            && origin != "null"
-            && let Some(host) = headers.get(header::HOST).and_then(|v| v.to_str().ok())
-            && !origin_matches(origin, host)
-        {
-            return refused("this write did not come from here");
+        if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+            // "null" is what a browser sends from a sandboxed or opaque
+            // context; nothing of ours is served from one.
+            if origin == "null" {
+                return refused("this write did not come from here");
+            }
+            let host = headers
+                .get(header::HOST)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+                .or_else(|| request.uri().authority().map(|a| a.to_string()));
+            match host {
+                Some(host) if origin_matches(origin, &host) => {}
+                _ => return refused("this write did not come from here"),
+            }
         }
     }
     next.run(request).await

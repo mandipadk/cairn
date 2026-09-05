@@ -140,7 +140,15 @@ fn hash_password(password: &str) -> CoreResult<String> {
         .map_err(|e| CoreError::Invalid(format!("hashing failed: {e}")))
 }
 
-fn verify_password(password: &str, hash: &str) -> bool {
+/// Long enough to resist guessing, short enough that a password manager's
+/// output always fits. Checked before anything one-time is spent on it.
+pub fn password_acceptable(password: &str) -> CoreResult<()> {
+    require((12..=1024).contains(&password.len()), || {
+        "a password must be between 12 and 1024 characters".into()
+    })
+}
+
+pub fn verify_password(password: &str, hash: &str) -> bool {
     use argon2::password_hash::{PasswordHash, PasswordVerifier};
     PasswordHash::new(hash)
         .map(|parsed| {
@@ -157,6 +165,13 @@ fn verify_password(password: &str, hash: &str) -> bool {
 fn valid_email(value: &str) -> bool {
     let bytes = value.len();
     if !(3..=320).contains(&bytes) || value.chars().any(char::is_whitespace) {
+        return false;
+    }
+    if value.matches('@').count() != 1
+        || value
+            .chars()
+            .any(|c| matches!(c, ',' | ';' | '<' | '>' | '"'))
+    {
         return false;
     }
     match value.split_once('@') {
@@ -299,9 +314,7 @@ impl Store {
         }
         // Long enough to resist guessing, short enough that a password
         // manager's output always fits.
-        require((12..=1024).contains(&password.len()), || {
-            "a password must be between 12 and 1024 bytes".into()
-        })?;
+        password_acceptable(password)?;
         let hash = hash_password(password)?;
         // The credential is written outside the log, in the same
         // transaction as the fact that it changed — so the two cannot
@@ -832,6 +845,67 @@ impl Store {
         Ok(row.map(|(p, s)| (p.map(PrincipalId), s)))
     }
 
+    /// Park something to show a person exactly once on their next page -
+    /// a freshly minted secret - under an id that is useless after that
+    /// page has been served. The alternative, the secret itself riding
+    /// in a redirect URL, leaves it in browser history and edge logs.
+    pub fn put_flash(&mut self, who: &PrincipalId, payload: &str) -> CoreResult<String> {
+        let id = random_token_secret();
+        let now = jiff::Timestamp::now();
+        let expires = (now + jiff::SignedDuration::from_mins(5)).to_string();
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM flashes WHERE expires <= ?",
+            rusqlite::params![now.to_string()],
+        )?;
+        tx.execute(
+            "INSERT INTO flashes (id, principal, payload, expires) VALUES (?, ?, ?, ?)",
+            rusqlite::params![id, who.as_str(), payload, expires],
+        )?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    /// Take a flash: the payload if it is this person's and unspent,
+    /// and gone either way.
+    pub fn take_flash(&mut self, who: &PrincipalId, id: &str) -> CoreResult<Option<String>> {
+        let now = jiff::Timestamp::now().to_string();
+        let tx = self.conn.transaction()?;
+        let payload: Option<String> = tx
+            .prepare_cached(
+                "SELECT payload FROM flashes WHERE id = ? AND principal = ? AND expires > ?",
+            )?
+            .query_row(rusqlite::params![id, who.as_str(), now], |row| row.get(0))
+            .optional()?;
+        tx.execute("DELETE FROM flashes WHERE id = ?", rusqlite::params![id])?;
+        tx.commit()?;
+        Ok(payload)
+    }
+
+    /// Allow something at most once per window per key. Operational and
+    /// tiny: it exists so an anonymous form cannot page every admin a
+    /// hundred times a minute, or one person mail the world.
+    pub fn throttle(&mut self, key: &str, window_secs: i64) -> CoreResult<bool> {
+        let now = jiff::Timestamp::now();
+        let until = (now + jiff::SignedDuration::from_secs(window_secs)).to_string();
+        let tx = self.conn.transaction()?;
+        let held: Option<String> = tx
+            .prepare_cached("SELECT until FROM throttles WHERE key = ?")?
+            .query_row(rusqlite::params![key], |row| row.get(0))
+            .optional()?;
+        if held.is_some_and(|u| u > now.to_string()) {
+            tx.commit()?;
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO throttles (key, until) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET until = ?2",
+            rusqlite::params![key, until],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     /// A link that signs one person in once, for fifteen minutes. The
     /// caller sends it to their confirmed address and nowhere else; this
     /// only minds the secret. A new link retires any earlier unused one.
@@ -925,19 +999,23 @@ impl Store {
         Ok(who.map(PrincipalId))
     }
 
-    pub fn password_matches(&self, principal: &PrincipalId, password: &str) -> bool {
-        let stored = raw::credential(&self.conn, principal.as_str())
+    /// The stored hash, or a fixed one for a principal who has none, so
+    /// verifying costs the same either way. Verification itself happens
+    /// off the store: argon2 takes tens of milliseconds and the store
+    /// lock is the whole forge.
+    pub fn password_hash_for_check(&self, principal: &PrincipalId) -> (String, bool) {
+        match raw::credential(&self.conn, principal.as_str())
             .ok()
-            .flatten();
-        match stored {
-            Some(hash) => verify_password(password, &hash),
-            None => {
-                // Verify against a fixed hash so a missing principal
-                // costs the same as a wrong password.
-                verify_password(password, DUMMY_HASH);
-                false
-            }
+            .flatten()
+        {
+            Some(hash) => (hash, true),
+            None => (DUMMY_HASH.to_owned(), false),
         }
+    }
+
+    pub fn password_matches(&self, principal: &PrincipalId, password: &str) -> bool {
+        let (hash, real) = self.password_hash_for_check(principal);
+        verify_password(password, &hash) && real
     }
 
     /// Everything that must be true before a repository may exist,
@@ -988,17 +1066,29 @@ impl Store {
     /// enforces this too, but a caller that fetches first would have the
     /// forge dial an arbitrary url — and carry a credential there — on
     /// nothing but a caller's say-so. Validate, then fetch.
-    pub fn validate_import_source(source: &str) -> CoreResult<()> {
+    pub fn validate_import_source(source: &str, allow_local: bool) -> CoreResult<()> {
         bounded("source", source, MAX_TITLE)?;
-        require(
-            ["https://", "ssh://", "file://"]
-                .iter()
-                .any(|scheme| source.starts_with(scheme)),
-            || "a source url must be https://, ssh://, or file://".into(),
-        )?;
+        // Only https. file:// would read this machine's own repositories,
+        // ssh:// would use this machine's keys; neither is a caller's to
+        // spend. A forge in development mode may read local paths, since
+        // that mode already trusts whoever is at the keyboard.
+        let local_ok = allow_local && source.starts_with("file://");
+        require(source.starts_with("https://") || local_ok, || {
+            "a source url must be https://".into()
+        })?;
         require(!source.contains('@'), || {
             "keep credentials out of the source url: pass a token when serving".into()
         })?;
+        Ok(())
+    }
+
+    /// May this principal import into this repository? Asked before the
+    /// forge connects anywhere on their behalf, so an unauthorised
+    /// request costs nothing and fetches nothing.
+    pub fn check_import(&self, actor: &PrincipalId, repo: &str) -> CoreResult<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        authorize(&tx, actor, Capability::Admin, Some(repo))?;
+        raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
         Ok(())
     }
 
@@ -1009,6 +1099,7 @@ impl Store {
     /// judged here. Admin authority, and only onto a branch that does
     /// not exist yet: importing over reviewed history would overwrite
     /// exactly the decisions the log exists to keep.
+    #[allow(clippy::too_many_arguments)] // one command, one record; a struct here would only rename the fields
     pub fn import_history(
         &mut self,
         actor: &PrincipalId,
@@ -1017,6 +1108,7 @@ impl Store {
         source: &str,
         tip_oid: &str,
         commits: i64,
+        allow_local: bool,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
         authorize(&tx, actor, Capability::Admin, Some(repo))?;
@@ -1024,7 +1116,7 @@ impl Store {
         require(valid_branch(branch), || {
             format!("{branch:?} is not a valid branch name")
         })?;
-        Self::validate_import_source(source)?;
+        Self::validate_import_source(source, allow_local)?;
         require(
             matches!(tip_oid.len(), 40 | 64) && tip_oid.chars().all(|c| c.is_ascii_hexdigit()),
             || format!("{tip_oid:?} is not an object id"),
@@ -1319,20 +1411,24 @@ impl Store {
         actor: &PrincipalId,
         repo: &str,
         mirror: Option<Mirror>,
+        allow_local: bool,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        authorize(&tx, actor, Capability::Admin, Some(repo))?;
+        // The push uses the credential whoever runs the forge configured,
+        // so where it goes is theirs to decide, not a repository owner's:
+        // an owner pointing a mirror at their own host would be handed it.
+        authorize(&tx, actor, Capability::Admin, None)?;
         raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
         if let Some(mirror) = &mirror {
             bounded("mirror url", &mirror.url, MAX_TITLE)?;
             // https and ssh reach a hosted forge; file reaches another
             // disk, which is a legitimate place to keep a copy.
-            require(
-                ["https://", "ssh://", "file://"]
-                    .iter()
-                    .any(|scheme| mirror.url.starts_with(scheme)),
-                || "a mirror url must be https://, ssh://, or file://".into(),
-            )?;
+            // https only; a development forge may mirror to a local path,
+            // since that mode already trusts whoever is at the keyboard.
+            let local_ok = allow_local && mirror.url.starts_with("file://");
+            require(mirror.url.starts_with("https://") || local_ok, || {
+                "a mirror url must be https://".into()
+            })?;
             require(!mirror.url.contains('@'), || {
                 "keep credentials out of the mirror url: pass a token when serving".into()
             })?;
@@ -2067,16 +2163,17 @@ impl Store {
         until: Option<&str>,
     ) -> CoreResult<(TokenId, String, Envelope)> {
         let tx = self.conn.transaction()?;
-        let acting = ensure_actor(&tx, actor)?;
+        ensure_actor(&tx, actor)?;
         let subject = raw::principal(&tx, principal.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("principal {principal}")))?;
         require(subject.kind != PrincipalKind::Team, || {
             format!("{principal} is a team, and a team never signs in")
         })?;
-        if actor != principal && acting.kind != PrincipalKind::Human {
-            return Err(CoreError::Forbidden(format!(
-                "{actor} may not mint tokens for {principal}: only the principal itself or a human"
-            )));
+        // A token is the principal's own credential. Minting one for
+        // somebody else is running the forge, not being a person; the
+        // old rule let any signed-in human mint an admin's token.
+        if actor != principal {
+            authorize(&tx, actor, Capability::Admin, None)?;
         }
         let token = TokenId::generate();
         let secret = random_token_secret();
@@ -2098,14 +2195,11 @@ impl Store {
     /// Revoke a token, effective immediately. The owner or any human.
     pub fn revoke_token(&mut self, actor: &PrincipalId, token: &TokenId) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        let acting = ensure_actor(&tx, actor)?;
+        ensure_actor(&tx, actor)?;
         let current = raw::token(&tx, token.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("token {token}")))?;
-        if current.principal != *actor && acting.kind != PrincipalKind::Human {
-            return Err(CoreError::Forbidden(format!(
-                "{actor} may not revoke a token of {}: only the owner or a human",
-                current.principal
-            )));
+        if current.principal != *actor {
+            authorize(&tx, actor, Capability::Admin, None)?;
         }
         if current.revoked {
             return Err(CoreError::Conflict(format!(
@@ -2214,17 +2308,14 @@ impl Store {
         reason: &str,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        let acting = ensure_actor(&tx, actor)?;
+        ensure_actor(&tx, actor)?;
         require(!reason.trim().is_empty(), || {
             "revocation reason must not be empty".into()
         })?;
         let current = raw::grant(&tx, grant.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("grant {grant}")))?;
-        if current.grantor != *actor && acting.kind != PrincipalKind::Human {
-            return Err(CoreError::Forbidden(format!(
-                "{actor} may not revoke a grant issued by {}",
-                current.grantor
-            )));
+        if current.grantor != *actor && current.grantee != *actor {
+            authorize(&tx, actor, Capability::Admin, None)?;
         }
         if current.revoked {
             return Err(CoreError::Conflict(format!(

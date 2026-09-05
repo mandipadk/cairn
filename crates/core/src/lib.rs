@@ -40,7 +40,7 @@ mod store;
 mod types;
 
 pub use attention::{AttentionItem, Signal, SignalKind};
-pub use commands::until_in_days;
+pub use commands::{password_acceptable, until_in_days, verify_password};
 pub use error::{CoreError, CoreResult};
 pub use event::{Envelope, Event, EventSeq};
 pub use id::{

@@ -524,7 +524,8 @@ pub(crate) mod raw {
         Ok(conn
             .prepare_cached(
                 "SELECT principal FROM tokens
-                  WHERE hash = ? AND revoked = 0 AND (until_ts IS NULL OR until_ts > ?)",
+                  WHERE hash = ? AND revoked = 0 AND (until_ts IS NULL OR until_ts > ?)
+                    AND (label IS NULL OR label NOT LIKE 'invitation%')",
             )?
             .query_row(params![hash, jiff::Timestamp::now().to_string()], |row| {
                 row.get::<_, String>(0)
@@ -687,6 +688,29 @@ pub(crate) mod raw {
     const QUEUE_COLS: &str = "change_id, repo, target, enqueued_by, enqueued_seq";
 
     /// Sessions currently running, oldest first — the fleet view.
+    /// Sessions at work in one repository: on a task of its, or holding
+    /// a lease on it. What is happening elsewhere is elsewhere's.
+    pub fn active_sessions_in(conn: &Connection, repo: &str) -> CoreResult<Vec<Session>> {
+        conn.prepare_cached(
+            "SELECT s.id, s.task, s.agent, s.state, s.outcome FROM sessions s
+              LEFT JOIN tasks t ON t.id = s.task
+             WHERE s.state = 'active'
+               AND (t.repo = ?1 OR s.id IN (SELECT session FROM leases WHERE repo = ?1))
+             ORDER BY s.rowid",
+        )?
+        .query_map(params![repo], |row| {
+            Ok(Session {
+                id: SessionId(row.get(0)?),
+                task: TaskId(row.get(1)?),
+                agent: PrincipalId(row.get(2)?),
+                state: SessionState::Active,
+                outcome: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+    }
+
     pub fn active_sessions(conn: &Connection) -> CoreResult<Vec<Session>> {
         conn.prepare_cached(
             "SELECT id, task, agent, state, outcome FROM sessions
@@ -1102,6 +1126,10 @@ impl Store {
 
     pub fn active_sessions(&self) -> CoreResult<Vec<Session>> {
         raw::active_sessions(&self.conn)
+    }
+
+    pub fn active_sessions_in(&self, repo: &str) -> CoreResult<Vec<Session>> {
+        raw::active_sessions_in(&self.conn, repo)
     }
 
     pub fn repos(&self) -> CoreResult<Vec<Repo>> {

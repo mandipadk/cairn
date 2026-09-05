@@ -303,8 +303,10 @@ pub async fn receive_pack(
     let result: ApiResult<Response> = async {
         let git = git_enabled(&app)?;
         let name = repo_name(&repo);
-        ensure_repo(&app, &name)?;
+        // Who first, then what: an anonymous caller learns nothing about
+        // which repositories exist from the shape of the refusal.
         let principal = push_principal(&app, &headers)?;
+        ensure_repo(&app, &name)?;
         let input = request_body(&headers, body)?;
         // The hook inherits this env and records pushes back through
         // the API as the authenticated pusher, via an ephemeral token
@@ -585,13 +587,13 @@ pub struct BlameQuery {
 /// touching code it did not write.
 pub async fn blame(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Path(repo): Path<String>,
     axum::extract::Query(query): axum::extract::Query<BlameQuery>,
 ) -> ApiResult<Json<Value>> {
     let git = git_enabled(&app)?;
     let record = app
-        .with_store(|s| s.repo(&repo))?
+        .with_store(|s| s.readable(&actor.0, &repo))?
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not_found", "repo not found"))?;
     let rev = format!("refs/heads/{}", record.default_branch);
     let oids = git.store.blame_lines(&repo, &rev, &query.path).await?;

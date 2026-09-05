@@ -53,6 +53,27 @@ pub async fn boot_with_passkeys() -> Forge {
     forge
 }
 
+/// A forge that can send mail and knows its public URL - a deployment.
+pub async fn boot_mailing_public(command: &str) -> Forge {
+    let mut forge = boot_inner(
+        "sha1",
+        true,
+        Some(cairn_server::Mailer::command(
+            command,
+            "cairn@forge.example",
+        )),
+    )
+    .await;
+    let state = forge
+        .state
+        .clone()
+        .with_public_url("https://forge.example")
+        .expect("a valid public URL");
+    forge.app = router(state.clone());
+    forge.state = state;
+    forge
+}
+
 /// A forge that can send mail, through a command of the test's choosing.
 pub async fn boot_mailing(command: &str) -> Forge {
     boot_inner(
@@ -539,4 +560,24 @@ pub async fn get_redirect(app: &Router, path: &str, cookie: &str) -> (StatusCode
         .unwrap_or("")
         .to_owned();
     (status, location)
+}
+
+/// Follow a redirect that carries a spent-once flash and return what the
+/// page showed inside `<code class="secret">`. The secret must not be in
+/// the URL itself; that is the whole point of the flash.
+pub async fn shown_once(app: &Router, location: &str, cookie: &str) -> String {
+    assert!(
+        location.contains("?once=")
+            && !location.contains("secret=")
+            && !location.contains("invite="),
+        "the redirect carries an id, never the secret: {location}"
+    );
+    let (status, page) = page_with_cookie(app, location, cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    let start = page
+        .find(r#"<code class="secret">"#)
+        .expect("something shown once")
+        + r#"<code class="secret">"#.len();
+    let end = page[start..].find("</code>").unwrap() + start;
+    page[start..end].to_owned()
 }

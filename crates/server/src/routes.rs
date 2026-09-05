@@ -210,18 +210,36 @@ pub async fn import_history(
             "this forge is running without git storage",
         )
     })?;
-    // Before dialling out: the url is a caller's, and this forge does
-    // not connect anywhere on nothing but a caller's say-so.
-    cairn_core::Store::validate_import_source(&body.source)?;
+    // Before dialling out: who is asking, and where. The url is a
+    // caller's, and this forge does not connect anywhere on nothing but
+    // a caller's say-so - nor on behalf of somebody who may not import.
+    app.with_store(|s| s.check_import(&actor.0, &name))?;
+    cairn_core::Store::validate_import_source(&body.source, app.dev_identity())?;
     let (tip, commits) = git
         .store
         .fetch_history(&name, &body.source, &body.branch)
         .await?;
     // Record before publishing the ref: if this fails, the branch stays
     // absent and the import can be retried, which is the harmless order.
-    let env = app.with_store(|s| {
-        s.import_history(&actor.0, &name, &body.branch, &body.source, &tip, commits)
-    })?;
+    // The staging ref is dropped either way, so nothing half-done lingers.
+    let recorded = app.with_store(|s| {
+        s.import_history(
+            &actor.0,
+            &name,
+            &body.branch,
+            &body.source,
+            &tip,
+            commits,
+            app.dev_identity(),
+        )
+    });
+    let env = match recorded {
+        Ok(env) => env,
+        Err(err) => {
+            let _ = git.store.clear_import_ref(&name, &body.branch).await;
+            return Err(err.into());
+        }
+    };
     git.store
         .advance_ref(&name, &body.branch, &tip, None)
         .await?;
@@ -774,10 +792,20 @@ pub struct GrantFilter {
 
 pub async fn list_grants(
     State(app): State<AppState>,
-    _actor: Actor,
+    actor: Actor,
     Query(filter): Query<GrantFilter>,
 ) -> ApiResult<Json<Value>> {
-    let grants = app.with_store(|s| s.grants_of(&PrincipalId(filter.grantee)))?;
+    let grantee = PrincipalId(filter.grantee);
+    let mut grants = app.with_store(|s| s.grants_of(&grantee))?;
+    // Authority is auditable, but a grant names a repository, and a
+    // repository you cannot read is not one you get to learn exists.
+    if grantee != actor.0 && !app.with_store(|s| s.is_admin(&actor.0)) {
+        grants.retain(|g| {
+            g.repo
+                .as_deref()
+                .is_none_or(|repo| app.with_store(|s| s.may_read(&actor.0, repo)))
+        });
+    }
     Ok(Json(json!(grants)))
 }
 
@@ -1156,6 +1184,7 @@ pub async fn set_policy(
     Json(body): Json<PolicyBody>,
 ) -> ApiResult<Json<Value>> {
     if body.preview {
+        readable_repo(&app, &actor, &repo)?;
         let previewed = app.with_store(|s| s.policy_preview(&repo, &body.policy))?;
         let would_block: Vec<Value> = previewed
             .iter()
@@ -1201,7 +1230,7 @@ pub async fn set_mirror(
     Path(repo): Path<String>,
     Json(body): Json<MirrorBody>,
 ) -> ApiResult<Json<Value>> {
-    let env = app.with_store(|s| s.set_mirror(&actor.0, &repo, body.mirror))?;
+    let env = app.with_store(|s| s.set_mirror(&actor.0, &repo, body.mirror, app.dev_identity()))?;
     app.publish(&env);
     Ok(committed(Some(repo), &env))
 }

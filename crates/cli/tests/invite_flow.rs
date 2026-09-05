@@ -6,38 +6,6 @@ mod common;
 use axum::http::StatusCode;
 use common::*;
 
-fn query_value(location: &str, key: &str) -> Option<String> {
-    let (_, query) = location.split_once('?')?;
-    query
-        .split('&')
-        .find_map(|pair| pair.strip_prefix(&format!("{key}=")))
-        .map(percent_decode)
-}
-
-fn percent_decode(s: &str) -> String {
-    let mut out = Vec::new();
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'%' if i + 2 < bytes.len() + 1 => {
-                let hex = &s[i + 1..i + 3];
-                out.push(u8::from_str_radix(hex, 16).unwrap());
-                i += 3;
-            }
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            b => {
-                out.push(b);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8(out).unwrap()
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn an_invitation_signs_somebody_in_exactly_once() {
     let forge = boot().await;
@@ -47,11 +15,12 @@ async fn an_invitation_signs_somebody_in_exactly_once() {
     let (status, location) =
         post_form(app, "/people", &ada, "action=register&id=bee&display=Bee").await;
     assert_eq!(status, StatusCode::SEE_OTHER);
-    let secret = query_value(&location, "invite").expect("an invitation to hand over");
-
-    // The page shows the link once, as a link to this forge.
-    let (_, page) = page_with_cookie(app, &location, &ada).await;
-    assert!(page.contains("/join?token="), "{page}");
+    // The page shows the link once, as a link to this forge, and never
+    // puts the secret in a URL of its own.
+    let link = shown_once(app, &location, &ada).await;
+    assert!(link.contains("/join?token="), "{link}");
+    let secret = link.split("token=").nth(1).unwrap().to_owned();
+    let (_, page) = page_with_cookie(app, "/people", &ada).await;
     assert!(page.contains("no password yet"));
     assert!(
         !page.contains(r#"class="repohead""#),
@@ -149,13 +118,23 @@ async fn an_invitation_can_be_cancelled_and_only_the_newest_link_works() {
     let (_, ada) = sign_in_as(&forge, "ada").await;
 
     let (_, first) = post_form(app, "/people", &ada, "action=register&id=bee&display=Bee").await;
-    let first = query_value(&first, "invite").unwrap();
+    let first = shown_once(app, &first, &ada)
+        .await
+        .split("token=")
+        .nth(1)
+        .unwrap()
+        .to_owned();
     let (_, page) = page_with_cookie(app, "/people", &ada).await;
     assert!(page.contains("invited, link good until"), "{page}");
 
     // A new link retires the old one.
     let (_, second) = post_form(app, "/people", &ada, "action=relink&id=bee").await;
-    let second = query_value(&second, "invite").unwrap();
+    let second = shown_once(app, &second, &ada)
+        .await
+        .split("token=")
+        .nth(1)
+        .unwrap()
+        .to_owned();
     let (status, location) = get_redirect(app, &format!("/join?token={first}"), "").await;
     assert_eq!(status, StatusCode::SEE_OTHER);
     assert!(

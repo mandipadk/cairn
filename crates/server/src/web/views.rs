@@ -234,8 +234,8 @@ fn sidebar(viewer: &Viewer, current: Option<&str>) -> Markup {
                 span { "Inbox" } span class="n" { @if chrome.unread > 0 { (chrome.unread) } }
             }
             a href="/you" { span { "Your changes" } span class="n" { @if chrome.yours > 0 { (chrome.yours) } } }
-            a href="/agents" { span { "Agents" } span class="n" {} }
             @if chrome.admin {
+                a href="/agents" { span { "Agents" } span class="n" {} }
                 a class={ @if current == Some("people") { "on" } @else { "" } } href="/people" {
                     span { "People" } span class="n" {}
                 }

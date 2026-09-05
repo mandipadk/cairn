@@ -115,6 +115,18 @@ CREATE TABLE IF NOT EXISTS webauthn_states (
   expires   TEXT NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS flashes (
+  id        TEXT PRIMARY KEY,
+  principal TEXT NOT NULL,
+  payload   TEXT NOT NULL,
+  expires   TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS throttles (
+  key   TEXT PRIMARY KEY,
+  until TEXT NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS signin_links (
   token_hash TEXT PRIMARY KEY,
   principal  TEXT NOT NULL,

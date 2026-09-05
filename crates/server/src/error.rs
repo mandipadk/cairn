@@ -58,7 +58,14 @@ impl From<cairn_git::GitError> for ApiError {
             G::TimedOut { .. } => (StatusCode::GATEWAY_TIMEOUT, "timeout"),
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {
+            // The detail names paths and quotes git's stderr; that is for
+            // the operator's log, not for whoever made the request.
             tracing::error!(error = %err, "git operation failed");
+            return ApiError::new(
+                status,
+                kind,
+                "git operation failed; the log has the details",
+            );
         }
         ApiError::new(status, kind, err.to_string())
     }

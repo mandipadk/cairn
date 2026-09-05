@@ -60,6 +60,8 @@ pub struct AppState {
     mailer: Option<Arc<crate::mail::Mailer>>,
     /// The WebAuthn relying party, when the forge knows its public URL.
     webauthn: Option<Arc<webauthn_rs::prelude::Webauthn>>,
+    /// Where people reach this forge, for every link it writes down.
+    public_url: Option<String>,
     /// Ephemeral secrets handed to proc-receive hooks, mapped to the
     /// authenticated pusher. In-memory only, expiring, never logged.
     push_tokens: Arc<Mutex<HashMap<String, (PrincipalId, Instant)>>>,
@@ -83,6 +85,7 @@ impl AppState {
             reset_limiter: crate::guard::LoginLimiter::new(5, Duration::from_secs(300)),
             mailer: None,
             webauthn: None,
+            public_url: None,
             push_tokens: Arc::new(Mutex::new(HashMap::new())),
             refs_needing_advancing: Arc::new(Mutex::new(Vec::new())),
         }
@@ -215,7 +218,13 @@ impl AppState {
     /// Tell the forge where it lives, which is what passkeys bind to.
     pub fn with_public_url(mut self, url: &str) -> Result<Self, String> {
         self.webauthn = Some(Arc::new(crate::passkeys::relying_party(url)?));
+        self.public_url = Some(url.trim_end_matches('/').to_owned());
         Ok(self)
+    }
+
+    /// The configured public URL, without a trailing slash.
+    pub(crate) fn public_url(&self) -> Option<&str> {
+        self.public_url.as_deref()
     }
 
     pub(crate) fn webauthn(&self) -> Option<Arc<webauthn_rs::prelude::Webauthn>> {

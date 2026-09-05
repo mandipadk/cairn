@@ -298,16 +298,28 @@ async fn import_into(
     branch: &str,
     source: &str,
 ) -> Result<(), String> {
-    cairn_core::Store::validate_import_source(source).map_err(|e| e.to_string())?;
+    // Who, then where, then fetch: the forge connects out only for
+    // somebody allowed to import here, and only to https.
+    app.with_store(|s| s.check_import(who, repo))
+        .map_err(|e| humane(&e))?;
+    cairn_core::Store::validate_import_source(source, app.dev_identity())
+        .map_err(|e| humane(&e))?;
     let git = app.git().ok_or("this forge has no git storage")?;
     let (tip, commits) = git
         .store
         .fetch_history(repo, source, branch)
         .await
-        .map_err(|e| e.to_string())?;
-    let env = app
-        .with_store(|store| store.import_history(who, repo, branch, source, &tip, commits))
-        .map_err(|e| e.to_string())?;
+        .map_err(|_| "could not fetch from that source".to_owned())?;
+    let recorded = app.with_store(|store| {
+        store.import_history(who, repo, branch, source, &tip, commits, app.dev_identity())
+    });
+    let env = match recorded {
+        Ok(env) => env,
+        Err(err) => {
+            let _ = git.store.clear_import_ref(repo, branch).await;
+            return Err(humane(&err));
+        }
+    };
     git.store
         .advance_ref(repo, branch, &tip, None)
         .await
@@ -386,22 +398,15 @@ struct Flash {
     error: Option<String>,
     #[serde(default)]
     done: Option<String>,
-    /// A freshly minted token, shown once and never stored anywhere we
-    /// could show it again.
-    #[serde(default)]
-    secret: Option<String>,
-    /// A freshly minted invitation, likewise shown once.
-    #[serde(default)]
-    invite: Option<String>,
     /// First sign-in, straight from an invitation.
     #[serde(default)]
     first: Option<String>,
-    /// Where an invitation was just sent, so the page can say so.
-    #[serde(default)]
-    mailed: Option<String>,
     /// A verification mail just went out.
     #[serde(default)]
     sent: Option<String>,
+    /// The id of something parked to be shown exactly once.
+    #[serde(default)]
+    once: Option<String>,
 }
 
 async fn settings_page(
@@ -506,6 +511,15 @@ async fn change_email(
         .into_response();
     };
     let email = form.email.trim().to_owned();
+    // Mail with the forge's name on it, to an address of the caller's
+    // choosing: three an hour is plenty for a person and useless for spam.
+    let slot = jiff::Timestamp::now().as_second() / 1200;
+    let allowed = app
+        .with_store(|s| s.throttle(&format!("email-confirm:{}:{slot}", viewer.0), 1200))
+        .unwrap_or(true);
+    if !allowed {
+        return Redirect::to("/you/settings?error=Try+again+in+a+little+while").into_response();
+    }
     let secret = match app.with_store(|s| s.request_email(&viewer.0, &email)) {
         Ok(secret) => secret,
         Err(err) => {
@@ -568,6 +582,13 @@ async fn verify_email(
 
 /// A link back to this forge, from the request that asked for it.
 fn absolute(app: &AppState, headers: &HeaderMap, path: &str) -> String {
+    // The configured public URL is the only authority on where this forge
+    // lives. A Host header is a caller's, and a caller who can choose the
+    // host in a reset link can collect the reset. Headers serve only a
+    // forge with no public URL, which is a laptop.
+    if let Some(base) = app.public_url() {
+        return format!("{base}{path}");
+    }
     let host = headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
@@ -640,19 +661,17 @@ async fn forgot_submit(
     match (app.mailer(), address) {
         (Some(mailer), Some(email)) => {
             if let Ok(secret) = app.with_store(|s| s.begin_password_reset(&who)) {
-                let host = headers
-                    .get(header::HOST)
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("localhost");
-                let scheme = headers
-                    .get("x-forwarded-proto")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or(if app.secure_cookies() {
-                        "https"
-                    } else {
-                        "http"
-                    });
-                let link = format!("{scheme}://{host}/reset?token={}", urlencode(&secret));
+                let link = absolute(
+                    &app,
+                    &headers,
+                    &format!("/reset?token={}", urlencode(&secret)),
+                );
+                let host = link
+                    .split("://")
+                    .nth(1)
+                    .and_then(|rest| rest.split('/').next())
+                    .unwrap_or("this forge")
+                    .to_owned();
                 let body = format!(
                     "Somebody asked to reset the password for {} on {host}.\n\n\
                      If that was you, open this link within thirty minutes; it works once:\n\n  {link}\n\n\
@@ -669,10 +688,19 @@ async fn forgot_submit(
                 }
             }
         }
-        _ => match app.with_store(|s| s.request_password_reset(&who)) {
-            Ok(env) => app.publish(&env),
-            Err(err) => tracing::warn!(%err, "could not record a reset request"),
-        },
+        _ => {
+            // Once an hour per person: the form is anonymous, and this
+            // writes to the log and pages every admin.
+            let allowed = app
+                .with_store(|s| s.throttle(&format!("reset-request:{who}"), 3600))
+                .unwrap_or(false);
+            if allowed {
+                match app.with_store(|s| s.request_password_reset(&who)) {
+                    Ok(env) => app.publish(&env),
+                    Err(err) => tracing::warn!(%err, "could not record a reset request"),
+                }
+            }
+        }
     }
     Redirect::to("/forgot?done=1").into_response()
 }
@@ -715,6 +743,9 @@ async fn reset_submit(State(app): State<AppState>, Form(form): Form<ResetForm>) 
     };
     if form.password != form.confirm {
         return back("Those two did not match");
+    }
+    if let Err(err) = cairn_core::password_acceptable(&form.password) {
+        return back(&humane(&err));
     }
     let who = match app.with_store(|s| s.redeem_password_reset(form.token.trim())) {
         Ok(Some(who)) => who,
@@ -776,12 +807,13 @@ async fn tokens_page(
     viewer: Viewer,
     Query(flash): Query<Flash>,
 ) -> Response {
+    let once = take(&app, &viewer.0, flash.once.as_deref());
     match app.with_store(|s| s.tokens_of(&viewer.0)) {
         Ok(tokens) => views::tokens(
             theme,
             &viewer,
             &tokens,
-            flash.secret.as_deref(),
+            once.secret.as_deref(),
             flash.error.as_deref(),
         )
         .into_response(),
@@ -835,7 +867,14 @@ async fn token_action(
         // The secret exists exactly once. It rides back in the redirect
         // because there is nowhere else it could come from later.
         Ok(Some(secret)) => {
-            Redirect::to(&format!("/you/tokens?secret={}", urlencode(&secret))).into_response()
+            let once = Once {
+                secret: Some(secret),
+                mailed: None,
+            };
+            match park(&app, &viewer.0, &once) {
+                Some(id) => Redirect::to(&format!("/you/tokens?once={id}")).into_response(),
+                None => Redirect::to("/you/tokens?error=Could+not+show+the+token").into_response(),
+            }
         }
         Ok(None) => Redirect::to("/you/tokens").into_response(),
         Err(err) => {
@@ -1042,8 +1081,9 @@ async fn people_page(
         }
         Ok::<_, cairn_core::CoreError>(rows)
     });
-    let join_link = flash
-        .invite
+    let once = take(&app, &viewer.0, flash.once.as_deref());
+    let join_link = once
+        .secret
         .as_deref()
         .map(|secret| join_link(&app, &headers, secret));
     match people {
@@ -1053,7 +1093,7 @@ async fn people_page(
             &people,
             app.mailer().is_some(),
             join_link.as_deref(),
-            flash.mailed.as_deref(),
+            once.mailed.as_deref(),
             flash.error.as_deref(),
         )
         .into_response(),
@@ -1191,17 +1231,23 @@ async fn people_action(
             Err(err) => tracing::error!(%err, "invitation mail failed"),
         }
     }
-    let mut to = format!("/people?invite={}", urlencode(&secret));
-    if let Some(mailed) = mailed {
-        to.push_str(&format!("&mailed={}", urlencode(&mailed)));
+    let once = Once {
+        secret: Some(secret),
+        mailed,
+    };
+    match park(&app, &viewer.0, &once) {
+        Some(id) => Redirect::to(&format!("/people?once={id}")).into_response(),
+        None => Redirect::to("/people?error=Could+not+show+the+link").into_response(),
     }
-    Redirect::to(&to).into_response()
 }
 
 /// The invitation is a link to this forge, so it needs to know its own
 /// address; a proxy in front says so, and otherwise the cookie policy
 /// already tells us whether this is https.
 fn join_link(app: &AppState, headers: &HeaderMap, secret: &str) -> String {
+    if let Some(base) = app.public_url() {
+        return format!("{base}/join?token={}", urlencode(secret));
+    }
     let host = headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
@@ -1289,6 +1335,9 @@ async fn agents_page(
     viewer: Viewer,
     Query(flash): Query<Flash>,
 ) -> Response {
+    if !viewer.1.admin {
+        return not_found();
+    }
     let data = app.with_store(|store| {
         let mut agents = Vec::new();
         for principal in store.principals()? {
@@ -1301,13 +1350,14 @@ async fn agents_page(
         let repos: Vec<String> = store.repos()?.into_iter().map(|r| r.name).collect();
         Ok::<_, cairn_core::CoreError>((agents, repos))
     });
+    let once = take(&app, &viewer.0, flash.once.as_deref());
     match data {
         Ok((agents, repos)) => views::agents(
             theme,
             &viewer,
             &agents,
             &repos,
-            flash.secret.as_deref(),
+            once.secret.as_deref(),
             flash.error.as_deref(),
         )
         .into_response(),
@@ -1354,12 +1404,22 @@ async fn agent_action(
     viewer: Viewer,
     Form(form): Form<AgentForm>,
 ) -> Response {
+    if !viewer.1.admin {
+        return not_found();
+    }
     let back = |error: Option<String>, secret: Option<String>| match (error, secret) {
         (Some(error), _) => {
             Redirect::to(&format!("/agents?error={}", urlencode(&error))).into_response()
         }
         (None, Some(secret)) => {
-            Redirect::to(&format!("/agents?secret={}", urlencode(&secret))).into_response()
+            let once = Once {
+                secret: Some(secret),
+                mailed: None,
+            };
+            match park(&app, &viewer.0, &once) {
+                Some(id) => Redirect::to(&format!("/agents?once={id}")).into_response(),
+                None => Redirect::to("/agents?error=Could+not+show+the+token").into_response(),
+            }
         }
         _ => Redirect::to("/agents").into_response(),
     };
@@ -1480,6 +1540,10 @@ fn chrome_for(app: &AppState, who: &PrincipalId) -> Result<Chrome, cairn_core::C
         let working = store
             .active_sessions()?
             .into_iter()
+            // Leases were gathered from readable repositories only, so a
+            // session with no lease here is working somewhere the viewer
+            // may not see, and is not shown.
+            .filter(|session| leases.iter().any(|l| l.session == session.id))
             .map(|session| {
                 let lease = leases.iter().find(|l| l.session == session.id);
                 Working {
@@ -1527,7 +1591,10 @@ async fn set_theme(headers: HeaderMap, Form(form): Form<ThemeForm>) -> Response 
     let value = if form.to == "light" { "light" } else { "dark" };
     let cookie = format!("{THEME_COOKIE}={value}; Path=/; SameSite=Lax; Max-Age=31536000");
     // Return where they were: the referer, or the repo root.
-    let back = if form.back.starts_with('/') {
+    let back = if form.back.starts_with('/')
+        && !form.back.starts_with("//")
+        && !form.back.starts_with("/\\")
+    {
         form.back
     } else {
         headers
@@ -1950,7 +2017,13 @@ async fn login_submit(
             return Redirect::to("/login?error=That+name+and+password+do+not+match")
                 .into_response();
         };
-        return if app.with_store(|s| s.password_matches(&principal, &password)) {
+        let (hash, real) = app.with_store(|s| s.password_hash_for_check(&principal));
+        let matches = tokio::task::spawn_blocking(move || {
+            cairn_core::verify_password(&password, &hash) && real
+        })
+        .await
+        .unwrap_or(false);
+        return if matches {
             match app.start_session(&principal, user_agent(&headers)) {
                 Ok(session) => signed_in(&app, SESSION_COOKIE, &session),
                 Err(err) => oops(err),
@@ -2023,6 +2096,27 @@ fn readable(app: &AppState, viewer: &Viewer, repo: &str) -> Result<Repo, Box<Res
         Ok(None) => Err(Box::new(not_found())),
         Err(err) => Err(Box::new(oops(err))),
     }
+}
+
+/// What a page shows exactly once, carried across the redirect by id.
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct Once {
+    secret: Option<String>,
+    mailed: Option<String>,
+}
+
+fn park(app: &AppState, who: &PrincipalId, once: &Once) -> Option<String> {
+    let payload = serde_json::to_string(once).ok()?;
+    app.with_store(|s| s.put_flash(who, &payload)).ok()
+}
+
+fn take(app: &AppState, who: &PrincipalId, id: Option<&str>) -> Once {
+    let Some(id) = id else { return Once::default() };
+    app.with_store(|s| s.take_flash(who, id))
+        .ok()
+        .flatten()
+        .and_then(|p| serde_json::from_str(&p).ok())
+        .unwrap_or_default()
 }
 
 /// An error as a page should say it: the message, without the kind the
@@ -2222,7 +2316,7 @@ fn sidebar_data(
     Ok(Sidebar {
         open_changes,
         queue: app.with_store(|s| s.queue_for(repo, target))?,
-        sessions: app.with_store(|s| s.active_sessions())?,
+        sessions: app.with_store(|s| s.active_sessions_in(repo))?,
         leases: app.with_store(|s| s.live_leases(repo))?,
         numbers,
     })
@@ -2596,8 +2690,9 @@ fn landing_data(
     needs_you.truncate(8);
 
     let latest = app.with_store(|s| s.latest_seq())?.0;
-    let events =
-        app.with_store(|s| s.events_after(cairn_core::EventSeq((latest - 200).max(0)), 220))?;
+    let events = app.with_store(|s| {
+        s.events_for_repo(repo, cairn_core::EventSeq((latest - 200).max(0)), 220)
+    })?;
     let outcomes: Vec<_> = events
         .iter()
         .rev()
@@ -2650,7 +2745,7 @@ fn landing_data(
         queue: app.with_store(|s| s.queue_for(repo, target))?,
         outcomes,
         live,
-        sessions: app.with_store(|s| s.active_sessions())?,
+        sessions: app.with_store(|s| s.active_sessions_in(repo))?,
         numbers,
         latest_seq: latest,
     })

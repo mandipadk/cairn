@@ -314,6 +314,10 @@ impl GitStore {
             &["config", "receive.procReceiveRefs", "refs/for"],
         )
         .await?;
+        // A half-finished import must not be fetchable by anyone who can
+        // read the repository.
+        self.run(Some(&path), &["config", "transfer.hideRefs", "refs/import"])
+            .await?;
         for (hook, script) in [
             ("proc-receive", HOOK_SCRIPT),
             ("pre-receive", PRE_RECEIVE_SCRIPT),

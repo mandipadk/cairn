@@ -160,8 +160,21 @@ whoever runs the forge.
 ## Exposure
 
 Before putting a forge somewhere strangers can reach it: serve it over
-HTTPS and pass `--secure-cookies`, keep `--dev` off, and note what is
-and is not defended.
+HTTPS, pass `--secure-cookies`, set `--public-url` (or `CAIRN_PUBLIC_URL`)
+to the address people use, keep `--dev` off, and note what is and is not
+defended. The public URL is the only authority on where the forge lives:
+every link it mails - invitations, confirmations, resets, sign-in links -
+is built from it and never from a request's `Host` header, and passkeys
+bind to it. Without it, links are built from the request, which is fine
+on a laptop and unsafe anywhere else.
+
+Some actions spend the operator's resources and are therefore the
+operator's to authorise, not a repository owner's: setting a mirror (the
+push carries the forge's mirror credential), importing history (the forge
+connects out on the caller's behalf; only `https://` sources are
+accepted), and registering agents. Minting a token for somebody else,
+and revoking another person's token or grant, are likewise the unscoped
+admin's.
 
 Responses carry a strict content policy, frame and sniffing protections,
 and HSTS. Sign-in attempts are rate limited per source address — behind a

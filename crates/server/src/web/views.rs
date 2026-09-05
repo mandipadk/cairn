@@ -4,6 +4,7 @@
 
 use super::diff::{FileDiff, LineKind};
 use super::{Brief, LandingData, Sidebar, Viewer};
+use cairn_core::Anchor;
 use cairn_core::{
     BrowserSession, Change, ChangeState, Claim, Contact, Disposition, Envelope, Event, HitKind,
     Notice, PasskeyRecord, PolicyTrace, Repo, Revision, Task, Verdict, Verification, Visibility,
@@ -2279,6 +2280,16 @@ fn event_row(numbers: &Refs, envelope: &Envelope) -> Markup {
     }
 }
 
+/// Where a thread sits, in the words a reader would use.
+fn anchor_words(anchor: &Anchor) -> String {
+    match anchor {
+        Anchor::Change => String::new(),
+        Anchor::Line { path, line, .. } => format!(" at {path}:{line}"),
+        Anchor::Claim { .. } => " on a claim".into(),
+        Anchor::Verdict { .. } => " on a verdict".into(),
+    }
+}
+
 fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
     let actor = envelope.actor.as_str();
     match &envelope.event {
@@ -2425,6 +2436,37 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
             "dot idle",
             html! {
                 b { (principal.as_str()) } " asked for a new sign-in link"
+            },
+        ),
+        Event::ThreadOpened {
+            change,
+            thread_kind,
+            anchor,
+            ..
+        } => (
+            "dot idle",
+            html! {
+                b { (actor) } " raised a " (thread_kind.as_str()) " on "
+                (change_num(numbers, change.as_str())) (anchor_words(anchor))
+            },
+        ),
+        Event::ThreadReplied { change, .. } => (
+            "dot idle",
+            html! {
+                b { (actor) } " replied in a thread on " (change_num(numbers, change.as_str()))
+            },
+        ),
+        Event::ThreadResolved {
+            change,
+            how,
+            revision,
+            ..
+        } => (
+            "dot ok",
+            html! {
+                b { (actor) } " resolved a thread on " (change_num(numbers, change.as_str()))
+                " as " (how.as_str())
+                @if let Some(revision) = revision { " in revision " (revision) }
             },
         ),
         Event::TeamMemberRemoved { team, member } => (

@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 12;
+const SCHEMA_VERSION: i64 = 13;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -338,6 +338,32 @@ CREATE TABLE IF NOT EXISTS verdicts (
   by        TEXT NOT NULL
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_verdicts_change ON verdicts (change_id, revision);
+
+CREATE TABLE IF NOT EXISTS threads (
+  id        TEXT PRIMARY KEY,
+  change_id TEXT NOT NULL,
+  revision  INTEGER NOT NULL,
+  anchor    TEXT NOT NULL,
+  kind      TEXT NOT NULL,
+  body      TEXT NOT NULL,
+  by        TEXT NOT NULL,
+  at        TEXT NOT NULL,
+  resolved_how TEXT,
+  resolved_revision INTEGER,
+  resolved_note TEXT,
+  resolved_by TEXT,
+  resolved_at TEXT
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_threads_change ON threads (change_id, revision);
+
+CREATE TABLE IF NOT EXISTS thread_replies (
+  seq       INTEGER PRIMARY KEY,
+  thread_id TEXT NOT NULL,
+  by        TEXT NOT NULL,
+  body      TEXT NOT NULL,
+  at        TEXT NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_thread_replies_thread ON thread_replies (thread_id);
 ";
 
 /// Every table derived from the log.
@@ -365,6 +391,8 @@ const PROJECTION_TABLES: &[&str] = &[
     "merge_queue",
     "verifications",
     "verdicts",
+    "threads",
+    "thread_replies",
 ];
 
 /// An event together with the audience its scope implies: the repository
@@ -769,6 +797,9 @@ fn record_scope(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
         | ClaimAttached { change, .. }
         | ClaimVerified { change, .. }
         | VerdictGiven { change, .. }
+        | ThreadOpened { change, .. }
+        | ThreadReplied { change, .. }
+        | ThreadResolved { change, .. }
         | ChangeEnqueued { change }
         | ChangeDequeued { change, .. }
         | ChangeMerged { change, .. }
@@ -1009,6 +1040,12 @@ fn record_notices(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             .query_row(params![name], |row| row.get(0))
             .optional()?)
     };
+    let thread_ref = |id: &str| -> CoreResult<Option<(String, String)>> {
+        Ok(tx
+            .prepare_cached("SELECT by, kind FROM threads WHERE id = ?")?
+            .query_row(params![id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .optional()?)
+    };
     let task_ref = |id: &str| -> CoreResult<Option<(String, String)>> {
         Ok(tx
             .prepare_cached("SELECT created_by, title FROM tasks WHERE id = ?")?
@@ -1036,6 +1073,58 @@ fn record_notices(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             )
         }),
 
+        ThreadOpened {
+            change,
+            thread_kind,
+            ..
+        } => change_ref(change.as_str())?.map(|c| {
+            (
+                c.owner,
+                "thread",
+                Some(c.repo.clone()),
+                Some(change.as_str().to_owned()),
+                Some(c.number),
+                format!("{actor} raised a {} on #{}", thread_kind.as_str(), c.number),
+            )
+        }),
+        ThreadReplied { thread, change, .. } => {
+            // The person who opened the thread hears about a reply; when
+            // they are the one replying, the change's owner does instead.
+            match (thread_ref(thread.as_str())?, change_ref(change.as_str())?) {
+                (Some((opener, kind)), Some(c)) => {
+                    let recipient = if opener == actor { c.owner } else { opener };
+                    Some((
+                        recipient,
+                        "reply",
+                        Some(c.repo.clone()),
+                        Some(change.as_str().to_owned()),
+                        Some(c.number),
+                        format!("{actor} replied to a {kind} on #{}", c.number),
+                    ))
+                }
+                _ => None,
+            }
+        }
+        ThreadResolved {
+            thread,
+            change,
+            how,
+            ..
+        } => match (thread_ref(thread.as_str())?, change_ref(change.as_str())?) {
+            (Some((opener, kind)), Some(c)) => Some((
+                opener,
+                "resolved",
+                Some(c.repo.clone()),
+                Some(change.as_str().to_owned()),
+                Some(c.number),
+                format!(
+                    "{actor} resolved your {kind} on #{} as {}",
+                    c.number,
+                    how.as_str()
+                ),
+            )),
+            _ => None,
+        },
         VerdictGiven {
             change,
             domain,
@@ -1673,6 +1762,48 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                 ],
             )?;
         }
+        Event::ThreadOpened {
+            thread,
+            change,
+            revision,
+            anchor,
+            thread_kind,
+            body,
+        } => {
+            tx.execute(
+                "INSERT INTO threads (id, change_id, revision, anchor, kind, body, by, at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    thread.as_str(),
+                    change.as_str(),
+                    revision,
+                    serde_json::to_string(anchor).expect("anchor serializes"),
+                    thread_kind.as_str(),
+                    body,
+                    actor,
+                    env.ts
+                ],
+            )?;
+        }
+        Event::ThreadReplied { thread, body, .. } => {
+            tx.execute(
+                "INSERT INTO thread_replies (seq, thread_id, by, body, at) VALUES (?, ?, ?, ?, ?)",
+                params![env.seq.0, thread.as_str(), actor, body, env.ts],
+            )?;
+        }
+        Event::ThreadResolved {
+            thread,
+            how,
+            revision,
+            note,
+            ..
+        } => {
+            tx.execute(
+                "UPDATE threads SET resolved_how = ?, resolved_revision = ?, resolved_note = ?,
+                        resolved_by = ?, resolved_at = ? WHERE id = ?",
+                params![how.as_str(), revision, note, actor, env.ts, thread.as_str()],
+            )?;
+        }
         Event::ChangeEnqueued { change } => {
             tx.execute(
                 "INSERT INTO merge_queue (change_id, repo, target, enqueued_by, enqueued_seq)
@@ -1840,6 +1971,7 @@ mod concurrency_tests {
                     require_runner_verification: false,
                     independence: Independence::None,
                     required_domains: Vec::new(),
+                    require_concerns_resolved: true,
                 },
             )
             .unwrap();

@@ -1473,6 +1473,7 @@ fn a_repo_chooses_the_rules_its_work_must_meet() {
     let strict = cairn_core::Policy {
         require_runner_verification: true,
         required_domains: vec![ReviewDomain::Security],
+        require_concerns_resolved: true,
         ..cairn_core::Policy::default()
     };
 
@@ -1540,6 +1541,7 @@ fn a_repo_chooses_the_rules_its_work_must_meet() {
                 independence: cairn_core::Independence::None,
                 require_runner_verification: false,
                 required_domains: vec![],
+                require_concerns_resolved: true,
             },
         )
         .unwrap();

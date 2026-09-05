@@ -81,6 +81,13 @@ pub fn router(state: AppState) -> Router {
             "/api/changes/{id}/verdicts",
             post(routes::give_verdict).get(routes::list_verdicts),
         )
+        .route(
+            "/api/changes/{id}/threads",
+            post(routes::open_thread).get(routes::list_threads),
+        )
+        .route("/api/threads/{id}", get(routes::get_thread))
+        .route("/api/threads/{id}/reply", post(routes::reply_thread))
+        .route("/api/threads/{id}/resolve", post(routes::resolve_thread))
         .route("/api/claims/{id}/verify", post(routes::verify_claim))
         .route(
             "/api/changes/{id}/verifications",

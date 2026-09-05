@@ -79,6 +79,9 @@ random_id!(
     /// One independent re-execution of a claim.
     VerificationId, "vr");
 random_id!(
+    /// One discussion thread on a change.
+    ThreadId, "th");
+random_id!(
     /// An API token's public identity (never the secret).
     TokenId, "tok");
 random_id!(

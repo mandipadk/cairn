@@ -9,17 +9,17 @@
 use crate::error::{CoreError, CoreResult};
 use crate::event::{Envelope, Event};
 use crate::id::{
-    ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, TokenId, VerdictId, VerificationId,
-    random_token_secret, validate_slug,
+    ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, ThreadId, TokenId, VerdictId,
+    VerificationId, random_token_secret, validate_slug,
 };
 use crate::leases::{self, Overlap};
 use crate::policy::{self, PolicyTrace};
 use crate::queries::raw;
 use crate::store::{Store, append};
 use crate::types::{
-    BrowserSession, Capability, ChangeSpec, ChangeState, ClaimSpec, Contact, Disposition, Mirror,
-    ObjectFormat, PasskeyRecord, Policy, Principal, PrincipalKind, ReviewDomain, SessionState,
-    TaskState, Visibility,
+    Anchor, BrowserSession, Capability, Change, ChangeSpec, ChangeState, ClaimSpec, Contact,
+    Disposition, Mirror, ObjectFormat, PasskeyRecord, Policy, Principal, PrincipalKind, Resolution,
+    ReviewDomain, SessionState, TaskState, ThreadKind, Visibility,
 };
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
@@ -89,6 +89,35 @@ fn authorize(
          POST /api/grants {{\"grantee\": \"{actor}\", \"actions\": [\"{}\"]}}",
         action.as_str(),
         action.as_str()
+    )))
+}
+
+/// Who may take part in a change's discussion: the repository's owner,
+/// the change's owner, or anyone holding a capability on the repository.
+/// Reading alone is not enough - a concern is a commitment the change
+/// then carries, and that is not for passers-by to impose.
+fn may_discuss(tx: &Transaction, actor: &PrincipalId, change: &Change) -> CoreResult<Principal> {
+    let principal = ensure_actor(tx, actor)?;
+    if change.owner == *actor {
+        return Ok(principal);
+    }
+    let any = [
+        Capability::Review,
+        Capability::Push,
+        Capability::Merge,
+        Capability::Verify,
+        Capability::Task,
+    ];
+    if any
+        .iter()
+        .any(|&c| authorize(tx, actor, c, Some(&change.repo)).is_ok())
+    {
+        return Ok(principal);
+    }
+    Err(CoreError::Forbidden(format!(
+        "{actor} has no part in {}: its owner, the change's owner, or a holder of a \
+         capability on it may take part in discussion",
+        change.repo
     )))
 }
 
@@ -1835,6 +1864,201 @@ impl Store {
         )?;
         tx.commit()?;
         Ok((verdict, env))
+    }
+
+    /// Start a discussion on a change, anchored to a line of a revision's
+    /// diff, a claim, a verdict, or the change itself. A claim or verdict
+    /// anchor pins the revision it was made on; otherwise the thread is
+    /// on the revision given, or the latest.
+    pub fn open_thread(
+        &mut self,
+        actor: &PrincipalId,
+        change: &ChangeId,
+        revision: Option<i64>,
+        anchor: Anchor,
+        kind: ThreadKind,
+        body: &str,
+    ) -> CoreResult<(ThreadId, Envelope)> {
+        let tx = self.conn.transaction()?;
+        require(!body.trim().is_empty(), || {
+            "a thread needs something to say".into()
+        })?;
+        bounded("thread", body, MAX_TEXT)?;
+        let current = raw::change(&tx, change.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
+        may_discuss(&tx, actor, &current)?;
+        if current.state != ChangeState::Open {
+            return Err(CoreError::Conflict(format!(
+                "change {change} is {}, not open",
+                current.state.as_str()
+            )));
+        }
+        let revision = match &anchor {
+            Anchor::Claim { claim } => {
+                raw::claim(&tx, claim.as_str())?
+                    .filter(|c| c.change == *change)
+                    .ok_or_else(|| {
+                        CoreError::NotFound(format!("claim {} on change {change}", claim.as_str()))
+                    })?
+                    .revision
+            }
+            Anchor::Verdict { verdict } => {
+                raw::verdict_ref(&tx, verdict.as_str())?
+                    .filter(|(on, _)| on == change.as_str())
+                    .ok_or_else(|| {
+                        CoreError::NotFound(format!(
+                            "verdict {} on change {change}",
+                            verdict.as_str()
+                        ))
+                    })?
+                    .1
+            }
+            Anchor::Line { path, line, .. } => {
+                require(!path.trim().is_empty() && *line >= 1, || {
+                    "a line anchor needs a path and a line number, counted from 1".into()
+                })?;
+                bounded("path", path, MAX_TITLE)?;
+                revision.unwrap_or(current.latest_revision)
+            }
+            Anchor::Change => revision.unwrap_or(current.latest_revision),
+        };
+        require((1..=current.latest_revision).contains(&revision), || {
+            format!("change {change} has no revision {revision}")
+        })?;
+        let thread = ThreadId::generate();
+        let env = append(
+            &tx,
+            actor,
+            Event::ThreadOpened {
+                thread: thread.clone(),
+                change: change.clone(),
+                revision,
+                anchor,
+                thread_kind: kind,
+                body: body.to_owned(),
+            },
+        )?;
+        tx.commit()?;
+        Ok((thread, env))
+    }
+
+    /// Say something in a thread. Whoever opened it may always reply;
+    /// anyone else needs a part in the repository.
+    pub fn reply_thread(
+        &mut self,
+        actor: &PrincipalId,
+        thread: &ThreadId,
+        body: &str,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        require(!body.trim().is_empty(), || {
+            "a reply needs something to say".into()
+        })?;
+        bounded("reply", body, MAX_TEXT)?;
+        let existing = raw::thread(&tx, thread.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("thread {}", thread.as_str())))?;
+        let current = raw::change(&tx, existing.change.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("change {}", existing.change)))?;
+        if existing.by == *actor {
+            ensure_actor(&tx, actor)?;
+        } else {
+            may_discuss(&tx, actor, &current)?;
+        }
+        let env = append(
+            &tx,
+            actor,
+            Event::ThreadReplied {
+                thread: thread.clone(),
+                change: existing.change.clone(),
+                body: body.to_owned(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
+    /// Close a thread and say how. Withdrawing is the opener's alone;
+    /// overruling is for the change's owner or a reviewer, and never the
+    /// opener; "fixed" names a revision after the one the thread was
+    /// opened on. Resolving twice is refused, so a resolution is never
+    /// quietly replaced.
+    pub fn resolve_thread(
+        &mut self,
+        actor: &PrincipalId,
+        thread: &ThreadId,
+        how: Resolution,
+        revision: Option<i64>,
+        note: &str,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        bounded("resolution note", note, MAX_TEXT)?;
+        let existing = raw::thread(&tx, thread.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("thread {}", thread.as_str())))?;
+        if existing.resolved.is_some() {
+            return Err(CoreError::Conflict(format!(
+                "thread {} is already resolved",
+                thread.as_str()
+            )));
+        }
+        let current = raw::change(&tx, existing.change.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("change {}", existing.change)))?;
+        let opener = existing.by == *actor;
+        let owner_or_reviewer = current.owner == *actor
+            || authorize(&tx, actor, Capability::Review, Some(&current.repo)).is_ok();
+        match how {
+            Resolution::Withdrawn if !opener => {
+                return Err(CoreError::Forbidden(
+                    "only whoever opened a thread can withdraw it".into(),
+                ));
+            }
+            Resolution::Overruled if opener => {
+                return Err(CoreError::Forbidden(
+                    "you cannot overrule your own thread; withdraw it or answer it".into(),
+                ));
+            }
+            Resolution::Overruled if !owner_or_reviewer => {
+                return Err(CoreError::Forbidden(
+                    "overruling a thread takes the change's owner or a reviewer".into(),
+                ));
+            }
+            _ => {}
+        }
+        if opener {
+            ensure_actor(&tx, actor)?;
+        } else {
+            may_discuss(&tx, actor, &current)?;
+        }
+        let revision = match how {
+            Resolution::Fixed => {
+                let fixed = revision.ok_or_else(|| {
+                    CoreError::Invalid("a fix names the revision that made it".into())
+                })?;
+                require(
+                    fixed > existing.revision && fixed <= current.latest_revision,
+                    || {
+                        format!(
+                            "revision {fixed} is not a revision after {} on this change",
+                            existing.revision
+                        )
+                    },
+                )?;
+                Some(fixed)
+            }
+            _ => None,
+        };
+        let env = append(
+            &tx,
+            actor,
+            Event::ThreadResolved {
+                thread: thread.clone(),
+                change: existing.change.clone(),
+                how,
+                revision,
+                note: note.trim().to_owned(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
     }
 
     /// Declare which paths a session expects to touch, and learn who

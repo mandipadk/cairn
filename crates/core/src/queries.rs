@@ -5,7 +5,7 @@
 //! `Connection`), keeping validation and public reads on one code path.
 
 use crate::error::{CoreError, CoreResult};
-use crate::id::{ChangeId, PrincipalId, SessionId, TaskId};
+use crate::id::{ChangeId, PrincipalId, SessionId, TaskId, ThreadId};
 use crate::store::Store;
 use crate::types::{
     Capability, Change, ChangeState, Claim, ClaimKind, Disposition, Grant, Lease, Lesson, Mirror,
@@ -13,6 +13,7 @@ use crate::types::{
     ReviewDomain, Revision, Session, SessionState, Task, TaskState, TokenInfo, Verdict,
     Verification, Visibility,
 };
+use crate::types::{Reply, Resolution, Resolved, Thread, ThreadKind};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 fn corrupt(at: &str, reason: impl std::fmt::Display) -> CoreError {
@@ -463,6 +464,121 @@ pub(crate) mod raw {
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn verdict_ref(conn: &Connection, id: &str) -> CoreResult<Option<(String, i64)>> {
+        Ok(conn
+            .prepare_cached("SELECT change_id, revision FROM verdicts WHERE id = ?")?
+            .query_row(params![id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .optional()?)
+    }
+
+    const THREAD_COLUMNS: &str = "id, change_id, revision, anchor, kind, body, by, at, \
+         resolved_how, resolved_revision, resolved_note, resolved_by, resolved_at";
+
+    type ThreadRow = (
+        String,
+        String,
+        i64,
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+
+    fn threads_where(
+        conn: &Connection,
+        clause: &str,
+        params: &[&dyn rusqlite::ToSql],
+    ) -> CoreResult<Vec<Thread>> {
+        let sql = format!("SELECT {THREAD_COLUMNS} FROM threads WHERE {clause} ORDER BY rowid");
+        let heads = conn
+            .prepare_cached(&sql)?
+            .query_map(params, |row| {
+                Ok::<ThreadRow, _>((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                    row.get(10)?,
+                    row.get(11)?,
+                    row.get(12)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        heads
+            .into_iter()
+            .map(
+                |(id, change, revision, anchor, kind, body, by, at, how, rrev, note, rby, rat)| {
+                    let where_ = format!("thread {id}");
+                    let replies = conn
+                    .prepare_cached(
+                        "SELECT by, body, at FROM thread_replies WHERE thread_id = ? ORDER BY seq",
+                    )?
+                    .query_map(params![id], |row| {
+                        Ok(Reply {
+                            by: PrincipalId(row.get(0)?),
+                            body: row.get(1)?,
+                            at: row.get(2)?,
+                        })
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                    let resolved = match how {
+                        Some(how) => Some(Resolved {
+                            how: parsed(&where_, &how, Resolution::parse)?,
+                            revision: rrev,
+                            note: note.unwrap_or_default(),
+                            by: PrincipalId(rby.unwrap_or_default()),
+                            at: rat.unwrap_or_default(),
+                        }),
+                        None => None,
+                    };
+                    Ok(Thread {
+                        anchor: serde_json::from_str(&anchor).map_err(|e| corrupt(&where_, e))?,
+                        kind: parsed(&where_, &kind, ThreadKind::parse)?,
+                        id: ThreadId(id),
+                        change: ChangeId(change),
+                        revision,
+                        body,
+                        by: PrincipalId(by),
+                        at,
+                        replies,
+                        resolved,
+                    })
+                },
+            )
+            .collect()
+    }
+
+    /// Every thread on a change, whatever revision it was opened on,
+    /// oldest first.
+    pub fn threads_on(conn: &Connection, change: &str) -> CoreResult<Vec<Thread>> {
+        threads_where(conn, "change_id = ?", &[&change])
+    }
+
+    pub fn thread(conn: &Connection, id: &str) -> CoreResult<Option<Thread>> {
+        Ok(threads_where(conn, "id = ?", &[&id])?.pop())
+    }
+
+    /// Concerns nobody has resolved yet, on any revision of the change.
+    pub fn open_concerns(conn: &Connection, change: &str) -> CoreResult<Vec<Thread>> {
+        threads_where(
+            conn,
+            "change_id = ? AND kind = 'concern' AND resolved_how IS NULL",
+            &[&change],
+        )
     }
 
     pub fn verdicts_on(conn: &Connection, change: &str, revision: i64) -> CoreResult<Vec<Verdict>> {
@@ -1158,6 +1274,14 @@ impl Store {
 
     pub fn verdicts_on(&self, change: &ChangeId, revision: i64) -> CoreResult<Vec<Verdict>> {
         raw::verdicts_on(&self.conn, change.as_str(), revision)
+    }
+
+    pub fn threads_on(&self, change: &ChangeId) -> CoreResult<Vec<Thread>> {
+        raw::threads_on(&self.conn, change.as_str())
+    }
+
+    pub fn thread(&self, id: &ThreadId) -> CoreResult<Option<Thread>> {
+        raw::thread(&self.conn, id.as_str())
     }
 
     pub fn verifications_on(

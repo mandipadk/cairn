@@ -14,6 +14,9 @@ Cairn records the causal chain as structured, subscribable data.
 - **Claims** — reproducible verification assertions, including what was
   deliberately *not* checked.
 - **Verdicts** — typed review judgments across domains.
+- **Threads** — discussion anchored to a line, a claim, a verdict or the
+  change. A concern is a commitment the change carries until it is
+  resolved, and the resolution says how.
 - **Merges** — decided by explainable policy, with the full evaluation
   trace recorded in the event log.
 
@@ -126,6 +129,20 @@ either, because that disagreement is real information. A runner that
 could not run the command at all — a missing toolchain, a full disk —
 refuses and records nothing, since "I could not check" is not evidence
 that the claim is false.
+
+## Discussion as evidence
+
+Discussion is part of the graph, not a comment box beside it. A thread is
+anchored to a thing — a line of a revision's diff, a claim, a verdict, or
+the change — and has a kind that means something: a concern must be
+resolved before the change lands, a question should be answered, a note
+is for the record. Resolving says how: answered in the thread, fixed by a
+named later revision, withdrawn by whoever raised it, or overruled by the
+change's owner or a reviewer, on the record. Every step is an event, so
+an agent picking up revision three can read what was raised on revision
+two and what became of it, and a merge trace shows which concerns stood
+and how each was closed. Taking part needs a hand in the repository: its
+owner, the change's owner, or a holder of any capability on it.
 
 ## Blame
 

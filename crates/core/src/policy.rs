@@ -70,6 +70,29 @@ pub(crate) fn evaluate_against(
         evidence: format!("latest revision is {revision}"),
     });
 
+    if policy.require_concerns_resolved {
+        let open = raw::open_concerns(conn, change.id.as_str())?;
+        requirements.push(Requirement {
+            description: "no concern raised in discussion is left unresolved".into(),
+            satisfied: open.is_empty(),
+            evidence: if open.is_empty() {
+                "no unresolved concerns".into()
+            } else {
+                open.iter()
+                    .map(|t| {
+                        format!(
+                            "{} by {} on revision {}",
+                            t.id.as_str(),
+                            t.by.as_str(),
+                            t.revision
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
+        });
+    }
+
     let claims = raw::claims_on(conn, change.id.as_str(), revision)?;
     if policy.require_executed_check {
         let executed: Vec<_> = claims

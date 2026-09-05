@@ -151,6 +151,25 @@ fn dispatch(client: &ApiClient, name: &str, args: &Value) -> Result<(u16, Value)
             &format!("/api/changes/{}/verdicts", need(args, "change")?),
             args,
         ),
+        "open_thread" => client.post(
+            &format!("/api/changes/{}/threads", need(args, "change")?),
+            args,
+        ),
+        "list_threads" => {
+            let change = need(args, "change")?;
+            match args.get("state").and_then(Value::as_str) {
+                Some(state) => client.get(&format!("/api/changes/{change}/threads?state={state}")),
+                None => client.get(&format!("/api/changes/{change}/threads")),
+            }
+        }
+        "reply_thread" => client.post(
+            &format!("/api/threads/{}/reply", need(args, "thread")?),
+            args,
+        ),
+        "resolve_thread" => client.post(
+            &format!("/api/threads/{}/resolve", need(args, "thread")?),
+            args,
+        ),
         "merge_readiness" => {
             client.get(&format!("/api/changes/{}/readiness", need(args, "change")?))
         }
@@ -343,6 +362,62 @@ fn tool_definitions() -> Vec<Value> {
                 "domain": { "type": "string", "enum": ["correctness", "security", "design", "style"] },
                 "disposition": { "type": "string", "enum": ["approve", "concern", "block"] },
                 "rationale": s("Why"),
+            }),
+        ),
+        tool(
+            "open_thread",
+            "Start a discussion on a change, anchored to a diff line, a claim, a verdict, or \
+             the change itself. Kinds mean things: a `concern` must be resolved before the \
+             change can land; a `question` should be answered; a `note` is for the record.",
+            &["change", "anchor", "kind", "body"],
+            json!({
+                "change": s("Change id"),
+                "revision": { "type": "integer", "description": "Revision the thread is on (defaults to latest; a claim or verdict anchor pins its own)" },
+                "anchor": {
+                    "type": "object",
+                    "description": "What the thread is about",
+                    "required": ["on"],
+                    "properties": {
+                        "on": { "type": "string", "enum": ["line", "claim", "verdict", "change"] },
+                        "path": s("File path, for a line anchor"),
+                        "side": { "type": "string", "enum": ["old", "new"], "description": "Which side of the diff the line number counts on (line anchors)" },
+                        "line": { "type": "integer", "description": "Line number, counted from 1 (line anchors)" },
+                        "claim": s("Claim id (claim anchors)"),
+                        "verdict": s("Verdict id (verdict anchors)"),
+                    }
+                },
+                "kind": { "type": "string", "enum": ["question", "concern", "note"] },
+                "body": s("What you want to say"),
+            }),
+        ),
+        tool(
+            "list_threads",
+            "List the discussion on a change: every thread with its anchor, replies and \
+             resolution, oldest first. `state=open` shows what still stands.",
+            &["change"],
+            json!({
+                "change": s("Change id"),
+                "state": { "type": "string", "enum": ["open", "resolved"] },
+            }),
+        ),
+        tool(
+            "reply_thread",
+            "Reply in a thread.",
+            &["thread", "body"],
+            json!({ "thread": s("Thread id"), "body": s("Your reply") }),
+        ),
+        tool(
+            "resolve_thread",
+            "Close a thread and say how: `answered` in the thread; `fixed` by a later \
+             revision you name; `withdrawn` (only by whoever opened it); or `overruled` \
+             (the change's owner or a reviewer, on the record). Resolving is an event; it \
+             cannot be undone quietly.",
+            &["thread", "how"],
+            json!({
+                "thread": s("Thread id"),
+                "how": { "type": "string", "enum": ["answered", "fixed", "withdrawn", "overruled"] },
+                "revision": { "type": "integer", "description": "The revision that fixed it (required for `fixed`)" },
+                "note": s("A word on why (optional)"),
             }),
         ),
         tool(

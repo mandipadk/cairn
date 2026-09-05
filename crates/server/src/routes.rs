@@ -12,6 +12,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use cairn_core::{Anchor, Resolution, ThreadId, ThreadKind};
 use cairn_core::{
     Capability, Change, ChangeId, ChangeSpec, ChangeState, ClaimId, ClaimSpec, CoreError,
     Disposition, Envelope, EventSeq, GrantId, ObjectFormat, PrincipalId, PrincipalKind, Repo,
@@ -893,6 +894,109 @@ pub struct VerifyClaim {
 
 /// Record an independent re-execution of a claim. Runners call this;
 /// a disputed claim blocks the landing until it is resolved.
+#[derive(Deserialize)]
+pub struct OpenThread {
+    pub revision: Option<i64>,
+    pub anchor: Anchor,
+    pub kind: ThreadKind,
+    pub body: String,
+}
+
+pub async fn open_thread(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Json(body): Json<OpenThread>,
+) -> ApiResult<Json<Value>> {
+    let change = ChangeId(id);
+    let (thread, env) = app.with_store(|s| {
+        s.open_thread(
+            &actor.0,
+            &change,
+            body.revision,
+            body.anchor,
+            body.kind,
+            &body.body,
+        )
+    })?;
+    app.publish(&env);
+    Ok(committed(Some(thread.0), &env))
+}
+
+#[derive(Deserialize)]
+pub struct ThreadQuery {
+    pub revision: Option<i64>,
+    /// `open` or `resolved`; anything else lists both.
+    pub state: Option<String>,
+}
+
+pub async fn list_threads(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Query(query): Query<ThreadQuery>,
+) -> ApiResult<Json<Value>> {
+    let change = ChangeId(id);
+    readable_change(&app, &actor, &change)?;
+    let mut threads = app.with_store(|s| s.threads_on(&change))?;
+    if let Some(revision) = query.revision {
+        threads.retain(|t| t.revision == revision);
+    }
+    match query.state.as_deref() {
+        Some("open") => threads.retain(|t| t.resolved.is_none()),
+        Some("resolved") => threads.retain(|t| t.resolved.is_some()),
+        _ => {}
+    }
+    Ok(Json(json!(threads)))
+}
+
+pub async fn get_thread(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let thread = found(app.with_store(|s| s.thread(&ThreadId(id)))?, "thread")?;
+    readable_change(&app, &actor, &thread.change)?;
+    Ok(Json(json!(thread)))
+}
+
+#[derive(Deserialize)]
+pub struct ReplyThread {
+    pub body: String,
+}
+
+pub async fn reply_thread(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Json(body): Json<ReplyThread>,
+) -> ApiResult<Json<Value>> {
+    let env = app.with_store(|s| s.reply_thread(&actor.0, &ThreadId(id), &body.body))?;
+    app.publish(&env);
+    Ok(committed(None, &env))
+}
+
+#[derive(Deserialize)]
+pub struct ResolveThread {
+    pub how: Resolution,
+    pub revision: Option<i64>,
+    #[serde(default)]
+    pub note: String,
+}
+
+pub async fn resolve_thread(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Json(body): Json<ResolveThread>,
+) -> ApiResult<Json<Value>> {
+    let env = app.with_store(|s| {
+        s.resolve_thread(&actor.0, &ThreadId(id), body.how, body.revision, &body.note)
+    })?;
+    app.publish(&env);
+    Ok(committed(None, &env))
+}
+
 pub async fn verify_claim(
     State(app): State<AppState>,
     actor: Actor,

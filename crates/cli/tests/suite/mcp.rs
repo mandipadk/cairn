@@ -160,6 +160,8 @@ async fn full_agent_workflow_over_mcp() {
         "push_revision",
         "attach_claim",
         "give_verdict",
+        "open_thread",
+        "resolve_thread",
         "merge_readiness",
         "merge_change",
         "list_events",

@@ -1,7 +1,8 @@
 //! Projection types: the current state of the graph, derived from the log.
 
 use crate::id::{
-    ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, TokenId, VerdictId, VerificationId,
+    ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, ThreadId, TokenId, VerdictId,
+    VerificationId,
 };
 use serde::{Deserialize, Serialize};
 
@@ -116,6 +117,54 @@ str_enum!(Disposition {
     Concern => "concern",
     Block => "block",
 });
+
+str_enum!(
+    /// What a discussion thread is for. The kind is a commitment, not a
+    /// label: a concern has to be resolved before the change lands.
+    ThreadKind {
+        /// Something the author should answer; landing does not wait on it.
+        Question => "question",
+        /// Something that has to be dealt with before the change lands.
+        Concern => "concern",
+        /// For the record. Nobody owes a reply.
+        Note => "note",
+    }
+);
+
+str_enum!(
+    /// How a thread was closed. Every resolution says which kind of
+    /// closure it was, so "resolved" is never a euphemism.
+    Resolution {
+        /// Settled in the thread: answered, or found unfounded.
+        Answered => "answered",
+        /// A later revision dealt with it; the resolution names which.
+        Fixed => "fixed",
+        /// Whoever opened it took it back.
+        Withdrawn => "withdrawn",
+        /// The change's owner or a reviewer proceeded over it, on the record.
+        Overruled => "overruled",
+    }
+);
+
+str_enum!(
+    /// Which side of a diff a line number counts on.
+    Side {
+        Old => "old",
+        New => "new",
+    }
+);
+
+/// What a thread is about. Discussion is anchored to a thing in the
+/// graph, never to a page: a line of a revision's diff, a claim, a
+/// verdict, or the change as a whole.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "on", rename_all = "snake_case")]
+pub enum Anchor {
+    Change,
+    Line { path: String, side: Side, line: i64 },
+    Claim { claim: ClaimId },
+    Verdict { verdict: VerdictId },
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Principal {
@@ -368,6 +417,13 @@ pub struct Policy {
     pub require_runner_verification: bool,
     /// Reviewers may be required to cover particular domains.
     pub required_domains: Vec<ReviewDomain>,
+    /// No concern raised in discussion may be left unresolved.
+    #[serde(default = "yes")]
+    pub require_concerns_resolved: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Default for Policy {
@@ -377,6 +433,7 @@ impl Default for Policy {
             independence: Independence::HumanOrTwoModels,
             require_runner_verification: false,
             required_domains: Vec::new(),
+            require_concerns_resolved: true,
         }
     }
 }
@@ -484,6 +541,42 @@ pub struct Verdict {
     pub disposition: Disposition,
     pub rationale: String,
     pub by: PrincipalId,
+}
+
+/// A discussion thread on a change, with everything said in it and how
+/// it was closed, if it was.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Thread {
+    pub id: ThreadId,
+    pub change: ChangeId,
+    /// The revision the thread was opened on. A line anchor counts on
+    /// this revision's diff; a concern stands, whatever revision is
+    /// current, until it is resolved.
+    pub revision: i64,
+    pub anchor: Anchor,
+    pub kind: ThreadKind,
+    pub body: String,
+    pub by: PrincipalId,
+    pub at: String,
+    pub replies: Vec<Reply>,
+    pub resolved: Option<Resolved>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Reply {
+    pub by: PrincipalId,
+    pub body: String,
+    pub at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Resolved {
+    pub how: Resolution,
+    /// The revision that dealt with it, when `how` is `fixed`.
+    pub revision: Option<i64>,
+    pub note: String,
+    pub by: PrincipalId,
+    pub at: String,
 }
 
 #[cfg(test)]

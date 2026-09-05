@@ -44,15 +44,18 @@ pub use commands::{password_acceptable, until_in_days, verify_password};
 pub use error::{CoreError, CoreResult};
 pub use event::{Envelope, Event, EventSeq};
 pub use id::{
-    ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, TokenId, VerdictId, VerificationId,
+    ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, ThreadId, TokenId, VerdictId,
+    VerificationId,
 };
 pub use leases::{Overlap, covers, patterns_overlap};
 pub use policy::{PolicyTrace, Requirement};
 pub use search::{HitKind, SearchHit, SearchQuery};
 pub use store::Store;
+pub use types::Anchor;
 pub use types::{
     BrowserSession, Capability, Change, ChangeSpec, ChangeState, Claim, ClaimKind, ClaimSpec,
     Contact, Disposition, Grant, Independence, Lease, Lesson, Mirror, Notice, ObjectFormat,
-    PasskeyRecord, Policy, Principal, PrincipalKind, Provenance, QueueEntry, Repo, ReviewDomain,
-    Revision, Session, SessionState, Task, TaskState, TokenInfo, Verdict, Verification, Visibility,
+    PasskeyRecord, Policy, Principal, PrincipalKind, Provenance, QueueEntry, Reply, Repo,
+    Resolution, Resolved, ReviewDomain, Revision, Session, SessionState, Side, Task, TaskState,
+    Thread, ThreadKind, TokenInfo, Verdict, Verification, Visibility,
 };

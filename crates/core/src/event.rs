@@ -6,12 +6,13 @@
 //! is the only kind allowed once an event kind ships.
 
 use crate::id::{
-    ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, TokenId, VerdictId, VerificationId,
+    ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, ThreadId, TokenId, VerdictId,
+    VerificationId,
 };
 use crate::policy::PolicyTrace;
 use crate::types::{
-    Capability, ClaimKind, Disposition, Mirror, ObjectFormat, Policy, PrincipalKind, ReviewDomain,
-    SessionState, TaskState, Visibility,
+    Anchor, Capability, ClaimKind, Disposition, Mirror, ObjectFormat, Policy, PrincipalKind,
+    Resolution, ReviewDomain, SessionState, TaskState, ThreadKind, Visibility,
 };
 use serde::{Deserialize, Serialize};
 
@@ -265,6 +266,33 @@ pub enum Event {
         rationale: String,
     },
 
+    /// Somebody started a discussion on a change, anchored to a line, a
+    /// claim, a verdict or the change itself. A concern is a commitment:
+    /// it has to be resolved before the change lands.
+    ThreadOpened {
+        thread: ThreadId,
+        change: ChangeId,
+        revision: i64,
+        anchor: Anchor,
+        thread_kind: ThreadKind,
+        body: String,
+    },
+    ThreadReplied {
+        thread: ThreadId,
+        change: ChangeId,
+        body: String,
+    },
+    /// A thread was closed, and the event says how: answered in the
+    /// thread, fixed by a named later revision, withdrawn by whoever
+    /// opened it, or overruled on the record.
+    ThreadResolved {
+        thread: ThreadId,
+        change: ChangeId,
+        how: Resolution,
+        revision: Option<i64>,
+        note: String,
+    },
+
     /// The change entered the landing queue: from here, landing it —
     /// rebasing if the target moved — is the forge's responsibility.
     ChangeEnqueued {
@@ -335,6 +363,9 @@ impl Event {
             Event::ClaimAttached { .. } => "claim_attached",
             Event::ClaimVerified { .. } => "claim_verified",
             Event::VerdictGiven { .. } => "verdict_given",
+            Event::ThreadOpened { .. } => "thread_opened",
+            Event::ThreadReplied { .. } => "thread_replied",
+            Event::ThreadResolved { .. } => "thread_resolved",
             Event::ChangeEnqueued { .. } => "change_enqueued",
             Event::ChangeDequeued { .. } => "change_dequeued",
             Event::ChangeMerged { .. } => "change_merged",

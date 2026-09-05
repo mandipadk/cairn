@@ -2101,6 +2101,7 @@ pub fn change(page: ChangePage) -> Markup {
                         }
                         @if can_discuss {
                             a class="quiet thread-start" href={ "/" (repo) "/changes/" (change.number) "?r=" (shown) "&at=change#at" } { "Start a thread on the change" }
+                            p class="hint" { "A line number starts a thread on that line." }
                         }
                     }
                     @if change.state == ChangeState::Open {
@@ -2111,7 +2112,7 @@ pub fn change(page: ChangePage) -> Markup {
                             }
                             @for requirement in &trace.requirements {
                                 div class={ "req" @if !requirement.satisfied { " unmet" } } {
-                                    span class="s" { @if requirement.satisfied { "✓" } @else { "✕" } }
+                                    span class="s" { @if requirement.satisfied { "●" } @else { "●" } }
                                     span { (requirement.description) }
                                 }
                             }
@@ -2354,9 +2355,9 @@ fn claim_row(claim: &Claim, verifications: &[Verification]) -> Markup {
     let disputed = runs.iter().any(|v| !v.agrees);
     html! {
         div class="vrow" {
-            @if disputed { span class="s bad" { "!" } }
-            @else if claim.passed { span class="s ok" { "✓" } }
-            @else { span class="s bad" { "✕" } }
+            @if disputed { span class="s bad" { "●" } }
+            @else if claim.passed { span class="s ok" { "●" } }
+            @else { span class="s bad" { "●" } }
             div {
                 b { (claim.kind.as_str()) } " · " (claim.summary)
                 @if let Some(command) = &claim.command {
@@ -2392,9 +2393,9 @@ fn verdict_row(verdict: &Verdict) -> Markup {
     html! {
         div class="vrow" {
             @match verdict.disposition {
-                Disposition::Approve => { span class="s ok" { "✓" } }
+                Disposition::Approve => { span class="s ok" { "●" } }
                 Disposition::Concern => { span class="s un" { "○" } }
-                Disposition::Block => { span class="s bad" { "✕" } }
+                Disposition::Block => { span class="s bad" { "●" } }
             }
             div {
                 div class="who-line" {

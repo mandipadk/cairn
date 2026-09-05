@@ -140,6 +140,10 @@ pub enum Event {
         repo: String,
         to: String,
     },
+    RepoDescribed {
+        repo: String,
+        description: String,
+    },
     RepoArchived {
         repo: String,
     },
@@ -439,6 +443,7 @@ impl Event {
             Event::VisibilitySet { .. } => "visibility_set",
             Event::RepoRenamed { .. } => "repo_renamed",
             Event::RepoArchived { .. } => "repo_archived",
+            Event::RepoDescribed { .. } => "repo_described",
             Event::RepoUnarchived { .. } => "repo_unarchived",
             Event::RepoDeleted { .. } => "repo_deleted",
             Event::RepoTransferOffered { .. } => "repo_transfer_offered",

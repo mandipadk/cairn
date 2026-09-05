@@ -60,6 +60,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/repos/{name}/import", post(routes::import_history))
         .route("/api/repos/{name}/visibility", post(routes::set_visibility))
         .route("/api/repos/{name}/rename", post(routes::rename_repo))
+        .route("/api/repos/{name}/description", post(routes::describe_repo))
         .route("/api/repos/{name}/archive", post(routes::archive_repo))
         .route("/api/repos/{name}/unarchive", post(routes::unarchive_repo))
         .route("/api/repos/{name}/delete", post(routes::delete_repo))

@@ -1021,6 +1021,15 @@ pub fn repo_settings(
                     }
                 }
 
+                div class="sechead later" { b { "Description" } span {} }
+                form class="stack" method="post" action={ "/" (repo.name) "/settings/description" } {
+                    div {
+                        label for="description" { "What this repository is for" }
+                        input id="description" name="description" type="text" autocomplete="off" maxlength="300" value=(repo.description);
+                    }
+                    button class="vbtn" type="submit" { "Save" }
+                }
+
                 div class="sechead later" { b { "Name" } span { (repo.name) } }
                 p class="note" { "Everything follows the new name; the old one answers not found." }
                 form class="stack" method="post" action={ "/" (repo.name) "/settings/rename" } {
@@ -1734,6 +1743,7 @@ pub fn repository(
     readme: Option<&str>,
     sidebar: &Sidebar,
     clone_url: &str,
+    description: &str,
 ) -> Markup {
     layout_reading(
         theme,
@@ -1750,6 +1760,7 @@ pub fn repository(
                             span class="tip" { code { (short(tip)) } }
                         }
                         span class="stats" { "clone " code { (clone_url) } }
+                        @if !description.is_empty() { p class="desc" { (description) } }
                     }
                     @if !path.is_empty() {
                         div class="crumbs" { (breadcrumbs(repo, path)) }
@@ -1937,7 +1948,21 @@ fn is_comment(line: &str) -> bool {
         || t == "#"
 }
 
-pub fn changes(theme: Theme, who: Reading<'_>, repo: &str, changes: &[Change]) -> Markup {
+/// The list of a repository's changes: newest first, filtered by state,
+/// a page at a time, each row saying when it was opened and when it last
+/// moved.
+pub fn changes(
+    theme: Theme,
+    who: Reading<'_>,
+    repo: &str,
+    changes: &[Change],
+    filter: Option<ChangeState>,
+    older: Option<i64>,
+) -> Markup {
+    let filter_href = |state: Option<ChangeState>| match state {
+        Some(state) => format!("/{repo}/changes?state={}", state.as_str()),
+        None => format!("/{repo}/changes"),
+    };
     layout_reading(
         theme,
         who,
@@ -1945,19 +1970,38 @@ pub fn changes(theme: Theme, who: Reading<'_>, repo: &str, changes: &[Change]) -
         Some(Tab::Changes),
         "Changes",
         html! {
-            div class="sechead" { b { "Changes" } span { (changes.len()) } }
+            div class="sechead" {
+                b { "Changes" }
+                span { (changes.len()) @if older.is_some() { " shown" } }
+            }
+            div class="tabs filters" {
+                a class={ "tab" @if filter.is_none() { " active" } } href=(filter_href(None)) { "All" }
+                @for state in [ChangeState::Open, ChangeState::Merged, ChangeState::Abandoned] {
+                    a class={ "tab" @if filter == Some(state) { " active" } } href=(filter_href(Some(state))) { (state.as_str()) }
+                }
+            }
             @if changes.is_empty() {
-                p class="empty" { "No changes yet. Push to " code { "refs/for/main" } " to open one." }
+                @match filter {
+                    None => { p class="empty" { "No changes yet. Push to " code { "refs/for/main" } " to open one." } }
+                    Some(state) => { p class="empty" { "No " (state.as_str()) " changes." } }
+                }
             }
             div class="ctable" {
                 @for change in changes {
-                    a class="trow" href={ "/" (repo) "/changes/" (change.number) } {
+                    a class="trow changes" href={ "/" (repo) "/changes/" (change.number) } {
                         (state_dot(change.state))
                         span class="sec3" { "#" (change.number) }
                         span class="strong" { (change.title) }
                         span class="sec2" { (change.owner) }
+                        span class="sec3" title=(change.opened_at) { "opened " (day_of(&change.opened_at)) }
+                        span class="sec3" title=(change.updated_at) { "moved " (day_of(&change.updated_at)) " " (clock_of(&change.updated_at)) }
                         span class="sec3 r" { "r" (change.latest_revision) }
                     }
+                }
+            }
+            @if let Some(before) = older {
+                p class="hint pad" {
+                    a class="quiet" href={ (filter_href(filter)) @if filter.is_some() { "&" } @else { "?" } "before=" (before) } { "Older changes" }
                 }
             }
         },
@@ -1980,6 +2024,8 @@ pub struct ChangePage<'a> {
     pub queued: bool,
     pub threads: &'a [Thread],
     pub composer: Option<ThreadAt>,
+    /// The revision the shown one is compared with: an interdiff.
+    pub compared: Option<i64>,
     pub error: Option<&'a str>,
 }
 
@@ -2046,8 +2092,19 @@ pub fn change(page: ChangePage) -> Markup {
         queued,
         threads,
         composer,
+        compared,
         error,
     } = page;
+    let message = revisions
+        .iter()
+        .find(|r| r.number == shown)
+        .map(|r| r.message.as_str())
+        .unwrap_or("");
+    // The title line is the title; what follows is the message worth reading.
+    let body = message
+        .split_once('\n')
+        .map(|(_, rest)| rest.trim())
+        .filter(|rest| !rest.is_empty());
     let title = format!("#{} {}", change.number, change.title);
     let standing = threads
         .iter()
@@ -2065,9 +2122,14 @@ pub fn change(page: ChangePage) -> Markup {
         }
     }
     let composer_line = match &composer {
-        Some(ThreadAt::Line { path, side, line }) => Some((path.as_str(), side.as_str(), *line)),
+        Some(ThreadAt::Line { path, side, line }) if compared.is_none() => {
+            Some((path.as_str(), side.as_str(), *line))
+        }
         _ => None,
     };
+    if compared.is_some() {
+        inline.clear();
+    }
     let signed = who.viewer().is_some();
     let can_discuss = change.state == ChangeState::Open && signed;
     let satisfied = trace.requirements.iter().filter(|r| r.satisfied).count();
@@ -2096,6 +2158,10 @@ pub fn change(page: ChangePage) -> Markup {
                     }
                     span class="sep" { "·" }
                     span { "targets " (change.target) }
+                    span class="sep" { "·" }
+                    span title=(change.opened_at) { "opened " (day_of(&change.opened_at)) }
+                    span class="sep" { "·" }
+                    span title=(change.updated_at) { "moved " (day_of(&change.updated_at)) " " (clock_of(&change.updated_at)) }
                     @if standing > 0 {
                         span class="sep" { "·" }
                         span class="stands" {
@@ -2109,11 +2175,25 @@ pub fn change(page: ChangePage) -> Markup {
                 }
                 div class="revtabs" {
                     @for revision in revisions {
-                        a class={ "revtab" @if revision.number == shown { " active" } }
+                        a class={ "revtab" @if revision.number == shown && compared.is_none() { " active" } }
                           href={ "/" (repo) "/changes/" (change.number) "?r=" (revision.number) } {
                             "r" (revision.number)
                         }
                     }
+                    @if shown > 1 {
+                        @let previous = compared.unwrap_or(shown - 1);
+                        a class={ "revtab compare" @if compared.is_some() { " active" } }
+                          href={ "/" (repo) "/changes/" (change.number) "?r=" (shown) "&vs=" (shown - 1) }
+                          title="What changed between the two revisions" {
+                            "r" (previous) " → r" (shown)
+                        }
+                    }
+                }
+                @if let Some(body) = body {
+                    pre class="msg" { (body) }
+                }
+                @if let Some(vs) = compared {
+                    p class="note" { "Showing what changed from r" (vs) " to r" (shown) ", not the whole change. Threads sit on the full view of each revision." }
                 }
             }
             (disagreement(verdicts))
@@ -2268,9 +2348,24 @@ pub fn change(page: ChangePage) -> Markup {
                             }
                             @if queued {
                                 p class="note" { "Queued — the train lands it from here." }
+                                @if signed {
+                                    form class="stack" method="post" action={ "/" (repo) "/changes/" (change.number) "/dequeue" } {
+                                        input type="text" name="reason" placeholder="Why take it out (optional)" autocomplete="off";
+                                        button class="vbtn wide" type="submit" { "Dequeue" }
+                                    }
+                                }
                             } @else {
                                 form method="post" action={ "/" (repo) "/changes/" (change.number) "/enqueue" } {
                                     button class="btn wide" type="submit" disabled[!trace.satisfied] { "Enqueue" }
+                                }
+                            }
+                            @if signed {
+                                details class="alt abandon" {
+                                    summary { "Abandon this change" }
+                                    form class="stack" method="post" action={ "/" (repo) "/changes/" (change.number) "/abandon" } {
+                                        input type="text" name="reason" placeholder="Why, for whoever reads the log" required autocomplete="off";
+                                        button class="vbtn wide danger" type="submit" { "Abandon" }
+                                    }
                                 }
                             }
                         }
@@ -2978,6 +3073,10 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
         Event::RepoRenamed { repo, to } => (
             "dot idle",
             html! { b { (actor) } " renamed " (repo) " to " (to) },
+        ),
+        Event::RepoDescribed { repo, description } => (
+            "dot idle",
+            html! { b { (actor) } " described " (repo) @if description.is_empty() { " as nothing in particular" } @else { ": " (description) } },
         ),
         Event::RepoArchived { repo } => ("dot idle", html! { b { (actor) } " archived " (repo) }),
         Event::RepoUnarchived { repo } => {

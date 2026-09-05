@@ -99,12 +99,15 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/{repo}/changes/{number}/claim", post(submit_claim))
         .route("/{repo}/changes/{number}/enqueue", post(submit_enqueue))
+        .route("/{repo}/changes/{number}/dequeue", post(submit_dequeue))
+        .route("/{repo}/changes/{number}/abandon", post(submit_abandon))
         .route("/{repo}/landing", get(landing_page))
         .route("/{repo}/debt", get(debt_page))
         .route("/{repo}/log", get(log_page))
         .route("/{repo}/settings", get(repo_settings_page))
         .route("/{repo}/settings/visibility", post(repo_visibility))
         .route("/{repo}/settings/rename", post(repo_rename))
+        .route("/{repo}/settings/description", post(repo_describe))
         .route("/{repo}/settings/archive", post(repo_archive))
         .route("/{repo}/settings/delete", post(repo_delete))
         .route("/{repo}/settings/transfer", post(repo_transfer))
@@ -2473,6 +2476,7 @@ async fn render_tree(
         readme.as_deref(),
         &sidebar,
         &clone_url,
+        &record.description,
     )
     .into_response()
 }
@@ -2587,23 +2591,40 @@ async fn changes_page(
     Palette(theme): Palette,
     reader: Reader,
     Path(repo): Path<String>,
+    Query(query): Query<ChangesListQuery>,
 ) -> Response {
     let who = match read_repo(&app, reader, &repo) {
         Ok((_, who)) => who,
         Err(response) => return *response,
     };
-    match app.with_store(|s| s.changes_in_repo(&repo)) {
-        Ok(mut changes) => {
-            changes.reverse();
-            views::changes(theme, who.reading(), &repo, &changes).into_response()
+    let filter = query
+        .state
+        .as_deref()
+        .and_then(cairn_core::ChangeState::parse);
+    match app.with_store(|s| s.changes_page(&repo, filter, query.before, CHANGES_PER_PAGE)) {
+        Ok(changes) => {
+            let older = (changes.len() as i64 == CHANGES_PER_PAGE)
+                .then(|| changes.last().map(|c| c.number))
+                .flatten();
+            views::changes(theme, who.reading(), &repo, &changes, filter, older).into_response()
         }
         Err(err) => oops(err),
     }
 }
 
+const CHANGES_PER_PAGE: i64 = 50;
+
+#[derive(Deserialize)]
+struct ChangesListQuery {
+    state: Option<String>,
+    before: Option<i64>,
+}
+
 #[derive(Deserialize)]
 struct ChangeQuery {
     r: Option<i64>,
+    /// Compare the shown revision with this one: the interdiff.
+    vs: Option<i64>,
     error: Option<String>,
     /// Where a new thread is being composed: `new:12:src/x.rs`,
     /// `claim:<id>`, `verdict:<id>`, or `change`.
@@ -2651,13 +2672,23 @@ async fn change_page(
         .as_ref()
         .and_then(|id| app.with_store(|s| s.task(id)).ok().flatten());
 
+    let compared = query
+        .vs
+        .filter(|v| (1..=change.latest_revision).contains(v) && *v != shown);
     let patch = match (app.git(), revisions.iter().find(|r| r.number == shown)) {
         (Some(git), Some(revision)) => {
-            let full = git
-                .store
-                .show_patch(&repo, &revision.commit_oid)
-                .await
-                .unwrap_or_default();
+            let full = match compared.and_then(|v| revisions.iter().find(|r| r.number == v)) {
+                Some(other) => git
+                    .store
+                    .diff_between(&repo, &other.commit_oid, &revision.commit_oid)
+                    .await
+                    .unwrap_or_default(),
+                None => git
+                    .store
+                    .show_patch(&repo, &revision.commit_oid)
+                    .await
+                    .unwrap_or_default(),
+            };
             // A change that adds a large file produces a diff nobody
             // reads and every viewer pays for. Cut it at a boundary the
             // parser understands, on a line, and say so.
@@ -2700,6 +2731,7 @@ async fn change_page(
         queued: queued.is_some(),
         threads: &threads,
         composer,
+        compared,
         error: query.error.as_deref(),
     })
     .into_response()
@@ -2957,6 +2989,87 @@ async fn submit_resolve(
         Ok(env) => {
             app.publish(&env);
             Redirect::to(&format!("{back}?r={}#{}", form.revision, id.as_str())).into_response()
+        }
+        Err(err) => flash(&back, &humane(&err)),
+    }
+}
+
+#[derive(Deserialize)]
+struct ReasonForm {
+    #[serde(default)]
+    reason: String,
+}
+
+async fn submit_dequeue(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Path((repo, number)): Path<(String, i64)>,
+    Form(form): Form<ReasonForm>,
+) -> Response {
+    let back = format!("/{repo}/changes/{number}");
+    if let Err(response) = readable(&app, &viewer, &repo) {
+        return *response;
+    }
+    let change = match app.with_store(|s| s.change_by_number(&repo, number)) {
+        Ok(Some(change)) => change.id,
+        Ok(None) => return not_found(),
+        Err(err) => return oops(err),
+    };
+    let reason = if form.reason.trim().is_empty() {
+        "dequeued from the page"
+    } else {
+        form.reason.trim()
+    };
+    match app.with_store(|s| s.dequeue_change(&viewer.0, &change, reason)) {
+        Ok(env) => {
+            app.publish(&env);
+            Redirect::to(&back).into_response()
+        }
+        Err(err) => flash(&back, &humane(&err)),
+    }
+}
+
+async fn submit_abandon(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Path((repo, number)): Path<(String, i64)>,
+    Form(form): Form<ReasonForm>,
+) -> Response {
+    let back = format!("/{repo}/changes/{number}");
+    if let Err(response) = readable(&app, &viewer, &repo) {
+        return *response;
+    }
+    let change = match app.with_store(|s| s.change_by_number(&repo, number)) {
+        Ok(Some(change)) => change.id,
+        Ok(None) => return not_found(),
+        Err(err) => return oops(err),
+    };
+    match app.with_store(|s| s.abandon_change(&viewer.0, &change, form.reason.trim())) {
+        Ok(env) => {
+            app.publish(&env);
+            Redirect::to(&back).into_response()
+        }
+        Err(err) => flash(&back, &humane(&err)),
+    }
+}
+
+#[derive(Deserialize)]
+struct DescribeForm {
+    #[serde(default)]
+    description: String,
+}
+
+async fn repo_describe(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Path(repo): Path<String>,
+    Form(form): Form<DescribeForm>,
+) -> Response {
+    let back = format!("/{repo}/settings");
+    match app.with_store(|s| s.describe_repo(&viewer.0, &repo, &form.description)) {
+        Ok(env) => {
+            app.publish(&env);
+            Redirect::to(&format!("{back}?done=1")).into_response()
         }
         Err(err) => flash(&back, &humane(&err)),
     }

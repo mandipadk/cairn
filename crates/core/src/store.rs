@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 18;
+const SCHEMA_VERSION: i64 = 19;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -197,7 +197,8 @@ CREATE TABLE IF NOT EXISTS repos (
   visibility     TEXT NOT NULL DEFAULT 'private',
   owner          TEXT NOT NULL DEFAULT '',
   pending_owner  TEXT,
-  archived       INTEGER NOT NULL DEFAULT 0
+  archived       INTEGER NOT NULL DEFAULT 0,
+  description    TEXT NOT NULL DEFAULT ''
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS imports (
@@ -283,6 +284,8 @@ CREATE TABLE IF NOT EXISTS changes (
   latest_revision INTEGER NOT NULL DEFAULT 0,
   external_key    TEXT,
   landed_oid      TEXT,
+  opened_at       TEXT NOT NULL DEFAULT '',
+  updated_at      TEXT NOT NULL DEFAULT '',
   UNIQUE (repo, number)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_changes_repo_state ON changes (repo, state);
@@ -855,6 +858,7 @@ fn record_scope(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
         | AttentionDrawn { repo, .. }
         | RepoRenamed { repo, .. }
         | RepoArchived { repo }
+        | RepoDescribed { repo, .. }
         | RepoUnarchived { repo }
         | RepoDeleted { repo }
         | ChangeOpened { repo, .. } => (Some(repo.clone()), None),
@@ -1516,11 +1520,39 @@ fn record_notices(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
     Ok(())
 }
 
+/// The change an event is about, when it is about one; what "last moved"
+/// on a change means.
+fn change_named(event: &Event) -> Option<&crate::id::ChangeId> {
+    use Event::*;
+    match event {
+        RevisionPushed { change, .. }
+        | ClaimAttached { change, .. }
+        | ClaimVerified { change, .. }
+        | VerdictGiven { change, .. }
+        | ThreadOpened { change, .. }
+        | ThreadReplied { change, .. }
+        | ThreadResolved { change, .. }
+        | AttentionDrawn { change, .. }
+        | ChangeEnqueued { change }
+        | ChangeDequeued { change, .. }
+        | ChangeMerged { change, .. }
+        | RebaseFailed { change, .. }
+        | ChangeAbandoned { change, .. } => Some(change),
+        _ => None,
+    }
+}
+
 /// The single projector: the only code that writes projection tables.
 fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
     let actor = env.actor.as_str();
     record_scope(tx, env)?;
     record_notices(tx, env)?;
+    if let Some(change) = change_named(&env.event) {
+        tx.execute(
+            "UPDATE changes SET updated_at = ? WHERE id = ?",
+            params![env.ts, change.as_str()],
+        )?;
+    }
     match &env.event {
         Event::PrincipalRegistered {
             principal,
@@ -1757,6 +1789,12 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                 params![to, repo],
             )?;
         }
+        Event::RepoDescribed { repo, description } => {
+            tx.execute(
+                "UPDATE repos SET description = ? WHERE name = ?",
+                params![description, repo],
+            )?;
+        }
         Event::RepoArchived { repo } => {
             tx.execute(
                 "UPDATE repos SET archived = 1 WHERE name = ?",
@@ -1935,8 +1973,8 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             external_key,
         } => {
             tx.execute(
-                "INSERT INTO changes (id, repo, number, target, title, task, parent_change, state, owner, external_key)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)",
+                "INSERT INTO changes (id, repo, number, target, title, task, parent_change, state, owner, external_key, opened_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'open', ?8, ?9, ?10, ?10)",
                 params![
                     change.as_str(),
                     repo,
@@ -1946,7 +1984,8 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                     task.as_ref().map(|t| t.as_str()),
                     parent_change.as_ref().map(|c| c.as_str()),
                     actor,
-                    external_key
+                    external_key,
+                    env.ts
                 ],
             )?;
         }

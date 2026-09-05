@@ -74,7 +74,7 @@ pub(crate) mod raw {
         let rows = conn
             .prepare_cached(
                 "SELECT name, default_branch, object_format, policy, mirror, visibility, owner,
-                        pending_owner, archived
+                        pending_owner, archived, description
                  FROM repos ORDER BY name",
             )?
             .query_map([], |row| {
@@ -88,6 +88,7 @@ pub(crate) mod raw {
                     row.get::<_, String>(6)?,
                     row.get::<_, Option<String>>(7)?,
                     row.get::<_, i64>(8)?,
+                    row.get::<_, String>(9)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -103,6 +104,7 @@ pub(crate) mod raw {
                     owner,
                     pending,
                     archived,
+                    description,
                 )| {
                     Ok(Repo {
                         owner: PrincipalId(owner),
@@ -120,6 +122,7 @@ pub(crate) mod raw {
                             Visibility::parse,
                         )?,
                         archived: archived != 0,
+                        description,
                         name,
                         default_branch,
                     })
@@ -148,7 +151,7 @@ pub(crate) mod raw {
     pub fn repo(conn: &Connection, name: &str) -> CoreResult<Option<Repo>> {
         conn.prepare_cached(
             "SELECT name, default_branch, object_format, policy, mirror, visibility, owner,
-                    pending_owner, archived
+                    pending_owner, archived, description
              FROM repos WHERE name = ?",
         )?
         .query_row(params![name], |row| {
@@ -162,6 +165,7 @@ pub(crate) mod raw {
                 row.get::<_, String>(6)?,
                 row.get::<_, Option<String>>(7)?,
                 row.get::<_, i64>(8)?,
+                row.get::<_, String>(9)?,
             ))
         })
         .optional()?
@@ -176,6 +180,7 @@ pub(crate) mod raw {
                 owner,
                 pending,
                 archived,
+                description,
             )| {
                 Ok(Repo {
                     owner: PrincipalId(owner),
@@ -185,6 +190,7 @@ pub(crate) mod raw {
                     mirror: read_mirror(&name, mirror.as_deref())?,
                     visibility: parsed(&format!("repo {name}"), &visibility, Visibility::parse)?,
                     archived: archived != 0,
+                    description,
                     name,
                     default_branch,
                 })
@@ -271,7 +277,8 @@ pub(crate) mod raw {
     }
 
     const CHANGE_COLS: &str = "id, repo, number, target, title, task, parent_change, state, \
-                               owner, latest_revision, external_key, landed_oid";
+                               owner, latest_revision, external_key, landed_oid, opened_at, \
+                               updated_at";
 
     fn change_from_row(row: &Row) -> rusqlite::Result<(Change, String)> {
         Ok((
@@ -288,6 +295,8 @@ pub(crate) mod raw {
                 latest_revision: row.get(9)?,
                 external_key: row.get(10)?,
                 landed_oid: row.get(11)?,
+                opened_at: row.get(12)?,
+                updated_at: row.get(13)?,
             },
             row.get::<_, String>(7)?,
         ))
@@ -353,6 +362,28 @@ pub(crate) mod raw {
              WHERE parent_change = ? AND state = 'open' ORDER BY number"
         ))?
         .query_map(params![parent], change_from_row)?
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(finish_change)
+        .collect()
+    }
+
+    /// A page of a repository's changes, newest first: those numbered
+    /// below `before` (all when absent), optionally in one state, at most
+    /// `limit`.
+    pub fn changes_page(
+        conn: &Connection,
+        repo: &str,
+        state: Option<&str>,
+        before: Option<i64>,
+        limit: i64,
+    ) -> CoreResult<Vec<Change>> {
+        conn.prepare_cached(&format!(
+            "SELECT {CHANGE_COLS} FROM changes
+              WHERE repo = ?1 AND (?2 IS NULL OR state = ?2) AND (?3 IS NULL OR number < ?3)
+              ORDER BY number DESC LIMIT ?4"
+        ))?
+        .query_map(params![repo, state, before, limit], change_from_row)?
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
         .map(finish_change)
@@ -1473,6 +1504,16 @@ impl Store {
         principal: &PrincipalId,
     ) -> CoreResult<Vec<crate::types::WorkloadBinding>> {
         raw::workload_bindings_of(&self.conn, principal.as_str())
+    }
+
+    pub fn changes_page(
+        &self,
+        repo: &str,
+        state: Option<crate::types::ChangeState>,
+        before: Option<i64>,
+        limit: i64,
+    ) -> CoreResult<Vec<Change>> {
+        raw::changes_page(&self.conn, repo, state.map(|s| s.as_str()), before, limit)
     }
 
     pub fn draw_of(&self, change: &ChangeId) -> CoreResult<Option<crate::attention::Draw>> {

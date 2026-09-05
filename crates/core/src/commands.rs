@@ -1760,6 +1760,37 @@ impl Store {
         Ok(env)
     }
 
+    /// Say what a repository is for, in a line. Owner or admin.
+    pub fn describe_repo(
+        &mut self,
+        actor: &PrincipalId,
+        repo: &str,
+        description: &str,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Admin,
+            Some(repo),
+        )?;
+        raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
+        let description = description.trim();
+        bounded("description", description, MAX_TITLE)?;
+        let env = append(
+            &tx,
+            actor,
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
+            Event::RepoDescribed {
+                repo: repo.to_owned(),
+                description: description.to_owned(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
     /// Archive or unarchive: read-only, or not. Owner or admin.
     pub fn set_archived(
         &mut self,

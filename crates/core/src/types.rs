@@ -256,6 +256,9 @@ pub struct Repo {
     /// everything stays readable until somebody unarchives it.
     #[serde(default)]
     pub archived: bool,
+    /// A line about what the repository is for.
+    #[serde(default)]
+    pub description: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -330,6 +333,11 @@ pub struct Change {
     pub external_key: Option<String>,
     /// The commit this change put on its target branch, once merged.
     pub landed_oid: Option<String>,
+    /// When it was opened, and when anything last happened to it.
+    #[serde(default)]
+    pub opened_at: String,
+    #[serde(default)]
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

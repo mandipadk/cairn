@@ -695,6 +695,16 @@ impl GitStore {
         Ok(String::from_utf8_lossy(&stdout).into_owned())
     }
 
+    /// What changed between two commits, as a patch: the interdiff between
+    /// two revisions of one change.
+    pub async fn diff_between(&self, name: &str, from: &str, to: &str) -> GitResult<String> {
+        let repo = self.existing_repo_path(name)?;
+        let stdout = self
+            .run(Some(&repo), &["diff", "--no-color", from, to])
+            .await?;
+        Ok(String::from_utf8_lossy(&stdout).into_owned())
+    }
+
     /// Copy a branch to an outside remote. The credential is supplied
     /// per call and never stored: it belongs to whoever runs the forge,
     /// not to the graph.

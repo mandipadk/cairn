@@ -21,6 +21,7 @@ mod fsck_flow;
 mod git_flow;
 mod home_flow;
 mod hostile_input_flow;
+mod hygiene_flow;
 mod import_flow;
 mod inbox_flow;
 mod invite_flow;

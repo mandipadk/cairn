@@ -531,8 +531,15 @@ pub async fn get_change_by_number(
 #[derive(Deserialize)]
 pub struct ChangesQuery {
     pub state: Option<ChangeState>,
+    /// Page by cursor: changes numbered below this, newest first.
+    pub before: Option<i64>,
+    /// At most this many; 50 when absent, 200 at most.
+    pub limit: Option<i64>,
 }
 
+/// Without `before` or `limit` the answer is the whole list, oldest
+/// first, as it always was. With either, it is one page newest first,
+/// wrapped with the cursor for the next: `{"changes": [...], "next_before": n}`.
 pub async fn list_changes(
     State(app): State<AppState>,
     who: MaybeActor,
@@ -540,11 +547,43 @@ pub async fn list_changes(
     Query(query): Query<ChangesQuery>,
 ) -> ApiResult<Json<Value>> {
     readable_repo_by(&app, &who, &repo)?;
-    let mut changes = app.with_store(|s| s.acting_as(who.scope()).changes_in_repo(&repo))?;
-    if let Some(state) = query.state {
-        changes.retain(|change| change.state == state);
+    if query.before.is_none() && query.limit.is_none() {
+        let mut changes = app.with_store(|s| s.acting_as(who.scope()).changes_in_repo(&repo))?;
+        if let Some(state) = query.state {
+            changes.retain(|change| change.state == state);
+        }
+        return Ok(Json(json!(changes)));
     }
-    Ok(Json(json!(changes)))
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let changes = app.with_store(|s| {
+        s.acting_as(who.scope())
+            .changes_page(&repo, query.state, query.before, limit)
+    })?;
+    let next_before = (changes.len() as i64 == limit)
+        .then(|| changes.last().map(|c| c.number))
+        .flatten();
+    Ok(Json(
+        json!({ "changes": changes, "next_before": next_before }),
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct DescribeBody {
+    pub description: String,
+}
+
+pub async fn describe_repo(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(name): Path<String>,
+    Json(body): Json<DescribeBody>,
+) -> ApiResult<Json<Value>> {
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .describe_repo(&actor.0, &name, &body.description)
+    })?;
+    app.publish(&env);
+    Ok(committed(None, &env))
 }
 
 #[derive(Deserialize)]

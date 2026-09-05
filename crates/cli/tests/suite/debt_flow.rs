@@ -192,6 +192,26 @@ async fn every_line_is_backed_by_what_the_log_knows_and_the_map_rolls_it_up() {
         ["gap.rs", "claimed.rs", "argued.rs", "reproduced.rs"],
         "{map}"
     );
+    // The page says the same, files most debt first, and blame marks each line.
+    let (_, cookie) = sign_in_as(&forge, "ada").await;
+    let (status, page) = page_with_cookie(app, "/demo/debt", &cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(page.contains("What backs this code"), "{page}");
+    assert!(
+        page.contains(r#"class="tab active" href="/demo/debt""#),
+        "{page}"
+    );
+    let gap_at = page.find("gap.rs").unwrap();
+    let repro_at = page.find("reproduced.rs").unwrap();
+    assert!(gap_at < repro_at, "most debt first: {page}");
+    assert!(page.contains("under a declared gap"), "{page}");
+    let (status, blame) = page_with_cookie(app, "/demo/blame/gap.rs", &cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(blame.contains(r#"class="cline gap"#), "{blame}");
+    assert!(blame.contains("4 under a declared gap"), "{blame}");
+    let (_, blame) = page_with_cookie(app, "/demo/blame/reproduced.rs", &cookie).await;
+    assert!(blame.contains(r#"class="cline reproduced"#), "{blame}");
+    assert!(blame.contains("3 reproduced"), "{blame}");
     // The same tip answers from the cache; a stranger reads it once the repo is public.
     let (_, again) = api(app, "GET", "/api/repos/demo/debt", "ada", None).await;
     assert_eq!(again["tip"], map["tip"]);

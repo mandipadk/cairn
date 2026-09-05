@@ -755,3 +755,38 @@ details.thread[open] > summary .closed-inline { visibility: hidden; }
 .rsec .hint { font-size: 12px; color: var(--ink3); margin: 4px 0 6px; }
 .reasons .drawn { color: var(--ink); font-weight: 500; }
 
+/* Verification: what backs each line, as one word and one colour. */
+.stack { display: block; width: calc(100% - 44px); height: 6px; border-radius: 3px; overflow: hidden; margin: 6px 22px 8px; background: var(--hair); }
+.stack rect.s-reproduced { fill: var(--ok); }
+.stack rect.s-claimed { fill: var(--ink2); }
+.stack rect.s-gap { fill: var(--bad); }
+.stack rect.s-argued { fill: var(--ink3); }
+.stack rect.s-imported { fill: var(--idle); }
+.legend i.s-reproduced { background: var(--ok); }
+.legend i.s-claimed { background: var(--ink2); }
+.legend i.s-gap { background: var(--bad); }
+.legend i.s-argued { background: var(--ink3); }
+.legend i.s-imported { background: var(--idle); }
+.legend { display: flex; gap: 18px; padding: 0 22px 6px; font-size: 12px; color: var(--ink2); flex-wrap: wrap; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.legend b { font-weight: 500; color: var(--ink); font-variant-numeric: tabular-nums; }
+.word { padding: 4px 22px 10px; color: var(--ink2); max-width: 640px; }
+.thead.debt { display: grid; grid-template-columns: minmax(0, 1fr) 180px 64px 64px; gap: 14px; padding: 8px 22px 4px; font-size: 11.5px; color: var(--ink3); }
+.thead.debt .r { text-align: right; }
+.trow.debt { grid-template-columns: minmax(0, 1fr) 180px 64px 64px; align-items: center; }
+.trow.debt code { font-size: 12px; color: var(--ink); overflow-wrap: anywhere; }
+.trow.debt .stack { margin: 0; height: 5px; width: 100%; }
+.trow.debt .n { text-align: right; color: var(--ink3); font-variant-numeric: tabular-nums; font-size: 12px; }
+.trow.debt .n.debt { color: var(--ink); }
+.blame .cline .no { position: relative; }
+.blame .cline .no::before { content: ""; position: absolute; left: 6px; top: 9px; width: 5px; height: 5px; border-radius: 50%; background: var(--idle); }
+.blame .cline.reproduced .no::before { background: var(--ok); }
+.blame .cline.claimed .no::before { background: var(--ink2); }
+.blame .cline.gap .no::before { background: var(--bad); }
+.blame .cline.argued .no::before { background: var(--ink3); }
+.blame .cline.imported .no::before { background: transparent; border: 1px solid var(--ink3); box-sizing: border-box; }
+.blame .cline.gap .who a { color: var(--bad); }
+.blame .cline.gap .no { color: var(--bad); opacity: 0.7; }
+@media (max-width: 760px) { .thead.debt, .trow.debt { grid-template-columns: minmax(0, 1fr) 90px 56px 56px; } }
+

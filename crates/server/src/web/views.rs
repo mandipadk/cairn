@@ -63,6 +63,7 @@ pub enum Tab {
     Code,
     Changes,
     Landing,
+    Verification,
     Lessons,
     Log,
     Settings,
@@ -211,6 +212,7 @@ fn frame_in(
                                             (tab(repo, "", "Code", active == Some(Tab::Code)))
                                             (tab(repo, "/changes", "Changes", active == Some(Tab::Changes)))
                                             (tab(repo, "/landing", "Landing", active == Some(Tab::Landing)))
+                                            (tab(repo, "/debt", "Verification", active == Some(Tab::Verification)))
                                             (tab(repo, "/lessons", "Lessons", active == Some(Tab::Lessons)))
                                             (tab(repo, "/log", "Log", active == Some(Tab::Log)))
                                             @if let Some(viewer) = viewer
@@ -3142,15 +3144,13 @@ pub fn log(
 /// question "which code here was never actually verified" is the one
 /// this view exists to answer.
 pub fn blame(theme: Theme, who: Reading<'_>, repo: &str, path: &str, rows: &[BlameRow]) -> Markup {
-    // A line is flagged when the judgment behind it left something
-    // open: no executed check at all, or a claim that named a gap.
-    let flagged = |row: &BlameRow| {
-        row.provenance
-            .as_ref()
-            .is_some_and(|p| !p.executed_check() || !p.unchecked().is_empty())
-    };
-    let with_gaps = rows.iter().filter(|r| flagged(r)).count();
-    let unattributed = rows.iter().filter(|r| r.provenance.is_none()).count();
+    let state_of = |row: &BlameRow| cairn_core::line_state(row.provenance.as_deref());
+    let count = |state: cairn_core::LineState| rows.iter().filter(|r| state_of(r) == state).count();
+    let reproduced = count(cairn_core::LineState::Reproduced);
+    let claimed = count(cairn_core::LineState::Claimed);
+    let with_gaps = count(cairn_core::LineState::Gap);
+    let argued = count(cairn_core::LineState::Argued);
+    let unattributed = count(cairn_core::LineState::Imported);
     layout_reading(
         theme,
         who,
@@ -3161,14 +3161,12 @@ pub fn blame(theme: Theme, who: Reading<'_>, repo: &str, path: &str, rows: &[Bla
             div class="crumbs" { (breadcrumbs(repo, path)) }
             div class="file-bar" {
                 span { (rows.len()) " lines" }
-                @if with_gaps > 0 {
-                    span class="sep" { "·" }
-                    span class="warn" { (with_gaps) " under a declared gap" }
-                }
-                @if unattributed > 0 {
-                    span class="sep" { "·" }
-                    span { (unattributed) " outside the graph" }
-                }
+                @if reproduced > 0 { span class="sep" { "·" } span { (reproduced) " reproduced" } }
+                @if claimed > 0 { span class="sep" { "·" } span { (claimed) " claimed, never re-run" } }
+                @if with_gaps > 0 { span class="sep" { "·" } span class="warn" { (with_gaps) " under a declared gap" } }
+                @if argued > 0 { span class="sep" { "·" } span { (argued) " argued only" } }
+                @if unattributed > 0 { span class="sep" { "·" } span { (unattributed) " imported" } }
+                a class="link" href={ "/" (repo) "/debt" } { "Whole repository" }
                 a class="right-link link" href={ "/" (repo) "/tree/" (path) } { "Source" }
             }
             div class="source blame" {
@@ -3178,7 +3176,8 @@ pub fn blame(theme: Theme, who: Reading<'_>, repo: &str, path: &str, rows: &[Bla
                     @let starts_run = index == 0
                         || rows[index - 1].provenance.as_ref().map(|p| p.change.number)
                             != row.provenance.as_ref().map(|p| p.change.number);
-                    div class={ "cline" @if flagged(row) { " gap" } @if starts_run { " run" } } {
+                    @let state = state_of(row);
+                    div class={ "cline " (state.as_str()) @if starts_run { " run" } } {
                         span class="who" {
                             @if starts_run {
                                 @match &row.provenance {
@@ -3192,7 +3191,7 @@ pub fn blame(theme: Theme, who: Reading<'_>, repo: &str, path: &str, rows: &[Bla
                                 }
                             }
                         }
-                        span class="no" { (row.number) }
+                        span class="no" title=(state_words(state)) { (row.number) }
                         span class={ "src" @if is_comment(&row.text) { " comment" } } { (row.text) }
                     }
                 }
@@ -3229,6 +3228,105 @@ fn attribution(p: &cairn_core::Provenance) -> String {
 
 /// Everything the changes behind this file declared out of scope,
 /// collected in one place.
+fn state_words(state: cairn_core::LineState) -> &'static str {
+    match state {
+        cairn_core::LineState::Reproduced => {
+            "reproduced: a runner re-ran the claim that landed this"
+        }
+        cairn_core::LineState::Claimed => "claimed: its author ran something nobody re-ran",
+        cairn_core::LineState::Gap => "gap: the claim that landed this said what it did not check",
+        cairn_core::LineState::Argued => "argued: only a reasoning claim, nothing executed",
+        cairn_core::LineState::Imported => {
+            "imported: from before the forge; nothing here judged it"
+        }
+    }
+}
+
+/// One stacked bar of the five states, widths in percent of the total.
+/// Drawn as SVG rectangles: their widths are attributes, which the
+/// stylesheet policy allows where an inline style would be refused.
+fn stack(counts: &crate::debt::Counts) -> Markup {
+    let total = counts.total().max(1) as f64;
+    let width = |n: usize| n as f64 * 100.0 / total;
+    let parts = [
+        ("s-reproduced", counts.reproduced),
+        ("s-claimed", counts.claimed),
+        ("s-gap", counts.gap),
+        ("s-argued", counts.argued),
+        ("s-imported", counts.imported),
+    ];
+    let mut x = 0.0;
+    html! {
+        svg class="stack" viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true" {
+            @for (class, n) in parts {
+                @if n > 0 {
+                    @let w = width(n);
+                    rect class=(class) x=(format!("{x:.3}")) y="0" width=(format!("{w:.3}")) height="6" {}
+                    @let _ = { x += w; };
+                }
+            }
+        }
+    }
+}
+
+fn thousands(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// The verification-debt map: what backs every line of the default
+/// branch, for the whole and by file, most debt first.
+pub fn debt(theme: Theme, who: Reading<'_>, repo: &str, map: &crate::debt::DebtMap) -> Markup {
+    let c = &map.counts;
+    layout_reading(
+        theme,
+        who,
+        Some(repo),
+        Some(Tab::Verification),
+        "Verification",
+        html! {
+            div class="sechead" {
+                b { "What backs this code" }
+                span {
+                    (map.branch) " at " code { (short(&map.tip)) } " · " (thousands(c.total())) " lines in " (map.files.len()) " files"
+                    @if map.skipped > 0 { " · " (map.skipped) " binary or large, not counted" }
+                }
+            }
+            (stack(c))
+            div class="legend" {
+                span { i class="s-reproduced" {} b { (thousands(c.reproduced)) } " reproduced" }
+                span { i class="s-claimed" {} b { (thousands(c.claimed)) } " claimed, never re-run" }
+                span { i class="s-gap" {} b { (thousands(c.gap)) } " under a declared gap" }
+                span { i class="s-argued" {} b { (thousands(c.argued)) } " argued only" }
+                span { i class="s-imported" {} b { (thousands(c.imported)) } " imported, never judged here" }
+            }
+            p class="word" {
+                "Every line, by what the log knows about the change that landed it. Reproduced means a runner re-ran the claim. A gap means the claim said what it did not check, and the gap follows every line that landed under it. Imported lines predate this forge."
+            }
+            @if map.files.is_empty() {
+                p class="word" { "Nothing on " (map.branch) " yet." }
+            } @else {
+                div class="thead debt" { span { "File" } span {} span class="r" { "lines" } span class="r" { "debt" } }
+                @for file in &map.files {
+                    a class="trow debt" href={ "/" (repo) "/blame/" (file.path) } {
+                        code { (file.path) }
+                        (stack(&file.counts))
+                        span class="n" { (thousands(file.counts.total())) }
+                        span class={ "n" @if file.counts.debt() > 0 { " debt" } } { (thousands(file.counts.debt())) }
+                    }
+                }
+            }
+        },
+    )
+}
+
 fn coverage_gaps(repo: &str, rows: &[BlameRow]) -> Markup {
     let mut seen: Vec<(i64, String, String)> = Vec::new();
     for row in rows {

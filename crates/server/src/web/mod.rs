@@ -100,6 +100,7 @@ pub fn routes() -> Router<AppState> {
         .route("/{repo}/changes/{number}/claim", post(submit_claim))
         .route("/{repo}/changes/{number}/enqueue", post(submit_enqueue))
         .route("/{repo}/landing", get(landing_page))
+        .route("/{repo}/debt", get(debt_page))
         .route("/{repo}/log", get(log_page))
         .route("/{repo}/settings", get(repo_settings_page))
         .route("/{repo}/settings/visibility", post(repo_visibility))
@@ -2994,6 +2995,29 @@ fn flash(back: &str, message: &str) -> Response {
         })
         .collect();
     Redirect::to(&format!("{back}?error={encoded}")).into_response()
+}
+
+async fn debt_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    reader: Reader,
+    Path(repo): Path<String>,
+) -> Response {
+    let (record, who) = match read_repo(&app, reader, &repo) {
+        Ok(found) => found,
+        Err(response) => return *response,
+    };
+    match crate::debt::map(&app, &repo, &record.default_branch).await {
+        Ok(map) => views::debt(theme, who.reading(), &repo, &map).into_response(),
+        Err(err) => (
+            StatusCode::OK,
+            views::plain_note(
+                theme,
+                &format!("The map could not be drawn: {}", err.message),
+            ),
+        )
+            .into_response(),
+    }
 }
 
 async fn landing_page(

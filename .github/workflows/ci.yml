@@ -56,4 +56,4 @@ jobs:
         # Cargo captures output from passing tests, so a test that skips
         # itself looks exactly like one that ran. Print the sha256 case
         # uncaptured: silent skips are how coverage quietly disappears.
-        run: cargo test --test git_flow push_review_merge_sha256_repo -- --nocapture
+        run: cargo test -p cairn --test suite git_flow::push_review_merge_sha256_repo -- --nocapture

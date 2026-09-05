@@ -227,6 +227,10 @@ pub struct Repo {
     pub policy: Policy,
     /// Set when landed branches are copied somewhere else.
     pub mirror: Option<Mirror>,
+    /// Read-only: nothing new lands, pushes and new changes are refused,
+    /// everything stays readable until somebody unarchives it.
+    #[serde(default)]
+    pub archived: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

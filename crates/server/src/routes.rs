@@ -1139,6 +1139,93 @@ pub async fn attention(
 }
 
 #[derive(Deserialize)]
+pub struct RenameBody {
+    pub to: String,
+}
+
+/// The directory moves first, then the graph: a directory under a name
+/// the graph does not know is harmless, a graph naming a directory that
+/// is not there is not. If the graph refuses, the directory moves back.
+pub async fn rename_repo(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(name): Path<String>,
+    Json(body): Json<RenameBody>,
+) -> ApiResult<Json<Value>> {
+    let to = body.to.trim().to_owned();
+    app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .check_rename(&actor.0, &name, &to)
+    })?;
+    if let Some(git) = app.git() {
+        git.store.rename_repo(&name, &to).await?;
+    }
+    let env = match app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .rename_repo(&actor.0, &name, &to)
+    }) {
+        Ok(env) => env,
+        Err(err) => {
+            if let Some(git) = app.git() {
+                let _ = git.store.rename_repo(&to, &name).await;
+            }
+            return Err(err.into());
+        }
+    };
+    app.publish(&env);
+    Ok(committed(Some(to), &env))
+}
+
+pub async fn archive_repo(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(name): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .set_archived(&actor.0, &name, true)
+    })?;
+    app.publish(&env);
+    Ok(committed(None, &env))
+}
+
+pub async fn unarchive_repo(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(name): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .set_archived(&actor.0, &name, false)
+    })?;
+    app.publish(&env);
+    Ok(committed(None, &env))
+}
+
+#[derive(Deserialize)]
+pub struct DeleteBody {
+    /// The repository's own name, typed out.
+    pub confirm: String,
+}
+
+pub async fn delete_repo(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(name): Path<String>,
+    Json(body): Json<DeleteBody>,
+) -> ApiResult<Json<Value>> {
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .delete_repo(&actor.0, &name, &body.confirm)
+    })?;
+    if let Some(git) = app.git() {
+        git.store.remove_repo(&name).await?;
+    }
+    app.publish(&env);
+    Ok(committed(None, &env))
+}
+
+#[derive(Deserialize)]
 pub struct DrawQuery {
     /// The day to draw for, `YYYY-MM-DD`; today when absent.
     pub day: Option<String>,

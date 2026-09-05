@@ -131,6 +131,19 @@ offline against it.
   exactly the log applied; exits non-zero on any divergence, so it can
   run from cron or a health check.
 
+## Repository lifecycle
+
+An owner, or whoever runs the forge, can rename, archive and delete a
+repository from its settings page or over the API
+(`POST /api/repos/{name}/rename {"to": ..}`, `/archive`, `/unarchive`,
+`/delete {"confirm": "<name>"}`). A rename moves everything, including the
+git directory; the old name answers not found. An archived repository is
+read-only: clones and reads go on, pushes, new changes and new tasks are
+refused with a message that says so. Deleting needs the name typed out
+and nothing waiting in the landing queue; the repository's changes,
+claims, verdicts and discussion go with it, tasks and lessons keep their
+text and lose their home, and the log keeps what happened.
+
 ## Continuous integration
 
 `cairn verify` is the runner. Given a change it re-runs that change's

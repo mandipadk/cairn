@@ -126,6 +126,23 @@ pub enum Event {
     /// being so. Recorded like every other decision, because who may
     /// read a repository is exactly the kind of thing someone will need
     /// to reconstruct later.
+    /// The repository took a new name; every projection followed, and
+    /// the old name answers not found.
+    RepoRenamed {
+        repo: String,
+        to: String,
+    },
+    RepoArchived {
+        repo: String,
+    },
+    RepoUnarchived {
+        repo: String,
+    },
+    /// The repository is gone from the graph and from disk. The log
+    /// keeps what happened in it; nothing serves it any more.
+    RepoDeleted {
+        repo: String,
+    },
     VisibilitySet {
         repo: String,
         visibility: Visibility,
@@ -376,6 +393,10 @@ impl Event {
             Event::RepoCreated { .. } => "repo_created",
             Event::HistoryImported { .. } => "history_imported",
             Event::VisibilitySet { .. } => "visibility_set",
+            Event::RepoRenamed { .. } => "repo_renamed",
+            Event::RepoArchived { .. } => "repo_archived",
+            Event::RepoUnarchived { .. } => "repo_unarchived",
+            Event::RepoDeleted { .. } => "repo_deleted",
             Event::RepoTransferOffered { .. } => "repo_transfer_offered",
             Event::RepoTransferAccepted { .. } => "repo_transfer_accepted",
             Event::RepoTransferDeclined { .. } => "repo_transfer_declined",

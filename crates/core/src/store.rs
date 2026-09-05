@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 15;
+const SCHEMA_VERSION: i64 = 16;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -195,7 +195,8 @@ CREATE TABLE IF NOT EXISTS repos (
   mirror         TEXT,
   visibility     TEXT NOT NULL DEFAULT 'private',
   owner          TEXT NOT NULL DEFAULT '',
-  pending_owner  TEXT
+  pending_owner  TEXT,
+  archived       INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS imports (
@@ -828,6 +829,10 @@ fn record_scope(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
         | RepoTransferAccepted { repo }
         | RepoTransferDeclined { repo }
         | AttentionDrawn { repo, .. }
+        | RepoRenamed { repo, .. }
+        | RepoArchived { repo }
+        | RepoUnarchived { repo }
+        | RepoDeleted { repo }
         | ChangeOpened { repo, .. } => (Some(repo.clone()), None),
 
         // Named by a change, which knows its repository.
@@ -1611,6 +1616,70 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                  VALUES (?, ?, ?, ?, ?)",
                 params![repo, branch, source, tip_oid, commits],
             )?;
+        }
+        Event::RepoRenamed { repo, to } => {
+            for table in [
+                "changes",
+                "tasks",
+                "leases",
+                "notices",
+                "grants",
+                "imports",
+                "merge_queue",
+                "attention_draws",
+                "event_scope",
+            ] {
+                tx.execute(
+                    &format!("UPDATE {table} SET repo = ? WHERE repo = ?"),
+                    params![to, repo],
+                )?;
+            }
+            tx.execute(
+                "UPDATE tokens SET scope = json_set(scope, '$.repo', ?)
+                  WHERE scope IS NOT NULL AND json_extract(scope, '$.repo') = ?",
+                params![to, repo],
+            )?;
+            tx.execute(
+                "UPDATE repos SET name = ? WHERE name = ?",
+                params![to, repo],
+            )?;
+        }
+        Event::RepoArchived { repo } => {
+            tx.execute(
+                "UPDATE repos SET archived = 1 WHERE name = ?",
+                params![repo],
+            )?;
+        }
+        Event::RepoUnarchived { repo } => {
+            tx.execute(
+                "UPDATE repos SET archived = 0 WHERE name = ?",
+                params![repo],
+            )?;
+        }
+        Event::RepoDeleted { repo } => {
+            // Knowledge stays: tasks, sessions and lessons keep their text
+            // and lose their home. Everything that was the repository goes.
+            for sql in [
+                "DELETE FROM revisions WHERE change_id IN (SELECT id FROM changes WHERE repo = ?)",
+                "DELETE FROM claims WHERE change_id IN (SELECT id FROM changes WHERE repo = ?)",
+                "DELETE FROM verifications WHERE change_id IN (SELECT id FROM changes WHERE repo = ?)",
+                "DELETE FROM verdicts WHERE change_id IN (SELECT id FROM changes WHERE repo = ?)",
+                "DELETE FROM thread_replies WHERE thread_id IN
+                   (SELECT id FROM threads WHERE change_id IN (SELECT id FROM changes WHERE repo = ?))",
+                "DELETE FROM threads WHERE change_id IN (SELECT id FROM changes WHERE repo = ?)",
+                "DELETE FROM attention_draws WHERE repo = ?",
+                "DELETE FROM merge_queue WHERE repo = ?",
+                "DELETE FROM changes WHERE repo = ?",
+                "DELETE FROM leases WHERE repo = ?",
+                "DELETE FROM imports WHERE repo = ?",
+                "DELETE FROM grants WHERE repo = ?",
+                "DELETE FROM notices WHERE repo = ?",
+                "UPDATE tasks SET repo = NULL WHERE repo = ?",
+                "UPDATE tokens SET revoked = 1 WHERE scope IS NOT NULL AND json_extract(scope, '$.repo') = ?",
+                "DELETE FROM repos WHERE name = ?",
+            ] {
+                tx.execute(sql, params![repo])?;
+            }
         }
         Event::VisibilitySet { repo, visibility } => {
             tx.execute(

@@ -1014,6 +1014,41 @@ pub fn repo_settings(
                         button class="btn" type="submit" { "Offer ownership" }
                     }
                 }
+
+                div class="sechead later" { b { "Name" } span { (repo.name) } }
+                p class="note" { "Everything follows the new name; the old one answers not found." }
+                form class="stack" method="post" action={ "/" (repo.name) "/settings/rename" } {
+                    div {
+                        label for="rename-to" { "New name" }
+                        input id="rename-to" name="to" type="text" autocomplete="off" autocapitalize="none" placeholder="lowercase, digits, hyphens" required;
+                    }
+                    button class="vbtn" type="submit" { "Rename" }
+                }
+
+                div class="sechead later" { b { "Archive" } span { @if repo.archived { "archived" } @else { "active" } } }
+                @if repo.archived {
+                    p class="note" { "Read-only: nothing new lands here until it is unarchived." }
+                    form class="stack" method="post" action={ "/" (repo.name) "/settings/archive" } {
+                        input type="hidden" name="archived" value="no";
+                        button class="vbtn" type="submit" { "Unarchive" }
+                    }
+                } @else {
+                    p class="note" { "An archived repository stays readable and clonable; pushes, new changes and new tasks are refused." }
+                    form class="stack" method="post" action={ "/" (repo.name) "/settings/archive" } {
+                        input type="hidden" name="archived" value="yes";
+                        button class="vbtn" type="submit" { "Archive" }
+                    }
+                }
+
+                div class="sechead later" { b { "Delete" } span {} }
+                p class="note" { "Its changes, claims, verdicts and discussion go with it; the log keeps what happened. Tasks and lessons stay. Type its name to confirm." }
+                form class="stack" method="post" action={ "/" (repo.name) "/settings/delete" } {
+                    div {
+                        label for="confirm" { "Repository name" }
+                        input id="confirm" name="confirm" type="text" autocomplete="off" autocapitalize="none" placeholder=(repo.name) required;
+                    }
+                    button class="vbtn danger" type="submit" { "Delete this repository" }
+                }
             }
         },
     )
@@ -2856,6 +2891,15 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
                 (revoked) @if *revoked == 1 { " credential died with it" } @else { " credentials died with it" }
             },
         ),
+        Event::RepoRenamed { repo, to } => (
+            "dot idle",
+            html! { b { (actor) } " renamed " (repo) " to " (to) },
+        ),
+        Event::RepoArchived { repo } => ("dot idle", html! { b { (actor) } " archived " (repo) }),
+        Event::RepoUnarchived { repo } => {
+            ("dot idle", html! { b { (actor) } " unarchived " (repo) })
+        }
+        Event::RepoDeleted { repo } => ("dot bad", html! { b { (actor) } " deleted " (repo) }),
         Event::ThreadReplied { change, .. } => (
             "dot idle",
             html! {

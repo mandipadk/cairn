@@ -157,6 +157,17 @@ fn may_discuss(
     )))
 }
 
+/// An archived repository takes nothing new. Reads go on; the refusal
+/// says how to change that.
+fn ensure_writable(tx: &Transaction, repo: &str) -> CoreResult<()> {
+    match raw::repo(tx, repo)? {
+        Some(record) if record.archived => Err(CoreError::Conflict(format!(
+            "{repo} is archived and takes nothing new; unarchive it first"
+        ))),
+        _ => Ok(()),
+    }
+}
+
 /// Free text a caller controls is bounded, because an append-only log
 /// keeps whatever it is given forever. The limits are generous enough
 /// that no honest use meets them.
@@ -1465,6 +1476,146 @@ impl Store {
         Ok(env)
     }
 
+    /// Everything `rename_repo` will insist on, checked ahead of moving
+    /// anything on disk.
+    pub fn check_rename(&mut self, actor: &PrincipalId, repo: &str, to: &str) -> CoreResult<()> {
+        let tx = self.conn.transaction()?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Admin,
+            Some(repo),
+        )?;
+        raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
+        require(validate_slug(to), || {
+            format!("{to:?} is not a valid name: lowercase letters, digits and hyphens")
+        })?;
+        require(to != repo, || "that is already its name".into())?;
+        require(raw::repo(&tx, to)?.is_none(), || {
+            format!("a repository named {to} already exists")
+        })?;
+        Ok(())
+    }
+
+    /// Rename a repository. Every projection follows, and the old name
+    /// answers not found from here on; the owner, or whoever runs the
+    /// forge, may do it.
+    pub fn rename_repo(
+        &mut self,
+        actor: &PrincipalId,
+        repo: &str,
+        to: &str,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Admin,
+            Some(repo),
+        )?;
+        raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
+        require(validate_slug(to), || {
+            format!("{to:?} is not a valid name: lowercase letters, digits and hyphens")
+        })?;
+        require(to != repo, || "that is already its name".into())?;
+        require(raw::repo(&tx, to)?.is_none(), || {
+            format!("a repository named {to} already exists")
+        })?;
+        let env = append(
+            &tx,
+            actor,
+            self.acting.as_ref().map(|s| &s.session),
+            Event::RepoRenamed {
+                repo: repo.to_owned(),
+                to: to.to_owned(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
+    /// Archive or unarchive: read-only, or not. Owner or admin.
+    pub fn set_archived(
+        &mut self,
+        actor: &PrincipalId,
+        repo: &str,
+        archived: bool,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Admin,
+            Some(repo),
+        )?;
+        let record =
+            raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
+        if record.archived == archived {
+            return Err(CoreError::Conflict(format!(
+                "{repo} is already {}",
+                if archived { "archived" } else { "active" }
+            )));
+        }
+        let event = if archived {
+            Event::RepoArchived {
+                repo: repo.to_owned(),
+            }
+        } else {
+            Event::RepoUnarchived {
+                repo: repo.to_owned(),
+            }
+        };
+        let env = append(&tx, actor, self.acting.as_ref().map(|s| &s.session), event)?;
+        tx.commit()?;
+        Ok(env)
+    }
+
+    /// Delete a repository. Its owner, or whoever runs the forge, types
+    /// its name to say so; nothing in the landing queue may be waiting on
+    /// it. The graph forgets the repository and keeps the log.
+    pub fn delete_repo(
+        &mut self,
+        actor: &PrincipalId,
+        repo: &str,
+        confirm: &str,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Admin,
+            Some(repo),
+        )?;
+        raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
+        require(confirm.trim() == repo, || {
+            format!("type the repository's name, {repo}, to delete it")
+        })?;
+        let queued: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM merge_queue WHERE repo = ?",
+            rusqlite::params![repo],
+            |row| row.get(0),
+        )?;
+        require(queued == 0, || {
+            format!(
+                "{repo} has {queued} change(s) in the landing queue; let them land or dequeue them first"
+            )
+        })?;
+        let env = append(
+            &tx,
+            actor,
+            self.acting.as_ref().map(|s| &s.session),
+            Event::RepoDeleted {
+                repo: repo.to_owned(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
     pub fn set_visibility(
         &mut self,
         actor: &PrincipalId,
@@ -1609,6 +1760,9 @@ impl Store {
     ) -> CoreResult<(TaskId, Envelope)> {
         let tx = self.conn.transaction()?;
         authorize(&tx, self.acting.as_ref(), actor, Capability::Task, repo)?;
+        if let Some(repo) = repo {
+            ensure_writable(&tx, repo)?;
+        }
         require(!title.trim().is_empty(), || {
             "task title must not be empty".into()
         })?;
@@ -1933,6 +2087,7 @@ impl Store {
         )?;
         raw::repo(&tx, &spec.repo)?
             .ok_or_else(|| CoreError::NotFound(format!("repo {}", spec.repo)))?;
+        ensure_writable(&tx, &spec.repo)?;
         require(valid_branch(&spec.target), || {
             format!("{:?} is not a valid branch name", spec.target)
         })?;
@@ -2011,6 +2166,7 @@ impl Store {
             Capability::Push,
             Some(&current.repo),
         )?;
+        ensure_writable(&tx, &current.repo)?;
         if current.state != ChangeState::Open {
             return Err(CoreError::Conflict(format!(
                 "change {change} is {}, not open",
@@ -2681,6 +2837,7 @@ impl Store {
             Capability::Merge,
             Some(&current.repo),
         )?;
+        ensure_writable(&tx, &current.repo)?;
         if current.state != ChangeState::Open {
             return Err(CoreError::Conflict(format!(
                 "change {change} is {}, not open",

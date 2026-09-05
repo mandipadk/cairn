@@ -102,6 +102,9 @@ pub fn routes() -> Router<AppState> {
         .route("/{repo}/log", get(log_page))
         .route("/{repo}/settings", get(repo_settings_page))
         .route("/{repo}/settings/visibility", post(repo_visibility))
+        .route("/{repo}/settings/rename", post(repo_rename))
+        .route("/{repo}/settings/archive", post(repo_archive))
+        .route("/{repo}/settings/delete", post(repo_delete))
         .route("/{repo}/settings/transfer", post(repo_transfer))
         .route("/{repo}/transfer", get(transfer_page).post(transfer_answer))
         .route("/{repo}/lessons", get(lessons_page))
@@ -3181,6 +3184,86 @@ struct TransferForm {
     action: String,
     #[serde(default)]
     to: String,
+}
+
+#[derive(Deserialize)]
+struct RenameForm {
+    to: String,
+}
+
+async fn repo_rename(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Path(repo): Path<String>,
+    Form(form): Form<RenameForm>,
+) -> Response {
+    let back = format!("/{repo}/settings");
+    let to = form.to.trim().to_owned();
+    if let Err(err) = app.with_store(|s| s.check_rename(&viewer.0, &repo, &to)) {
+        return flash(&back, &humane(&err));
+    }
+    if let Some(git) = app.git()
+        && let Err(err) = git.store.rename_repo(&repo, &to).await
+    {
+        return flash(&back, &err.to_string());
+    }
+    match app.with_store(|s| s.rename_repo(&viewer.0, &repo, &to)) {
+        Ok(env) => {
+            app.publish(&env);
+            Redirect::to(&format!("/{to}/settings?done=1")).into_response()
+        }
+        Err(err) => {
+            if let Some(git) = app.git() {
+                let _ = git.store.rename_repo(&to, &repo).await;
+            }
+            flash(&back, &humane(&err))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ArchiveForm {
+    archived: String,
+}
+
+async fn repo_archive(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Path(repo): Path<String>,
+    Form(form): Form<ArchiveForm>,
+) -> Response {
+    let back = format!("/{repo}/settings");
+    match app.with_store(|s| s.set_archived(&viewer.0, &repo, form.archived == "yes")) {
+        Ok(env) => {
+            app.publish(&env);
+            Redirect::to(&format!("{back}?done=1")).into_response()
+        }
+        Err(err) => flash(&back, &humane(&err)),
+    }
+}
+
+#[derive(Deserialize)]
+struct DeleteForm {
+    confirm: String,
+}
+
+async fn repo_delete(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Path(repo): Path<String>,
+    Form(form): Form<DeleteForm>,
+) -> Response {
+    let back = format!("/{repo}/settings");
+    match app.with_store(|s| s.delete_repo(&viewer.0, &repo, &form.confirm)) {
+        Ok(env) => {
+            if let Some(git) = app.git() {
+                let _ = git.store.remove_repo(&repo).await;
+            }
+            app.publish(&env);
+            Redirect::to("/").into_response()
+        }
+        Err(err) => flash(&back, &humane(&err)),
+    }
 }
 
 async fn repo_transfer(

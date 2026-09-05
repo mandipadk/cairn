@@ -336,6 +336,26 @@ impl GitStore {
 
     /// The smart-HTTP ref advertisement: service banner, flush, then the
     /// service's own advertisement output.
+    /// Move a repository's directory to a new name. The graph decides
+    /// the name; this only follows it.
+    pub async fn rename_repo(&self, from: &str, to: &str) -> GitResult<()> {
+        let src = self.root.join(format!("{from}.git"));
+        let dst = self.root.join(format!("{to}.git"));
+        tokio::fs::rename(&src, &dst).await?;
+        Ok(())
+    }
+
+    /// Remove a repository's directory. Nothing serves a repository the
+    /// graph has forgotten, so a directory that lingers is harmless and
+    /// one that is gone is what the graph already says.
+    pub async fn remove_repo(&self, name: &str) -> GitResult<()> {
+        let dir = self.root.join(format!("{name}.git"));
+        if tokio::fs::try_exists(&dir).await? {
+            tokio::fs::remove_dir_all(&dir).await?;
+        }
+        Ok(())
+    }
+
     pub async fn advertise_refs(
         &self,
         service: Service,

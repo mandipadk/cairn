@@ -49,7 +49,7 @@ async fn a_reset_link_arrives_by_mail_and_works_exactly_once() {
     assert_eq!(location, "/you/settings?sent=1");
     let (_, settings) = page_with_cookie(app, "/you/settings", &cookie).await;
     assert!(
-        settings.contains("ada@example.org · awaiting confirmation"),
+        settings.contains("ada@example.org — awaiting confirmation"),
         "{settings}"
     );
     let confirm = std::fs::read_to_string(&mail_file).unwrap();
@@ -66,7 +66,7 @@ async fn a_reset_link_arrives_by_mail_and_works_exactly_once() {
     assert_eq!(location, "/you/settings?done=1");
     let (_, settings) = page_with_cookie(app, "/you/settings", &cookie).await;
     assert!(
-        settings.contains("ada@example.org · confirmed"),
+        settings.contains("ada@example.org — confirmed"),
         "{settings}"
     );
 

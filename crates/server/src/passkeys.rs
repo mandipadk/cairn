@@ -137,12 +137,52 @@ pub async fn register_finish(
     }
 }
 
-/// Start a discoverable sign-in: the browser picks the credential, and
-/// with it the user; the server learns who only when the answer comes.
-pub async fn login_begin(State(app): State<AppState>) -> Response {
+#[derive(Deserialize, Default)]
+pub struct LoginBegin {
+    /// A name typed into the sign-in form. With one, the ceremony names
+    /// that person's credentials, which also reaches passkeys that are
+    /// not discoverable - a security key, say. Without one, the browser
+    /// picks the credential and with it the person.
+    #[serde(default)]
+    pub who: String,
+}
+
+pub async fn login_begin(State(app): State<AppState>, body: Option<Json<LoginBegin>>) -> Response {
     let Some(webauthn) = app.webauthn() else {
         return off();
     };
+    let who = body.map(|Json(b)| b.who).unwrap_or_default();
+    let named = cairn_core::PrincipalId::new(who.trim()).filter(|id| {
+        matches!(
+            app.with_store(|s| s.principal(id)),
+            Ok(Some(p)) if p.kind == cairn_core::PrincipalKind::Human
+        )
+    });
+    if let Some(who) = named {
+        let keys: Vec<Passkey> = app
+            .with_store(|s| s.passkey_json_of(&who))
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|j| serde_json::from_str(j).ok())
+            .collect();
+        if !keys.is_empty() {
+            return match webauthn.start_passkey_authentication(&keys) {
+                Ok((challenge, state)) => {
+                    let state_json = serde_json::to_string(&state).expect("state serialises");
+                    match app.with_store(|s| {
+                        s.put_webauthn_state(Some(&who), "login-named", &state_json)
+                    }) {
+                        Ok(id) => Json(json!({ "id": id, "options": challenge })).into_response(),
+                        Err(err) => crate::web::oops(err),
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "passkey sign-in could not start");
+                    bad("could not start sign-in")
+                }
+            };
+        }
+    }
     match webauthn.start_discoverable_authentication() {
         Ok((challenge, state)) => {
             let state_json = serde_json::to_string(&state).expect("state serialises");
@@ -172,6 +212,13 @@ pub async fn login_finish(
     let Some(webauthn) = app.webauthn() else {
         return off();
     };
+    // A named ceremony carries the person; a discoverable one does not,
+    // and the answer itself has to say who.
+    if let Ok(Some((Some(who), state))) =
+        app.with_store(|s| s.take_webauthn_state(&body.id, "login-named"))
+    {
+        return finish_named(app, headers, &body.credential, who, &state).await;
+    }
     let taken = match app.with_store(|s| s.take_webauthn_state(&body.id, "login")) {
         Ok(Some((_, state))) => state,
         Ok(None) => return bad("that sign-in has expired; start again"),
@@ -218,13 +265,57 @@ pub async fn login_finish(
             return bad("the browser's answer was not accepted");
         }
     };
+    settle(app, headers, who, cred_id, stored, &result).await
+}
+
+async fn finish_named(
+    app: AppState,
+    headers: HeaderMap,
+    credential: &PublicKeyCredential,
+    who: cairn_core::PrincipalId,
+    state_json: &str,
+) -> Response {
+    let Some(webauthn) = app.webauthn() else {
+        return off();
+    };
+    let state: PasskeyAuthentication = match serde_json::from_str(state_json) {
+        Ok(s) => s,
+        Err(_) => return bad("that sign-in has expired; start again"),
+    };
+    let result = match webauthn.finish_passkey_authentication(credential, &state) {
+        Ok(r) => r,
+        Err(err) => {
+            tracing::warn!(%err, "passkey sign-in refused");
+            return bad("the browser's answer was not accepted");
+        }
+    };
+    let stored: Vec<Passkey> = app
+        .with_store(|s| s.passkey_json_of(&who))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|j| serde_json::from_str(j).ok())
+        .collect();
+    let cred_id = cred_id_string(result.cred_id());
+    settle(app, headers, who, cred_id, stored, &result).await
+}
+
+/// Both sign-in paths end here: the key learns its counter, a clone is
+/// refused, and a session begins.
+async fn settle(
+    app: AppState,
+    headers: HeaderMap,
+    who: cairn_core::PrincipalId,
+    cred_id: String,
+    stored: Vec<Passkey>,
+    result: &AuthenticationResult,
+) -> Response {
     // The stored key learns the new counter. A counter that did not move
     // on an authenticator that is not backed up can mean a clone; the
     // library says so, and a clone is refused rather than trusted.
     let Some(mut key) = stored.into_iter().find(|k| k.cred_id() == result.cred_id()) else {
         return bad("that passkey is not registered here");
     };
-    if key.update_credential(&result) == Some(false) {
+    if key.update_credential(result) == Some(false) {
         tracing::warn!(
             who = who.as_str(),
             "passkey sign-in refused: counter did not advance"
@@ -324,7 +415,7 @@ pub const SCRIPT: &str = r#"(function () {
           extensions: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {} } });
       });
     }).then(function () { location.reload(); })
-      .catch(function (e) { say(register, e.message || String(e)); });
+      .catch(function (e) { say(register, explain(e)); });
   });
   var login = document.querySelector('[data-passkey="login"]');
   if (login) login.addEventListener('click', function () {
@@ -342,7 +433,7 @@ pub const SCRIPT: &str = r#"(function () {
           extensions: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {} } });
       });
     }).then(function (done) { location.assign(done.to || '/'); })
-      .catch(function (e) { say(login, e.message || String(e)); });
+      .catch(function (e) { say(login, explain(e)); });
   });
 })();
 "#;

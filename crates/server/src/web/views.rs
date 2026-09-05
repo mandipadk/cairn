@@ -462,56 +462,62 @@ pub fn login(
         "Sign in",
         html! {
             div class="center" {
-                form class="login" method="post" action="/login" {
+                div class="login" {
                     div class="mark" {
                         span class="stones" aria-hidden="true" { span {} span {} span {} }
                         b { "cairn" }
                     }
-                    @if let Some(error) = error {
-                        p class="error" { (error) }
+                    @if let Some(error) = error { p class="error" { (error) } }
+                    @if sent {
+                        p class="hint" { "If that account has a confirmed address, a sign-in link is on its way. It works once, for fifteen minutes." }
                     }
-                    div {
-                        label for="principal" { "Name" }
-                        input id="principal" name="principal" type="text"
-                            autocomplete="username" autocapitalize="none" autofocus;
+
+                    form method="post" action="/login" {
+                        div {
+                            label for="principal" { "Name" }
+                            input id="principal" name="principal" type="text"
+                                autocomplete="username webauthn" autocapitalize="none" autofocus;
+                        }
+                        div {
+                            label for="password" { "Password" }
+                            input id="password" name="password" type="password"
+                                autocomplete="current-password";
+                        }
+                        button class="btn wide" type="submit" { "Sign in" }
+                        p class="hint" { a href="/forgot" { "Forgot your password?" } }
                     }
-                    div {
-                        label for="password" { "Password" }
-                        input id="password" name="password" type="password"
-                            autocomplete="current-password";
+
+                    @if can_passkey || can_mail {
+                        div class="or" { span { "or" } }
                     }
-                    button class="btn" type="submit" { "Sign in" }
-                    p class="hint" { a href="/forgot" { "Forgot your password?" } }
-                }
-                @if can_passkey {
-                    div class="login" style="margin-top: 14px;" {
-                        button class="vbtn" type="button" data-passkey="login" data-say="passkey-note" { "Sign in with a passkey" }
+                    @if can_passkey {
+                        button class="vbtn wide" type="button" data-passkey="login" data-say="passkey-note" {
+                            "Sign in with a passkey"
+                        }
                         p class="hint" id="passkey-note" {}
                     }
-                }
-                @if sent {
-                    p class="hint" { "If that account has a confirmed address, a sign-in link is on its way. It works once, for fifteen minutes." }
-                }
-                @if can_mail && !sent {
-                    form class="login" method="post" action="/login/link" style="margin-top: 22px;" {
-                        details class="alt" {
-                            summary { "Email me a sign-in link instead" }
-                            div {
-                                label for="who" { "Your name or email" }
-                                input id="who" name="who" type="text" autocomplete="username";
+                    @if can_mail && !sent {
+                        form method="post" action="/login/link" {
+                            details class="alt" {
+                                summary { "Email me a sign-in link" }
+                                div {
+                                    label for="who" { "Your name or email" }
+                                    input id="who" name="who" type="text" autocomplete="username";
+                                }
+                                button class="vbtn wide" type="submit" { "Send the link" }
                             }
-                            button class="vbtn" type="submit" { "Send the link" }
                         }
                     }
-                }
-                div class="login" style="margin-top: 0;" {
-                    details class="alt" {
-                        summary { "Sign in with a token" }
-                        div {
-                            label for="token" { "API token" }
-                            input id="token" name="token" type="password" autocomplete="off";
+                    form method="post" action="/login" {
+                        details class="alt" {
+                            summary { "Sign in with a token" }
+                            div {
+                                label for="token" { "API token" }
+                                input id="token" name="token" type="password" autocomplete="off";
+                            }
+                            button class="vbtn wide" type="submit" { "Sign in with the token" }
+                            p class="hint" { "Mint one with " code { "cairn admin mint-token" } }
                         }
-                        p class="hint" { "Mint one with " code { "cairn admin mint-token" } }
                     }
                     @if dev {
                         p class="hint" { "Dev mode: a name alone is accepted as asserted identity." }
@@ -1097,73 +1103,81 @@ pub fn settings(
                 @if done { p class="done" { "Saved." } }
                 @if sent { p class="done" { "A confirmation link is on its way." } }
                 @if first {
-                    p class="note" { "You are signed in from an invitation, which worked once. Set a password to sign in next time." }
+                    p class="note" { "You are signed in from an invitation, which worked once. Set a password, or add a passkey, to sign in next time." }
                 }
 
-                div class="sechead" style="padding-left: 0;" { b { "Email" } span {
-                    @match (&contact.email, &contact.pending) {
-                        (Some(email), None) => { (email) " · confirmed" }
-                        (Some(email), Some(pending)) => { (email) " · confirmed; " (pending) " awaiting confirmation" }
-                        (None, Some(pending)) => { (pending) " · awaiting confirmation" }
-                        (None, None) => { "none on record" }
-                    }
-                } }
-                @if can_mail {
-                    form class="stack" method="post" action="/you/settings/email" {
-                        div {
-                            label for="email" { @if contact.email.is_some() { "Change address" } @else { "Address" } }
-                            input id="email" name="email" type="email" autocomplete="email"
-                                  placeholder="a link goes there to confirm it";
+                section class="pref" {
+                    h3 { "Email" }
+                    p class="status" {
+                        @match (&contact.email, &contact.pending) {
+                            (Some(email), None) => { (email) " — confirmed" }
+                            (Some(email), Some(pending)) => { (email) " — confirmed. " (pending) " is awaiting confirmation." }
+                            (None, Some(pending)) => { (pending) " — awaiting confirmation; follow the link we sent." }
+                            (None, None) => { "No address on record. One is needed for password resets and sign-in links." }
                         }
-                        p class="hint" { "Where a password reset can reach you. Kept beside your credentials, not in the log, shown to nobody, and used only once you have followed the link." }
-                        button class="btn" type="submit" { "Send a confirmation link" }
                     }
-                } @else {
-                    p class="hint" { "This forge does not send mail, so an address cannot be confirmed here." }
+                    @if can_mail {
+                        form class="row" method="post" action="/you/settings/email" {
+                            input name="email" type="email" autocomplete="email" required
+                                  placeholder=(if contact.email.is_some() { "new address" } else { "you@example.org" })
+                                  aria-label="Email address";
+                            button class="btn" type="submit" { "Send a confirmation link" }
+                        }
+                        p class="hint" { "Kept beside your credentials, not in the log; shown to nobody; trusted only once you have followed the link." }
+                    } @else {
+                        p class="hint" { "This forge does not send mail, so an address cannot be confirmed here." }
+                    }
                 }
 
                 @if let Some(passkeys) = passkeys {
-                    div class="sechead" style="padding-left: 0; margin-top: 28px;" { b { "Passkeys" } span { (passkeys.len()) } }
-                    @for key in passkeys {
-                        div class="trow" style="grid-template-columns: minmax(0,1fr) 150px 90px; padding-left: 0;" {
-                            span { (key.label) }
-                            span class="sec3" {
-                                @match &key.last_used {
-                                    Some(used) => { "used " (day_of(used)) }
-                                    None => { "added " (day_of(&key.created)) }
+                    section class="pref" {
+                        h3 { "Passkeys" }
+                        p class="status" {
+                            @if passkeys.is_empty() { "None yet. A passkey signs you in with the device in your hand — no password." }
+                            @else { (passkeys.len()) " registered" }
+                        }
+                        @for key in passkeys {
+                            div class="keyrow" {
+                                span { (key.label) }
+                                span class="sec3" {
+                                    @match &key.last_used {
+                                        Some(used) => { "last used " (day_of(used)) }
+                                        None => { "added " (day_of(&key.created)) }
+                                    }
+                                }
+                                form method="post" action="/you/passkeys/remove" {
+                                    input type="hidden" name="cred_id" value=(key.cred_id);
+                                    button class="quiet" type="submit" { "Remove" }
                                 }
                             }
-                            form method="post" action="/you/passkeys/remove" {
-                                input type="hidden" name="cred_id" value=(key.cred_id);
-                                button class="quiet" type="submit" { "Remove" }
-                            }
                         }
-                    }
-                    div class="composer claim" style="padding-left: 0;" {
-                        input id="passkey-label" type="text" placeholder="a name for this device" autocomplete="off";
-                        div class="line" {
-                            button class="vbtn" type="button" data-passkey="register" data-say="passkey-note" { "Add a passkey" }
+                        div class="row" {
+                            input id="passkey-label" type="text" placeholder="a name for this device" autocomplete="off" aria-label="Passkey name";
+                            button class="btn" type="button" data-passkey="register" data-say="passkey-note" { "Add a passkey" }
                         }
                         p class="hint" id="passkey-note" { "Your device asks you to confirm; nothing leaves it but a public key." }
                     }
                 }
 
-                form class="stack" method="post" action="/you/settings" style="margin-top: 28px;" {
-                    div {
-                        label for="password" { "New password" }
-                        input id="password" name="password" type="password"
-                              autocomplete="new-password" minlength="12";
+                section class="pref" {
+                    h3 { "Password" }
+                    form class="stack" method="post" action="/you/settings" {
+                        div {
+                            label for="password" { "New password" }
+                            input id="password" name="password" type="password"
+                                  autocomplete="new-password" minlength="12";
+                        }
+                        div {
+                            label for="confirm" { "Again" }
+                            input id="confirm" name="confirm" type="password"
+                                  autocomplete="new-password" minlength="12";
+                        }
+                        p class="hint" {
+                            "Changing this signs out everywhere, including here — a password \
+                             change that leaves old sessions alive has not locked anyone out."
+                        }
+                        button class="btn" type="submit" { "Change password" }
                     }
-                    div {
-                        label for="confirm" { "Again" }
-                        input id="confirm" name="confirm" type="password"
-                              autocomplete="new-password" minlength="12";
-                    }
-                    p class="hint" {
-                        "Changing this signs out everywhere, including here — a password \
-                         change that leaves old sessions alive has not locked anyone out."
-                    }
-                    button class="btn" type="submit" { "Change password" }
                 }
             }
         },

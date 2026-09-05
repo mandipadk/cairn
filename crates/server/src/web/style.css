@@ -699,3 +699,22 @@ pre { overflow-x: auto; }
 .choice b { color: var(--ink); font-weight: 500; }
 
 .tick { font-size: 12.5px; color: var(--ink2); display: inline-flex; align-items: center; gap: 4px; }
+
+/* Sign-in: one column, everything stacked; alternatives after a rule. */
+.login form { display: flex; flex-direction: column; gap: 14px; }
+.login .or { display: flex; align-items: center; gap: 12px; color: var(--ink3); font-size: 12px; margin: 4px 0 -4px; }
+.login .or::before, .login .or::after { content: ""; flex: 1; height: 1px; background: var(--hair); }
+.login .alt { border-top: none; padding-top: 0; }
+.login .alt > button { margin-top: 4px; }
+.vbtn.wide { display: block; width: 100%; text-align: center; padding: 8px 12px; }
+
+/* Settings: sections with a heading, a status line, and one control each. */
+.pref { border-top: 1px solid var(--hair); padding: 22px 0 8px; margin-top: 14px; }
+.pref h3 { font-size: 14px; font-weight: 600; margin: 0 0 4px; }
+.pref .status { font-size: 12.5px; color: var(--ink3); margin: 0 0 14px; }
+.pref .row { display: flex; gap: 8px; align-items: stretch; }
+.pref .row input { flex: 1; min-width: 0; }
+.pref .row + .hint, .pref .keyrow + .row { margin-top: 12px; }
+.pref .hint { font-size: 12px; color: var(--ink3); margin-top: 8px; }
+.keyrow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 14px; align-items: baseline; padding: 8px 0; border-top: 1px solid var(--hair); font-size: 13px; }
+.keyrow:first-of-type { border-top: none; }

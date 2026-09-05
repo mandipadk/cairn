@@ -481,7 +481,7 @@ async fn sessions_action(
     };
     match result {
         Ok(()) => Redirect::to("/you/sessions?done=1").into_response(),
-        Err(err) => flash("/you/sessions", &err.to_string()),
+        Err(err) => flash("/you/sessions", &humane(&err)),
     }
 }
 
@@ -509,11 +509,8 @@ async fn change_email(
     let secret = match app.with_store(|s| s.request_email(&viewer.0, &email)) {
         Ok(secret) => secret,
         Err(err) => {
-            return Redirect::to(&format!(
-                "/you/settings?error={}",
-                urlencode(&err.to_string())
-            ))
-            .into_response();
+            return Redirect::to(&format!("/you/settings?error={}", urlencode(&humane(&err))))
+                .into_response();
         }
     };
     let link = absolute(
@@ -737,7 +734,7 @@ async fn reset_submit(State(app): State<AppState>, Form(form): Form<ResetForm>) 
             // The link was spent on a password the forge refused; give
             // them a fresh one rather than a dead end.
             let _ = app.with_store(|s| s.begin_password_reset(&who));
-            back(&err.to_string())
+            back(&humane(&err))
         }
     }
 }
@@ -767,11 +764,8 @@ async fn change_password(
             app.publish(&env);
             Redirect::to("/login?error=Password+changed.+Sign+in+again.").into_response()
         }
-        Err(err) => Redirect::to(&format!(
-            "/you/settings?error={}",
-            urlencode(&err.to_string())
-        ))
-        .into_response(),
+        Err(err) => Redirect::to(&format!("/you/settings?error={}", urlencode(&humane(&err))))
+            .into_response(),
     }
 }
 
@@ -844,11 +838,9 @@ async fn token_action(
             Redirect::to(&format!("/you/tokens?secret={}", urlencode(&secret))).into_response()
         }
         Ok(None) => Redirect::to("/you/tokens").into_response(),
-        Err(err) => Redirect::to(&format!(
-            "/you/tokens?error={}",
-            urlencode(&err.to_string())
-        ))
-        .into_response(),
+        Err(err) => {
+            Redirect::to(&format!("/you/tokens?error={}", urlencode(&humane(&err)))).into_response()
+        }
     }
 }
 
@@ -1000,7 +992,7 @@ async fn teams_action(
             app.publish(&env);
             back(None)
         }
-        Err(err) => back(Some(err.to_string())),
+        Err(err) => back(Some(humane(&err))),
     }
 }
 
@@ -1120,12 +1112,12 @@ async fn people_action(
             });
             match registered {
                 Ok(env) => app.publish(&env),
-                Err(err) => return back(&err.to_string()),
+                Err(err) => return back(&humane(&err)),
             }
             if !email.is_empty()
                 && let Err(err) = app.with_store(|s| s.request_email(&id, email))
             {
-                return back(&err.to_string());
+                return back(&humane(&err));
             }
         }
         "relink" | "cancel" => {
@@ -1145,7 +1137,7 @@ async fn people_action(
             for token in open {
                 match app.with_store(|s| s.revoke_token(&viewer.0, &token.id)) {
                     Ok(env) => app.publish(&env),
-                    Err(err) => return back(&err.to_string()),
+                    Err(err) => return back(&humane(&err)),
                 }
             }
             if form.action == "cancel" {
@@ -1176,7 +1168,7 @@ async fn people_action(
             app.publish(&env);
             secret
         }
-        Err(err) => return back(&err.to_string()),
+        Err(err) => return back(&humane(&err)),
     };
     let mut mailed = None;
     if let Some(mailer) = app.mailer()
@@ -2033,6 +2025,17 @@ fn readable(app: &AppState, viewer: &Viewer, repo: &str) -> Result<Repo, Box<Res
     }
 }
 
+/// An error as a page should say it: the message, without the kind the
+/// API prefixes it with. "invalid: that does not look like an email
+/// address" is for a machine; a person gets the second half.
+pub(crate) fn humane(err: &cairn_core::CoreError) -> String {
+    let text = err.to_string();
+    match text.split_once(": ") {
+        Some((kind, rest)) if !kind.contains(' ') => rest.to_owned(),
+        _ => text,
+    }
+}
+
 fn not_found() -> Response {
     (StatusCode::NOT_FOUND, views::not_found_page()).into_response()
 }
@@ -2449,7 +2452,7 @@ async fn submit_claim(
             app.publish(&env);
             Redirect::to(&back).into_response()
         }
-        Err(err) => flash(&back, &err.to_string()),
+        Err(err) => flash(&back, &humane(&err)),
     }
 }
 
@@ -2496,7 +2499,7 @@ async fn submit_verdict(
             app.publish(&env);
             Redirect::to(&back).into_response()
         }
-        Err(err) => flash(&back, &err.to_string()),
+        Err(err) => flash(&back, &humane(&err)),
     }
 }
 
@@ -2519,7 +2522,7 @@ async fn submit_enqueue(
             app.publish(&env);
             Redirect::to(&back).into_response()
         }
-        Err(err) => flash(&back, &err.to_string()),
+        Err(err) => flash(&back, &humane(&err)),
     }
 }
 
@@ -2729,7 +2732,7 @@ async fn repo_visibility(
             Redirect::to(&format!("{back}?done=1")).into_response()
         }
         Err(cairn_core::CoreError::NotFound(_)) => not_found(),
-        Err(err) => flash(&back, &err.to_string()),
+        Err(err) => flash(&back, &humane(&err)),
     }
 }
 
@@ -2762,7 +2765,7 @@ async fn repo_transfer(
             Redirect::to(&format!("{back}?done=1")).into_response()
         }
         Err(cairn_core::CoreError::NotFound(_)) => not_found(),
-        Err(err) => flash(&back, &err.to_string()),
+        Err(err) => flash(&back, &humane(&err)),
     }
 }
 
@@ -2812,7 +2815,7 @@ async fn transfer_answer(
             Redirect::to(&to).into_response()
         }
         Err(cairn_core::CoreError::NotFound(_)) => not_found(),
-        Err(err) => flash(&format!("/{repo}/transfer"), &err.to_string()),
+        Err(err) => flash(&format!("/{repo}/transfer"), &humane(&err)),
     }
 }
 

@@ -217,7 +217,9 @@ there, alive for an hour unless asked otherwise and never past eight, and
 dead the moment the session ends. Scope is checked before any grant, on
 every call and every read, over the API and over git alike, so a leaked
 session credential buys exactly what it carried for exactly as long as it
-lived; the mint and the revocation are events. The MCP server draws one
+lived; the mint and the revocation are events, and every event an action
+under the credential appends names the session it ran under. The MCP
+server draws one
 when it opens a session and works under it. A repository may insist
 (`agents_act_in_sessions`): agents' standing tokens are then refused for
 push, review and merge on it, while claiming a task and verifying stay

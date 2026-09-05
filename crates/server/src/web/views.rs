@@ -2924,7 +2924,12 @@ pub fn log(
                     div class="trow" {
                         span class="sec3" { (day_of(&envelope.ts)) " " (clock_of(&envelope.ts)) }
                         span class="sec2" { (envelope.actor) }
-                        span { (text) }
+                        span {
+                            (text)
+                            @if let Some(via) = &envelope.via {
+                                span class="sec3" { " · in session " (short(via.as_str())) }
+                            }
+                        }
                     }
                 }
             }

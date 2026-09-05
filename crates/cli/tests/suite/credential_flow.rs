@@ -83,6 +83,17 @@ async fn a_session_credential_carries_its_scope_and_dies_with_the_session() {
     .await;
     assert_eq!(status, StatusCode::OK, "{change}");
     assert_eq!(change["event"]["actor"], "scout");
+    // The event names the session it ran under; a standing token's does not.
+    assert_eq!(change["event"]["via"], session, "{change}");
+    let (_, plain) = api_with_token(
+        app,
+        "POST",
+        "/api/changes",
+        &forge.scout_token,
+        Some(json!({ "repo": "demo", "target": "main", "title": "Under the standing token" })),
+    )
+    .await;
+    assert!(plain["event"].get("via").is_none(), "{plain}");
 
     // Outside it the credential is nothing, though scout's grants reach there.
     let (status, other) = api(

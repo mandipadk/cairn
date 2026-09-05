@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS events (
   ts      TEXT NOT NULL,
   actor   TEXT NOT NULL,
   kind    TEXT NOT NULL,
-  payload TEXT NOT NULL
+  payload TEXT NOT NULL,
+  via     TEXT
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_events_kind ON events (kind, seq);
 ";
@@ -497,6 +498,7 @@ impl Store {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(EVENT_SCHEMA)?;
+        ensure_column(&conn, "events", "via", "TEXT")?;
         conn.execute_batch(OPERATIONAL_SCHEMA)?;
         // Operational tables are not rebuilt from the log, so a new
         // column is added in place, once, and only if it is missing.
@@ -527,7 +529,7 @@ impl Store {
     /// to everybody.
     pub fn events_after(&self, cursor: EventSeq, limit: usize) -> CoreResult<Vec<Envelope>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT seq, ts, actor, payload FROM events WHERE seq > ? ORDER BY seq LIMIT ?",
+            "SELECT seq, ts, actor, payload, via FROM events WHERE seq > ? ORDER BY seq LIMIT ?",
         )?;
         let rows = stmt.query_map(params![cursor.0, limit as i64], |row| {
             Ok((
@@ -535,11 +537,12 @@ impl Store {
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (seq, ts, actor, payload) = row?;
+            let (seq, ts, actor, payload, via) = row?;
             let event: Event = serde_json::from_str(&payload).map_err(|e| CoreError::Corrupt {
                 at: format!("event seq {seq}"),
                 reason: e.to_string(),
@@ -548,6 +551,7 @@ impl Store {
                 seq: EventSeq(seq),
                 ts,
                 actor: PrincipalId(actor),
+                via: via.map(crate::id::SessionId),
                 event,
             });
         }
@@ -579,7 +583,7 @@ impl Store {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT e.seq, e.ts, e.actor, e.payload
+            "SELECT e.seq, e.ts, e.actor, e.payload, e.via
                FROM events e
                LEFT JOIN event_scope s ON s.seq = e.seq
               WHERE e.seq > ?
@@ -605,11 +609,12 @@ impl Store {
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (seq, ts, actor, payload) = row?;
+            let (seq, ts, actor, payload, via) = row?;
             let event: Event = serde_json::from_str(&payload).map_err(|e| CoreError::Corrupt {
                 at: format!("event seq {seq}"),
                 reason: e.to_string(),
@@ -618,6 +623,7 @@ impl Store {
                 seq: EventSeq(seq),
                 ts,
                 actor: PrincipalId(actor),
+                via: via.map(crate::id::SessionId),
                 event,
             });
         }
@@ -632,7 +638,7 @@ impl Store {
     /// who cannot see event 5 would ask for 5 again forever.
     pub fn events_after_scoped(&self, cursor: EventSeq, limit: usize) -> CoreResult<Vec<Scoped>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT e.seq, e.ts, e.actor, e.payload, s.repo, s.subject
+            "SELECT e.seq, e.ts, e.actor, e.payload, s.repo, s.subject, e.via
                FROM events e
                LEFT JOIN event_scope s ON s.seq = e.seq
               WHERE e.seq > ? ORDER BY e.seq LIMIT ?",
@@ -645,11 +651,12 @@ impl Store {
                 row.get::<_, String>(3)?,
                 row.get::<_, Option<String>>(4)?,
                 row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (seq, ts, actor, payload, repo, subject) = row?;
+            let (seq, ts, actor, payload, repo, subject, via) = row?;
             let event: Event = serde_json::from_str(&payload).map_err(|e| CoreError::Corrupt {
                 at: format!("event seq {seq}"),
                 reason: e.to_string(),
@@ -659,6 +666,7 @@ impl Store {
                     seq: EventSeq(seq),
                     ts,
                     actor: PrincipalId(actor),
+                    via: via.map(crate::id::SessionId),
                     event,
                 },
                 repo,
@@ -753,17 +761,29 @@ impl Store {
 
 /// Append one event and apply it to projections, inside the caller's
 /// transaction. Commands never touch projection tables directly.
-pub(crate) fn append(tx: &Transaction, actor: &PrincipalId, event: Event) -> CoreResult<Envelope> {
+pub(crate) fn append(
+    tx: &Transaction,
+    actor: &PrincipalId,
+    via: Option<&crate::id::SessionId>,
+    event: Event,
+) -> CoreResult<Envelope> {
     let ts = jiff::Timestamp::now().to_string();
     let payload = serde_json::to_string(&event).expect("events are always serializable");
     tx.execute(
-        "INSERT INTO events (ts, actor, kind, payload) VALUES (?, ?, ?, ?)",
-        params![ts, actor.as_str(), event.kind(), payload],
+        "INSERT INTO events (ts, actor, kind, payload, via) VALUES (?, ?, ?, ?, ?)",
+        params![
+            ts,
+            actor.as_str(),
+            event.kind(),
+            payload,
+            via.map(|s| s.as_str())
+        ],
     )?;
     let envelope = Envelope {
         seq: EventSeq(tx.last_insert_rowid()),
         ts,
         actor: actor.clone(),
+        via: via.cloned(),
         event,
     };
     apply(tx, &envelope)?;
@@ -922,18 +942,20 @@ fn dump_table(conn: &Connection, table: &str) -> CoreResult<Vec<String>> {
 
 /// Replay every event into empty projections and apply them to `tx`.
 fn replay_into(tx: &Transaction, source: &Connection) -> CoreResult<u64> {
-    let mut stmt = source.prepare("SELECT seq, ts, actor, payload FROM events ORDER BY seq")?;
+    let mut stmt =
+        source.prepare("SELECT seq, ts, actor, payload, via FROM events ORDER BY seq")?;
     let rows = stmt.query_map([], |row| {
         Ok((
             row.get::<_, i64>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
             row.get::<_, String>(3)?,
+            row.get::<_, Option<String>>(4)?,
         ))
     })?;
     let mut replayed = 0;
     for row in rows {
-        let (seq, ts, actor, payload) = row?;
+        let (seq, ts, actor, payload, via) = row?;
         let event: Event = serde_json::from_str(&payload).map_err(|e| CoreError::Corrupt {
             at: format!("event seq {seq}"),
             reason: e.to_string(),
@@ -944,6 +966,7 @@ fn replay_into(tx: &Transaction, source: &Connection) -> CoreResult<u64> {
                 seq: EventSeq(seq),
                 ts,
                 actor: PrincipalId(actor),
+                via: via.map(crate::id::SessionId),
                 event,
             },
         )?;
@@ -965,7 +988,7 @@ fn rebuild_projections(conn: &mut Connection) -> CoreResult<()> {
     loop {
         let batch = {
             let mut stmt = tx.prepare(
-                "SELECT seq, ts, actor, payload FROM events
+                "SELECT seq, ts, actor, payload, via FROM events
                  WHERE seq > ? ORDER BY seq LIMIT 1000",
             )?;
             let rows = stmt.query_map(params![cursor], |row| {
@@ -974,6 +997,7 @@ fn rebuild_projections(conn: &mut Connection) -> CoreResult<()> {
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
                 ))
             })?;
             rows.collect::<Result<Vec<_>, _>>()?
@@ -981,7 +1005,7 @@ fn rebuild_projections(conn: &mut Connection) -> CoreResult<()> {
         if batch.is_empty() {
             break;
         }
-        for (seq, ts, actor, payload) in batch {
+        for (seq, ts, actor, payload, via) in batch {
             let event: Event = serde_json::from_str(&payload).map_err(|e| CoreError::Corrupt {
                 at: format!("event seq {seq}"),
                 reason: e.to_string(),
@@ -992,6 +1016,7 @@ fn rebuild_projections(conn: &mut Connection) -> CoreResult<()> {
                     seq: EventSeq(seq),
                     ts,
                     actor: PrincipalId(actor),
+                    via: via.map(crate::id::SessionId),
                     event,
                 },
             )?;

@@ -31,6 +31,10 @@ pub struct Envelope {
     pub ts: String,
     /// The principal whose action produced this event.
     pub actor: PrincipalId,
+    /// The session whose credential the action ran under, when it did.
+    /// The log then answers "which run did this" without the clock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<SessionId>,
     #[serde(flatten)]
     pub event: Event,
 }
@@ -428,6 +432,7 @@ mod tests {
             seq: EventSeq(7),
             ts: "2026-08-09T00:00:00Z".into(),
             actor: PrincipalId("ada".into()),
+            via: None,
             event: Event::TaskClaimed {
                 task: TaskId("t-x".into()),
             },

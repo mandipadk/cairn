@@ -585,6 +585,29 @@ where
 /// Submit a form as a signed-in browser would, and report where it was
 /// sent next. Pages answer a form with a redirect, so the location is
 /// the interesting part of the response.
+/// Post a form and read the page that comes back, for forms that answer
+/// with a page rather than a redirect.
+pub async fn post_form_page(
+    app: &Router,
+    path: &str,
+    cookie: &str,
+    body: &str,
+) -> (StatusCode, String) {
+    let request = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("cookie", cookie)
+        .body(Body::from(body.to_owned()))
+        .unwrap();
+    let response = tower::ServiceExt::oneshot(app.clone(), request)
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
 pub async fn post_form(app: &Router, path: &str, cookie: &str, body: &str) -> (StatusCode, String) {
     let request = Request::builder()
         .method("POST")

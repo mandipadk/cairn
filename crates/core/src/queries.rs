@@ -641,6 +641,27 @@ pub(crate) mod raw {
             .collect::<Result<Vec<_>, _>>()?)
     }
 
+    pub fn sessions_for_task(conn: &Connection, task: &str) -> CoreResult<Vec<Session>> {
+        let ids: Vec<String> = conn
+            .prepare_cached("SELECT id FROM sessions WHERE task = ? ORDER BY rowid")?
+            .query_map(params![task], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        ids.into_iter()
+            .filter_map(|id| session(conn, &id).transpose())
+            .collect()
+    }
+
+    pub fn changes_for_task(conn: &Connection, task: &str) -> CoreResult<Vec<Change>> {
+        conn.prepare_cached(&format!(
+            "SELECT {CHANGE_COLS} FROM changes WHERE task = ? ORDER BY number"
+        ))?
+        .query_map(params![task], change_from_row)?
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(finish_change)
+        .collect()
+    }
+
     pub fn verdict_ref(conn: &Connection, id: &str) -> CoreResult<Option<(String, i64)>> {
         Ok(conn
             .prepare_cached("SELECT change_id, revision FROM verdicts WHERE id = ?")?
@@ -1504,6 +1525,14 @@ impl Store {
         principal: &PrincipalId,
     ) -> CoreResult<Vec<crate::types::WorkloadBinding>> {
         raw::workload_bindings_of(&self.conn, principal.as_str())
+    }
+
+    pub fn sessions_for_task(&self, task: &TaskId) -> CoreResult<Vec<Session>> {
+        raw::sessions_for_task(&self.conn, task.as_str())
+    }
+
+    pub fn changes_for_task(&self, task: &TaskId) -> CoreResult<Vec<Change>> {
+        raw::changes_for_task(&self.conn, task.as_str())
     }
 
     pub fn changes_page(

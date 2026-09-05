@@ -31,6 +31,7 @@ mod mcp;
 mod mirror_flow;
 mod oidc_flow;
 mod pages_flow;
+mod pages_more_flow;
 mod passkeys_flow;
 mod password_flow;
 mod public_flow;

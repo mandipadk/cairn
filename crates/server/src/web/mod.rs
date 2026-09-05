@@ -79,6 +79,11 @@ pub fn routes() -> Router<AppState> {
         .merge(crate::oidc::web_routes())
         .route("/you/tokens", get(tokens_page).post(token_action))
         .route("/agents", get(agents_page).post(agent_action))
+        .route("/tasks", get(tasks_page))
+        .route("/tasks/{id}", get(task_page).post(task_action))
+        .route("/log", get(forge_log_page))
+        .route("/{repo}/settings/policy", post(repo_policy))
+        .route("/{repo}/settings/mirror", post(repo_mirror))
         .route("/people", get(people_page).post(people_action))
         .route("/teams", get(teams_page).post(teams_action))
         .route("/join", get(join))
@@ -3303,6 +3308,7 @@ async fn repo_settings_page(
         &record,
         flash.error.as_deref(),
         flash.done.is_some(),
+        None,
     )
     .into_response()
 }
@@ -3311,6 +3317,300 @@ async fn repo_settings_page(
 struct VisibilityForm {
     #[serde(default)]
     visibility: String,
+}
+
+#[derive(Deserialize)]
+struct TasksQuery {
+    state: Option<String>,
+}
+
+async fn tasks_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    viewer: Viewer,
+    Query(query): Query<TasksQuery>,
+) -> Response {
+    let filter = query
+        .state
+        .as_deref()
+        .and_then(cairn_core::TaskState::parse);
+    let tasks = app.with_store(|s| {
+        let mut tasks = s.tasks(filter)?;
+        tasks.retain(|t| {
+            t.repo
+                .as_deref()
+                .is_none_or(|repo| s.may_read(&viewer.0, repo))
+        });
+        tasks.reverse();
+        Ok::<_, cairn_core::CoreError>(tasks)
+    });
+    match tasks {
+        Ok(tasks) => views::tasks(theme, &viewer, &tasks, filter).into_response(),
+        Err(err) => oops(err),
+    }
+}
+
+async fn task_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    viewer: Viewer,
+    Path(id): Path<String>,
+) -> Response {
+    let id = cairn_core::TaskId(id);
+    let task = match app.with_store(|s| s.task(&id)) {
+        Ok(Some(task)) => task,
+        Ok(None) => return not_found(),
+        Err(err) => return oops(err),
+    };
+    if let Some(repo) = &task.repo
+        && !app.with_store(|s| s.may_read(&viewer.0, repo))
+    {
+        return not_found();
+    }
+    let (sessions, changes) = match app.with_store(|s| {
+        Ok::<_, cairn_core::CoreError>((s.sessions_for_task(&id)?, s.changes_for_task(&id)?))
+    }) {
+        Ok(found) => found,
+        Err(err) => return oops(err),
+    };
+    let can_close = task.created_by == viewer.0
+        || task.claimed_by.as_ref() == Some(&viewer.0)
+        || viewer.1.admin;
+    views::task(theme, &viewer, &task, &sessions, &changes, can_close).into_response()
+}
+
+#[derive(Deserialize)]
+struct TaskStateForm {
+    state: String,
+}
+
+async fn task_action(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Path(id): Path<String>,
+    Form(form): Form<TaskStateForm>,
+) -> Response {
+    let back = format!("/tasks/{id}");
+    let Some(state) = cairn_core::TaskState::parse(&form.state) else {
+        return flash(&back, "Pick a state");
+    };
+    match app.with_store(|s| s.set_task_state(&viewer.0, &cairn_core::TaskId(id.clone()), state)) {
+        Ok(env) => {
+            app.publish(&env);
+            Redirect::to(&back).into_response()
+        }
+        Err(err) => flash(&back, &humane(&err)),
+    }
+}
+
+#[derive(Deserialize)]
+struct ForgeLogQuery {
+    after: Option<i64>,
+}
+
+/// Everything, for whoever runs the forge: the log the repository logs
+/// are cut from.
+async fn forge_log_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    viewer: Viewer,
+    Query(query): Query<ForgeLogQuery>,
+) -> Response {
+    if !viewer.1.admin {
+        return not_found();
+    }
+    let after = query.after.unwrap_or(0);
+    let events = match app
+        .with_store(|s| s.events_visible_to(&viewer.0, cairn_core::EventSeq(after), 200))
+    {
+        Ok(events) => events,
+        Err(err) => return oops(err),
+    };
+    let (numbers, scopes) = match app.with_store(|s| {
+        let mut numbers = HashMap::new();
+        for repo in s.repos()? {
+            for change in s.changes_in_repo(&repo.name)? {
+                numbers.insert(
+                    change.id.as_str().to_owned(),
+                    (change.number, change.title.clone()),
+                );
+            }
+        }
+        let mut scopes = HashMap::new();
+        for scoped in s.events_after_scoped(cairn_core::EventSeq(after), 200)? {
+            scopes.insert(scoped.envelope.seq.0, scoped.repo.clone());
+        }
+        Ok::<_, cairn_core::CoreError>((numbers, scopes))
+    }) {
+        Ok(found) => found,
+        Err(err) => return oops(err),
+    };
+    views::forge_log(theme, &viewer, &numbers, &events, &scopes, after).into_response()
+}
+
+#[derive(Deserialize)]
+struct PolicyForm {
+    #[serde(default)]
+    action: String,
+    #[serde(default)]
+    require_executed_check: Option<String>,
+    #[serde(default)]
+    require_runner_verification: Option<String>,
+    #[serde(default)]
+    require_concerns_resolved: Option<String>,
+    #[serde(default)]
+    agents_act_in_sessions: Option<String>,
+    #[serde(default)]
+    independence: String,
+    #[serde(default)]
+    domains: Vec<String>,
+    #[serde(default)]
+    attention_budget: String,
+}
+
+/// A form with repeated `domains` keys, read by hand: the standard form
+/// extractor keeps only the last of a repeated key.
+fn parse_policy_form(body: &str) -> Option<PolicyForm> {
+    let mut form = PolicyForm {
+        action: String::new(),
+        require_executed_check: None,
+        require_runner_verification: None,
+        require_concerns_resolved: None,
+        agents_act_in_sessions: None,
+        independence: String::new(),
+        domains: Vec::new(),
+        attention_budget: String::new(),
+    };
+    for pair in body.split('&').filter(|p| !p.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let value = urldecode(value)?;
+        match key {
+            "action" => form.action = value,
+            "require_executed_check" => form.require_executed_check = Some(value),
+            "require_runner_verification" => form.require_runner_verification = Some(value),
+            "require_concerns_resolved" => form.require_concerns_resolved = Some(value),
+            "agents_act_in_sessions" => form.agents_act_in_sessions = Some(value),
+            "independence" => form.independence = value,
+            "domains" => form.domains.push(value),
+            "attention_budget" => form.attention_budget = value,
+            _ => {}
+        }
+    }
+    Some(form)
+}
+
+fn urldecode(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok()?;
+                out.push(u8::from_str_radix(hex, 16).ok()?);
+                i += 2;
+            }
+            b => out.push(b),
+        }
+        i += 1;
+    }
+    String::from_utf8(out).ok()
+}
+
+fn policy_from(form: &PolicyForm) -> Result<cairn_core::Policy, &'static str> {
+    let independence =
+        cairn_core::Independence::parse(&form.independence).ok_or("Pick an approval rule")?;
+    let mut required_domains = Vec::new();
+    for domain in &form.domains {
+        required_domains
+            .push(cairn_core::ReviewDomain::parse(domain).ok_or("Unknown review domain")?);
+    }
+    let attention_budget = match form.attention_budget.trim() {
+        "" | "0" => None,
+        n => Some(
+            n.parse::<u32>()
+                .map_err(|_| "The daily budget is a small whole number")?,
+        ),
+    };
+    Ok(cairn_core::Policy {
+        require_executed_check: form.require_executed_check.is_some(),
+        independence,
+        require_runner_verification: form.require_runner_verification.is_some(),
+        required_domains,
+        require_concerns_resolved: form.require_concerns_resolved.is_some(),
+        attention_budget,
+        agents_act_in_sessions: form.agents_act_in_sessions.is_some(),
+    })
+}
+
+async fn repo_policy(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    viewer: Viewer,
+    Path(repo): Path<String>,
+    body: String,
+) -> Response {
+    let back = format!("/{repo}/settings");
+    let record = match readable(&app, &viewer, &repo) {
+        Ok(record) => record,
+        Err(response) => return *response,
+    };
+    if record.owner != viewer.0 && !viewer.1.admin {
+        return not_found();
+    }
+    let form = match parse_policy_form(&body) {
+        Some(form) => form,
+        None => return flash(&back, "That form could not be read"),
+    };
+    let policy = match policy_from(&form) {
+        Ok(policy) => policy,
+        Err(why) => return flash(&back, why),
+    };
+    if form.action == "preview" {
+        return match app.with_store(|s| s.policy_preview(&repo, &policy)) {
+            Ok(previewed) => {
+                views::repo_settings(theme, &viewer, &record, None, false, Some(&previewed))
+                    .into_response()
+            }
+            Err(err) => flash(&back, &humane(&err)),
+        };
+    }
+    match app.with_store(|s| s.set_policy(&viewer.0, &repo, policy)) {
+        Ok(env) => {
+            app.publish(&env);
+            Redirect::to(&format!("{back}?done=1")).into_response()
+        }
+        Err(err) => flash(&back, &humane(&err)),
+    }
+}
+
+#[derive(Deserialize)]
+struct MirrorForm {
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    enabled: Option<String>,
+}
+
+async fn repo_mirror(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Path(repo): Path<String>,
+    Form(form): Form<MirrorForm>,
+) -> Response {
+    let back = format!("/{repo}/settings");
+    let mirror = (!form.url.trim().is_empty()).then(|| cairn_core::Mirror {
+        url: form.url.trim().to_owned(),
+        enabled: form.enabled.is_some(),
+    });
+    match app.with_store(|s| s.set_mirror(&viewer.0, &repo, mirror, app.dev_identity())) {
+        Ok(env) => {
+            app.publish(&env);
+            Redirect::to(&format!("{back}?done=1")).into_response()
+        }
+        Err(err) => flash(&back, &humane(&err)),
+    }
 }
 
 async fn repo_visibility(

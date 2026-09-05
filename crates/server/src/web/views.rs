@@ -4,7 +4,10 @@
 
 use super::diff::{FileDiff, LineKind};
 use super::{Brief, Chrome, LandingData, Sidebar, Viewer};
-use cairn_core::{Anchor, Resolution, Side, Thread, ThreadKind};
+use cairn_core::{
+    Anchor, Independence, Resolution, ReviewDomain, Session, SessionState, Side, TaskState, Thread,
+    ThreadKind,
+};
 use cairn_core::{
     BrowserSession, Change, ChangeState, Claim, Contact, Disposition, Envelope, Event, HitKind,
     Notice, PasskeyRecord, PolicyTrace, Repo, Revision, Task, Verdict, Verification, Visibility,
@@ -305,6 +308,14 @@ fn sidebar(chrome: &Chrome, signed: bool, current: Option<&str>) -> Markup {
             }
             a class={ @if current == Some("you") { "on" } @else { "" } } href="/you" {
                 span { "Your changes" } span class="n" { @if chrome.yours > 0 { (chrome.yours) } }
+            }
+            a class={ @if current == Some("tasks") { "on" } @else { "" } } href="/tasks" {
+                span { "Tasks" } span class="n" {}
+            }
+            @if chrome.admin {
+                a class={ @if current == Some("log") { "on" } @else { "" } } href="/log" {
+                    span { "Forge log" } span class="n" {}
+                }
             }
             @if chrome.admin {
                 a class={ @if current == Some("agents") { "on" } @else { "" } } href="/agents" {
@@ -950,6 +961,55 @@ fn day_of(ts: &str) -> String {
     ts.get(..10).unwrap_or(ts).to_owned()
 }
 
+/// "5 Sep" for a day this year, "5 Sep 2025" otherwise: what a person
+/// scanning a list wants to read.
+fn short_day(ts: &str) -> String {
+    let Some(date) = ts.get(..10) else {
+        return ts.to_owned();
+    };
+    let mut parts = date.split('-');
+    let (Some(year), Some(month), Some(day)) = (parts.next(), parts.next(), parts.next()) else {
+        return date.to_owned();
+    };
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let month = month
+        .parse::<usize>()
+        .ok()
+        .and_then(|m| MONTHS.get(m.wrapping_sub(1)))
+        .copied()
+        .unwrap_or(month);
+    let day = day.trim_start_matches('0');
+    let this_year = jiff::Timestamp::now().to_string();
+    if this_year.starts_with(year) {
+        format!("{day} {month}")
+    } else {
+        format!("{day} {month} {year}")
+    }
+}
+
+/// The body of a commit message: after the title line, before the
+/// trailers nobody reads twice.
+fn message_body(message: &str) -> Option<String> {
+    let (_, rest) = message.split_once('\n')?;
+    let lines: Vec<&str> = rest.trim().lines().collect();
+    let mut end = lines.len();
+    while end > 0 {
+        let line = lines[end - 1].trim();
+        let is_trailer = line.is_empty()
+            || line.split_once(": ").is_some_and(|(key, _)| {
+                !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+            });
+        if !is_trailer {
+            break;
+        }
+        end -= 1;
+    }
+    let body = lines[..end].join("\n").trim().to_owned();
+    (!body.is_empty()).then_some(body)
+}
+
 fn clock_of(ts: &str) -> String {
     ts.get(11..16).unwrap_or("").to_owned()
 }
@@ -971,13 +1031,169 @@ fn day_label(day: &str) -> String {
     }
 }
 
+/// Every task the viewer may see, newest first, filtered by state.
+pub fn tasks(theme: Theme, viewer: &Viewer, tasks: &[Task], filter: Option<TaskState>) -> Markup {
+    let href = |state: Option<TaskState>| match state {
+        Some(state) => format!("/tasks?state={}", state.as_str()),
+        None => "/tasks".to_owned(),
+    };
+    layout_section(
+        theme,
+        viewer,
+        "tasks",
+        "Tasks",
+        html! {
+            div class="sechead" { b { "Tasks" } span { (tasks.len()) } }
+            div class="tabs filters" {
+                a class={ "tab" @if filter.is_none() { " active" } } href=(href(None)) { "All" }
+                @for state in [TaskState::Open, TaskState::Claimed, TaskState::Landed, TaskState::Abandoned] {
+                    a class={ "tab" @if filter == Some(state) { " active" } } href=(href(Some(state))) { (state.as_str()) }
+                }
+            }
+            @if tasks.is_empty() {
+                p class="empty" { "No tasks. An agent or a person opens one over the API: a durable statement of what should be done and why." }
+            }
+            @for task in tasks {
+                a class="trow tasks" href={ "/tasks/" (task.id.as_str()) } {
+                    span class=(task_dot(task.state)) {}
+                    span class="strong" { (task.title) }
+                    span class="sec2" { @if let Some(repo) = &task.repo { (repo) } @else { "any repository" } }
+                    span class="sec3" {
+                        @match &task.claimed_by {
+                            Some(who) => { (task.state.as_str()) " · " (who.as_str()) }
+                            None => { (task.state.as_str()) }
+                        }
+                    }
+                }
+            }
+        },
+    )
+}
+
+fn task_dot(state: TaskState) -> &'static str {
+    match state {
+        TaskState::Open => "dot idle",
+        TaskState::Claimed => "dot open",
+        TaskState::Landed => "dot ok",
+        TaskState::Abandoned => "dot bad",
+    }
+}
+
+/// One task: its intent, who holds it, the runs against it and what they
+/// learned, and the changes that came of it.
+pub fn task(
+    theme: Theme,
+    viewer: &Viewer,
+    task: &Task,
+    sessions: &[Session],
+    changes: &[Change],
+    can_close: bool,
+) -> Markup {
+    layout_section(
+        theme,
+        viewer,
+        "tasks",
+        &task.title,
+        html! {
+            div class="chg-title" {
+                div class="line1" {
+                    span class=(task_dot(task.state)) {}
+                    h1 { (task.title) }
+                }
+                div class="meta" {
+                    span { (task.state.as_str()) }
+                    span class="sep" { "·" }
+                    span { "by " (task.created_by.as_str()) }
+                    @if let Some(who) = &task.claimed_by { span class="sep" { "·" } span { "held by " (who.as_str()) } }
+                    @if let Some(repo) = &task.repo { span class="sep" { "·" } a class="link" href={ "/" (repo) } { (repo) } }
+                    @if let Some(parent) = &task.parent { span class="sep" { "·" } a class="link" href={ "/tasks/" (parent.as_str()) } { "part of a larger task" } }
+                }
+                pre class="msg" { (task.spec) }
+            }
+            div class="sechead later" { b { "Sessions" } span { (sessions.len()) } }
+            @if sessions.is_empty() { p class="empty" { "Nobody has run against this yet." } }
+            @for session in sessions {
+                div class="trow sessions-of-task" {
+                    span class={ @match session.state { SessionState::Active => "dot open", SessionState::Completed => "dot ok", SessionState::Failed => "dot bad" } } {}
+                    span class="strong" { (session.agent.as_str()) }
+                    span class="sec3" { (session.state.as_str()) }
+                    span class="sec2" { @if let Some(outcome) = &session.outcome { (outcome) } }
+                }
+            }
+            div class="sechead later" { b { "Changes" } span { (changes.len()) } }
+            @if changes.is_empty() { p class="empty" { "No change names this task yet." } }
+            @for change in changes {
+                a class="trow" href={ "/" (change.repo) "/changes/" (change.number) } {
+                    (state_dot(change.state))
+                    span class="sec3" { (change.repo) " #" (change.number) }
+                    span class="strong" { (change.title) }
+                    span class="sec2" { (change.owner) }
+                }
+            }
+            @if can_close && matches!(task.state, TaskState::Open | TaskState::Claimed) {
+                form class="inline later" method="post" action={ "/tasks/" (task.id.as_str()) } {
+                    button class="vbtn" type="submit" name="state" value="landed" { "Mark landed" }
+                    button class="vbtn danger" type="submit" name="state" value="abandoned" { "Abandon" }
+                }
+            }
+        },
+    )
+}
+
+/// Everything that happened, forge-wide, for whoever runs it.
+pub fn forge_log(
+    theme: Theme,
+    viewer: &Viewer,
+    numbers: &HashMap<String, (i64, String)>,
+    events: &[Envelope],
+    scopes: &HashMap<i64, Option<String>>,
+    after: i64,
+) -> Markup {
+    let refs: Refs = numbers
+        .iter()
+        .map(|(id, (number, title))| (id.as_str(), (*number, title.as_str())))
+        .collect();
+    layout_section(
+        theme,
+        viewer,
+        "log",
+        "Forge log",
+        html! {
+            div class="sechead" { b { "Forge log" } span { "everything, newest last" } }
+            div class="log" {
+                @for envelope in events {
+                    @let (_, text) = describe(&refs, envelope);
+                    div class="trow" {
+                        span class="sec3" { (day_of(&envelope.ts)) " " (clock_of(&envelope.ts)) }
+                        span class="sec2" { (envelope.actor) }
+                        span {
+                            @if let Some(Some(repo)) = scopes.get(&envelope.seq.0) { a class="link sec3" href={ "/" (repo) "/log" } { (repo) } " · " }
+                            (text)
+                            @if let Some(via) = &envelope.via {
+                                span class="sec3" { " · in session " (short(via.as_str())) }
+                            }
+                        }
+                    }
+                }
+            }
+            @if let Some(last) = events.last() {
+                @if after > 0 || events.len() >= 200 {
+                    div class="sechead later" { span {} a class="quiet" href={ "/log?after=" (last.seq.0) } { "Later events" } }
+                }
+            }
+        },
+    )
+}
+
 pub fn repo_settings(
     theme: Theme,
     viewer: &Viewer,
     repo: &Repo,
     error: Option<&str>,
     done: bool,
+    preview: Option<&[(Change, PolicyTrace)]>,
 ) -> Markup {
+    let policy = &repo.policy;
     layout(
         theme,
         Some(viewer),
@@ -1018,6 +1234,71 @@ pub fn repo_settings(
                             input id="to" name="to" type="text" autocomplete="off" placeholder="their name" required;
                         }
                         button class="btn" type="submit" { "Offer ownership" }
+                    }
+                }
+
+                div class="sechead later" { b { "Landing policy" } span { "what must be true before anything lands" } }
+                form class="stack" method="post" action={ "/" (repo.name) "/settings/policy" } {
+                    label class="tick" { input type="checkbox" name="require_executed_check" checked[policy.require_executed_check]; "A passing executed check on the landing revision" }
+                    label class="tick" { input type="checkbox" name="require_runner_verification" checked[policy.require_runner_verification]; "A runner has reproduced a claim" }
+                    label class="tick" { input type="checkbox" name="require_concerns_resolved" checked[policy.require_concerns_resolved]; "No concern raised in discussion is left unresolved" }
+                    label class="tick" { input type="checkbox" name="agents_act_in_sessions" checked[policy.agents_act_in_sessions]; "Agents act inside sessions; their standing tokens cannot push, review or merge" }
+                    div {
+                        label for="independence" { "Approval" }
+                        select id="independence" name="independence" {
+                            @for choice in [Independence::HumanOrTwoModels, Independence::HumanOnly, Independence::Anyone, Independence::None] {
+                                option value=(choice.as_str()) selected[policy.independence == choice] {
+                                    @match choice {
+                                        Independence::HumanOrTwoModels => "one human, or two agents of distinct models",
+                                        Independence::HumanOnly => "a human, and only a human",
+                                        Independence::Anyone => "anyone but the owner",
+                                        Independence::None => "nobody (a scratch repository)",
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    div {
+                        span class="hint" { "Domains a reviewer must cover" }
+                        @for domain in [ReviewDomain::Correctness, ReviewDomain::Security, ReviewDomain::Design, ReviewDomain::Style] {
+                            label class="tick" { input type="checkbox" name="domains" value=(domain.as_str()) checked[policy.required_domains.contains(&domain)]; (domain.as_str()) }
+                        }
+                    }
+                    div {
+                        label for="attention_budget" { "Human looks drawn per day (empty for none)" }
+                        input id="attention_budget" name="attention_budget" type="number" min="0" max="100"
+                              value=(policy.attention_budget.map(|n| n.to_string()).unwrap_or_default());
+                    }
+                    div class="line" {
+                        button class="vbtn" type="submit" name="action" value="preview" { "Preview against open changes" }
+                        button class="btn" type="submit" name="action" value="save" { "Save policy" }
+                    }
+                }
+                @if let Some(previewed) = preview {
+                    div class="preview" {
+                        @let blocked: Vec<&(Change, PolicyTrace)> = previewed.iter().filter(|(_, trace)| !trace.satisfied).collect();
+                        p class="note" {
+                            "Against " (previewed.len()) " open change(s), this policy would hold " (blocked.len()) "."
+                        }
+                        @for (change, trace) in blocked {
+                            div class="trow" {
+                                a class="link" href={ "/" (repo.name) "/changes/" (change.number) } { "#" (change.number) " " (change.title) }
+                                span class="sec3" { (trace.unmet_summary()) }
+                            }
+                        }
+                    }
+                }
+
+                @if viewer.1.admin {
+                    div class="sechead later" { b { "Mirror" } span { @if let Some(m) = &repo.mirror { (m.url) } @else { "none" } } }
+                    p class="note" { "Landed branches are copied to this address after every landing. The credential lives with whoever runs the forge, never here." }
+                    form class="stack" method="post" action={ "/" (repo.name) "/settings/mirror" } {
+                        div {
+                            label for="mirror-url" { "Push URL (https), empty to stop mirroring" }
+                            input id="mirror-url" name="url" type="text" autocomplete="off" value=(repo.mirror.as_ref().map(|m| m.url.as_str()).unwrap_or(""));
+                        }
+                        label class="tick" { input type="checkbox" name="enabled" checked[repo.mirror.as_ref().is_some_and(|m| m.enabled)]; "Pushes attempted" }
+                        button class="vbtn" type="submit" { "Save mirror" }
                     }
                 }
 
@@ -1993,8 +2274,8 @@ pub fn changes(
                         span class="sec3" { "#" (change.number) }
                         span class="strong" { (change.title) }
                         span class="sec2" { (change.owner) }
-                        span class="sec3" title=(change.opened_at) { "opened " (day_of(&change.opened_at)) }
-                        span class="sec3" title=(change.updated_at) { "moved " (day_of(&change.updated_at)) " " (clock_of(&change.updated_at)) }
+                        span class="sec3" title=(change.opened_at) { "opened " (short_day(&change.opened_at)) }
+                        span class="sec3" title=(change.updated_at) { "moved " (short_day(&change.updated_at)) " " (clock_of(&change.updated_at)) }
                         span class="sec3 r" { "r" (change.latest_revision) }
                     }
                 }
@@ -2100,11 +2381,9 @@ pub fn change(page: ChangePage) -> Markup {
         .find(|r| r.number == shown)
         .map(|r| r.message.as_str())
         .unwrap_or("");
-    // The title line is the title; what follows is the message worth reading.
-    let body = message
-        .split_once('\n')
-        .map(|(_, rest)| rest.trim())
-        .filter(|rest| !rest.is_empty());
+    // The title line is the title; what follows, up to the trailers, is
+    // the message worth reading.
+    let body = message_body(message);
     let title = format!("#{} {}", change.number, change.title);
     let standing = threads
         .iter()
@@ -2159,9 +2438,9 @@ pub fn change(page: ChangePage) -> Markup {
                     span class="sep" { "·" }
                     span { "targets " (change.target) }
                     span class="sep" { "·" }
-                    span title=(change.opened_at) { "opened " (day_of(&change.opened_at)) }
+                    span title=(change.opened_at) { "opened " (short_day(&change.opened_at)) }
                     span class="sep" { "·" }
-                    span title=(change.updated_at) { "moved " (day_of(&change.updated_at)) " " (clock_of(&change.updated_at)) }
+                    span title=(change.updated_at) { "moved " (short_day(&change.updated_at)) " " (clock_of(&change.updated_at)) }
                     @if standing > 0 {
                         span class="sep" { "·" }
                         span class="stands" {

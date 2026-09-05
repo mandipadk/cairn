@@ -7,6 +7,7 @@
 
 mod account_flow;
 mod assets_flow;
+mod attention_budget_flow;
 mod auth_flow;
 mod claim_form_flow;
 mod common;

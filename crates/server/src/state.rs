@@ -45,6 +45,9 @@ pub struct AppState {
     events: broadcast::Sender<Envelope>,
     git: Option<Arc<GitContext>>,
     dev_identity: bool,
+    /// Whether the landing train spends attention budgets on its tick.
+    /// Off only in tests that drive the draw by hand.
+    automatic_draws: bool,
     /// Set when the forge is reached over HTTPS, so session cookies
     /// can be marked Secure.
     secure_cookies: bool,
@@ -78,6 +81,7 @@ impl AppState {
             events,
             git: None,
             dev_identity: false,
+            automatic_draws: true,
             secure_cookies: false,
             proxy_trust: crate::guard::ProxyTrust::Connection,
             login_limiter: crate::guard::LoginLimiter::default(),
@@ -146,6 +150,15 @@ impl AppState {
 
     /// Accept asserted identity via the dev header. For local
     /// development and in-process tests only; never the default.
+    pub fn without_automatic_draws(mut self) -> Self {
+        self.automatic_draws = false;
+        self
+    }
+
+    pub fn draws_automatically(&self) -> bool {
+        self.automatic_draws
+    }
+
     pub fn with_dev_identity(mut self) -> Self {
         self.dev_identity = true;
         self

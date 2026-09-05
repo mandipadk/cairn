@@ -420,6 +420,11 @@ pub struct Policy {
     /// No concern raised in discussion may be left unresolved.
     #[serde(default = "yes")]
     pub require_concerns_resolved: bool,
+    /// How many changes a day the forge may draw for a human look. A
+    /// drawn change waits for a human's verdict before it lands. `None`
+    /// draws nothing: attention stays a ranked list.
+    #[serde(default)]
+    pub attention_budget: Option<u32>,
 }
 
 fn yes() -> bool {
@@ -434,6 +439,7 @@ impl Default for Policy {
             require_runner_verification: false,
             required_domains: Vec::new(),
             require_concerns_resolved: true,
+            attention_budget: None,
         }
     }
 }

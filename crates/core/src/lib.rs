@@ -39,7 +39,7 @@ mod search;
 mod store;
 mod types;
 
-pub use attention::{AttentionItem, Signal, SignalKind};
+pub use attention::{AttentionItem, Draw, Signal, SignalKind};
 pub use commands::{password_acceptable, until_in_days, verify_password};
 pub use error::{CoreError, CoreResult};
 pub use event::{Envelope, Event, EventSeq};

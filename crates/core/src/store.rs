@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 13;
+const SCHEMA_VERSION: i64 = 14;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -364,6 +364,16 @@ CREATE TABLE IF NOT EXISTS thread_replies (
   at        TEXT NOT NULL
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_thread_replies_thread ON thread_replies (thread_id);
+
+CREATE TABLE IF NOT EXISTS attention_draws (
+  change_id TEXT PRIMARY KEY,
+  repo      TEXT NOT NULL,
+  day       TEXT NOT NULL,
+  signals   TEXT NOT NULL,
+  reviewers TEXT NOT NULL,
+  seq       INTEGER NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_attention_draws_day ON attention_draws (repo, day);
 ";
 
 /// Every table derived from the log.
@@ -393,6 +403,7 @@ const PROJECTION_TABLES: &[&str] = &[
     "verdicts",
     "threads",
     "thread_replies",
+    "attention_draws",
 ];
 
 /// An event together with the audience its scope implies: the repository
@@ -790,6 +801,7 @@ fn record_scope(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
         | RepoTransferOffered { repo, .. }
         | RepoTransferAccepted { repo }
         | RepoTransferDeclined { repo }
+        | AttentionDrawn { repo, .. }
         | ChangeOpened { repo, .. } => (Some(repo.clone()), None),
 
         // Named by a change, which knows its repository.
@@ -1377,6 +1389,35 @@ fn record_notices(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
 
     // One event with many recipients: whoever runs the forge is told
     // that somebody needs a way back in.
+    // A draw is addressed to every human who may review the repository.
+    if let AttentionDrawn {
+        change,
+        signals,
+        reviewers,
+        ..
+    } = &env.event
+        && let Some(c) = change_ref(change.as_str())?
+    {
+        let why = signals
+            .iter()
+            .map(|s| s.as_str().replace('_', " "))
+            .collect::<Vec<_>>()
+            .join(", ");
+        for reviewer in reviewers {
+            tx.execute(
+                "INSERT OR REPLACE INTO notices (seq, recipient, kind, repo, change_id, number, what)
+                 VALUES (?, ?, 'drawn', ?, ?, ?, ?)",
+                params![
+                    env.seq.0,
+                    reviewer.as_str(),
+                    c.repo,
+                    change.as_str(),
+                    c.number,
+                    format!("#{} was drawn for your look: {why}", c.number)
+                ],
+            )?;
+        }
+    }
     if let PasswordResetRequested { principal } = &env.event {
         for admin in crate::queries::raw::admins(tx)? {
             if admin == actor {
@@ -1804,6 +1845,26 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                 params![how.as_str(), revision, note, actor, env.ts, thread.as_str()],
             )?;
         }
+        Event::AttentionDrawn {
+            repo,
+            day,
+            change,
+            signals,
+            reviewers,
+        } => {
+            tx.execute(
+                "INSERT OR REPLACE INTO attention_draws (change_id, repo, day, signals, reviewers, seq)
+                 VALUES (?, ?, ?, ?, ?, ?)",
+                params![
+                    change.as_str(),
+                    repo,
+                    day,
+                    serde_json::to_string(signals).expect("signals serialize"),
+                    serde_json::to_string(reviewers).expect("ids serialize"),
+                    env.seq.0
+                ],
+            )?;
+        }
         Event::ChangeEnqueued { change } => {
             tx.execute(
                 "INSERT INTO merge_queue (change_id, repo, target, enqueued_by, enqueued_seq)
@@ -1972,6 +2033,7 @@ mod concurrency_tests {
                     independence: Independence::None,
                     required_domains: Vec::new(),
                     require_concerns_resolved: true,
+                    attention_budget: None,
                 },
             )
             .unwrap();

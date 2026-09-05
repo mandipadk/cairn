@@ -205,6 +205,17 @@ quotas on repository or push size; and a principal that holds legitimate
 capabilities and abuses them. Grants are the tool for that, and they are
 only as narrow as whoever issues them.
 
+## Attention budget
+
+A repository's policy may carry `"attention_budget": 2`: the forge then
+draws up to that many open changes a day for a human look, highest-ranked
+first — disagreement, disputed claims, blocks, argument-only cases, spot
+checks — and tells the repository's owner and every human holding review
+on it. A drawn change needs a human verdict on its latest revision before
+it can land. Draws happen on the landing train's tick, or on request with
+`POST /api/repos/{name}/attention/draw` (merge capability); without a
+budget nothing is drawn and attention stays a ranked list.
+
 ## Discussion
 
 Review talks in threads, and a thread is anchored to something: a line of

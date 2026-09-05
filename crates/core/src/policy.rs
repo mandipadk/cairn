@@ -70,6 +70,31 @@ pub(crate) fn evaluate_against(
         evidence: format!("latest revision is {revision}"),
     });
 
+    if policy.attention_budget.is_some()
+        && let Some(draw) = raw::draw_of(conn, change.id.as_str())?
+    {
+        let looked = crate::attention::human_looked(conn, change.id.as_str(), revision)?;
+        requirements.push(Requirement {
+            description: "a human has looked at this change since it was drawn for one".into(),
+            satisfied: looked,
+            evidence: format!(
+                "drawn {} for {}; asked {}; human verdict on revision {revision}: {}",
+                draw.day,
+                draw.signals
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                draw.reviewers
+                    .iter()
+                    .map(|r| r.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                if looked { "yes" } else { "none yet" }
+            ),
+        });
+    }
+
     if policy.require_concerns_resolved {
         let open = raw::open_concerns(conn, change.id.as_str())?;
         requirements.push(Requirement {

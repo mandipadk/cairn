@@ -96,6 +96,21 @@ pub async fn boot_token_only() -> Forge {
 }
 
 async fn boot_inner(object_format: &str, dev: bool, mailer: Option<cairn_server::Mailer>) -> Forge {
+    boot_core(object_format, dev, mailer, false).await
+}
+
+/// Like `boot`, but the landing train spends attention budgets on its
+/// own tick, as in production.
+pub async fn boot_drawing() -> Forge {
+    boot_core("sha1", true, None, true).await
+}
+
+async fn boot_core(
+    object_format: &str,
+    dev: bool,
+    mailer: Option<cairn_server::Mailer>,
+    draws: bool,
+) -> Forge {
     let tmp = tempfile::tempdir().unwrap();
     let repos = tmp.path().join("repos");
     let work = tmp.path().join("work");
@@ -150,6 +165,9 @@ async fn boot_inner(object_format: &str, dev: bool, mailer: Option<cairn_server:
     let addr = listener.local_addr().unwrap();
     let git_store = GitStore::new(&repos, env!("CARGO_BIN_EXE_cairn"));
     let mut state = AppState::new(store).with_git(git_store, format!("http://{addr}"));
+    if !draws {
+        state = state.without_automatic_draws();
+    }
     if dev {
         state = state.with_dev_identity();
     }

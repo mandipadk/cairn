@@ -753,3 +753,5 @@ details.thread[open] > summary .closed-inline { visibility: hidden; }
 /* A link to a thread or composer lands below the bar, not under it. */
 .thread, .composer.thread-new { scroll-margin-top: 60px; }
 .rsec .hint { font-size: 12px; color: var(--ink3); margin: 4px 0 6px; }
+.reasons .drawn { color: var(--ink); font-weight: 500; }
+

@@ -50,6 +50,9 @@ async fn run(state: AppState) {
     loop {
         retry_pending_advances(&state).await;
         process_lanes(&state).await;
+        if state.draws_automatically() {
+            draw_attention(&state);
+        }
         tokio::select! {
             _ = tick.tick() => {}
             received = events.recv() => match received {
@@ -61,6 +64,29 @@ async fn run(state: AppState) {
                 Err(RecvError::Lagged(_)) => {}
                 Err(RecvError::Closed) => return,
             },
+        }
+    }
+}
+
+/// Spend each repository's attention budget for today. Cheap when no
+/// repository has one, and a no-op once today's draws are made.
+fn draw_attention(state: &AppState) {
+    let today = crate::today();
+    let repos = match state.with_store(|s| s.repos()) {
+        Ok(repos) => repos,
+        Err(err) => {
+            tracing::warn!(error = %err, "attention: listing repositories failed");
+            return;
+        }
+    };
+    for repo in repos {
+        match state.with_store(|s| s.draw_attention(&repo.name, &today)) {
+            Ok(drawn) => {
+                for env in &drawn {
+                    state.publish(env);
+                }
+            }
+            Err(err) => tracing::warn!(repo = %repo.name, error = %err, "attention: draw failed"),
         }
     }
 }

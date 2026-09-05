@@ -466,6 +466,61 @@ pub(crate) mod raw {
             .collect::<Result<Vec<_>, _>>()?)
     }
 
+    pub fn draw_of(conn: &Connection, change: &str) -> CoreResult<Option<crate::attention::Draw>> {
+        let row: Option<(String, String, String)> = conn
+            .prepare_cached(
+                "SELECT day, signals, reviewers FROM attention_draws WHERE change_id = ?",
+            )?
+            .query_row(params![change], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .optional()?;
+        row.map(|(day, signals, reviewers)| {
+            let at = format!("draw of {change}");
+            Ok(crate::attention::Draw {
+                day,
+                signals: serde_json::from_str(&signals).map_err(|e| corrupt(&at, e))?,
+                reviewers: serde_json::from_str(&reviewers).map_err(|e| corrupt(&at, e))?,
+            })
+        })
+        .transpose()
+    }
+
+    pub fn draws_on(conn: &Connection, repo: &str, day: &str) -> CoreResult<i64> {
+        Ok(conn
+            .prepare_cached("SELECT COUNT(*) FROM attention_draws WHERE repo = ? AND day = ?")?
+            .query_row(params![repo, day], |row| row.get(0))?)
+    }
+
+    /// The humans a draw can be addressed to: the repository's owner and
+    /// every human holding review on it, or running the forge.
+    pub fn humans_who_may_review(conn: &Connection, repo: &str) -> CoreResult<Vec<PrincipalId>> {
+        let owner = repo_owner(conn, repo)?;
+        let now = jiff::Timestamp::now().to_string();
+        let mut humans = Vec::new();
+        for principal in principals(conn)? {
+            if principal.kind != PrincipalKind::Human {
+                continue;
+            }
+            let id = principal.id.as_str();
+            let grants = effective_grants(conn, id)?;
+            if owner.as_deref() == Some(id)
+                || grants_cover(&grants, Capability::Review, Some(repo), &now)
+                || grants_cover(&grants, Capability::Admin, None, &now)
+            {
+                humans.push(principal.id.clone());
+            }
+        }
+        Ok(humans)
+    }
+
+    fn repo_owner(conn: &Connection, repo: &str) -> CoreResult<Option<String>> {
+        Ok(conn
+            .prepare_cached("SELECT owner FROM repos WHERE name = ?")?
+            .query_row(params![repo], |row| row.get(0))
+            .optional()?)
+    }
+
     pub fn verdict_ref(conn: &Connection, id: &str) -> CoreResult<Option<(String, i64)>> {
         Ok(conn
             .prepare_cached("SELECT change_id, revision FROM verdicts WHERE id = ?")?
@@ -1274,6 +1329,10 @@ impl Store {
 
     pub fn verdicts_on(&self, change: &ChangeId, revision: i64) -> CoreResult<Vec<Verdict>> {
         raw::verdicts_on(&self.conn, change.as_str(), revision)
+    }
+
+    pub fn draw_of(&self, change: &ChangeId) -> CoreResult<Option<crate::attention::Draw>> {
+        raw::draw_of(&self.conn, change.as_str())
     }
 
     pub fn threads_on(&self, change: &ChangeId) -> CoreResult<Vec<Thread>> {

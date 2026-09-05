@@ -5,6 +5,7 @@
 //! log, in the API's event feed, and in SSE streams, so additive change
 //! is the only kind allowed once an event kind ships.
 
+use crate::attention::SignalKind;
 use crate::id::{
     ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, ThreadId, TokenId, VerdictId,
     VerificationId,
@@ -282,6 +283,17 @@ pub enum Event {
         change: ChangeId,
         body: String,
     },
+    /// The repository's attention policy drew a change for a human look
+    /// today, and says why and to whom. Human attention is a governed
+    /// quantity: a budget a day, spent on disagreement first, every draw
+    /// on the record.
+    AttentionDrawn {
+        repo: String,
+        day: String,
+        change: ChangeId,
+        signals: Vec<SignalKind>,
+        reviewers: Vec<PrincipalId>,
+    },
     /// A thread was closed, and the event says how: answered in the
     /// thread, fixed by a named later revision, withdrawn by whoever
     /// opened it, or overruled on the record.
@@ -365,6 +377,7 @@ impl Event {
             Event::VerdictGiven { .. } => "verdict_given",
             Event::ThreadOpened { .. } => "thread_opened",
             Event::ThreadReplied { .. } => "thread_replied",
+            Event::AttentionDrawn { .. } => "attention_drawn",
             Event::ThreadResolved { .. } => "thread_resolved",
             Event::ChangeEnqueued { .. } => "change_enqueued",
             Event::ChangeDequeued { .. } => "change_dequeued",

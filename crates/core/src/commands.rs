@@ -1866,6 +1866,79 @@ impl Store {
         Ok((verdict, env))
     }
 
+    /// Spend today's attention budget: draw the changes most worth a
+    /// human's time, up to the repository's daily allowance, and say why
+    /// and to whom. A change is drawn once; it then waits for a human
+    /// verdict before it lands. Deterministic given the graph and the
+    /// day, so a second call in the same day draws nothing more. The
+    /// draw is the owner's policy acting, and is attributed to them.
+    pub fn draw_attention(&mut self, repo: &str, day: &str) -> CoreResult<Vec<Envelope>> {
+        let tx = self.conn.transaction()?;
+        let Some(record) = raw::repo(&tx, repo)? else {
+            return Err(CoreError::NotFound(format!("repo {repo}")));
+        };
+        let Some(budget) = record.policy.attention_budget else {
+            return Ok(Vec::new());
+        };
+        let spent = raw::draws_on(&tx, repo, day)?;
+        let remaining = i64::from(budget) - spent;
+        if remaining <= 0 {
+            return Ok(Vec::new());
+        }
+        let reviewers = raw::humans_who_may_review(&tx, repo)?;
+        let mut drawn = Vec::new();
+        for item in crate::attention::evaluate(&tx, repo)? {
+            if drawn.len() as i64 >= remaining {
+                break;
+            }
+            if item.drawn.is_some()
+                || crate::attention::human_looked(
+                    &tx,
+                    item.change.id.as_str(),
+                    item.change.latest_revision,
+                )?
+            {
+                continue;
+            }
+            let asked: Vec<PrincipalId> = reviewers
+                .iter()
+                .filter(|r| **r != item.change.owner)
+                .cloned()
+                .collect();
+            if asked.is_empty() {
+                continue;
+            }
+            drawn.push(append(
+                &tx,
+                &record.owner,
+                Event::AttentionDrawn {
+                    repo: repo.to_owned(),
+                    day: day.to_owned(),
+                    change: item.change.id.clone(),
+                    signals: item.signals.iter().map(|s| s.kind).collect(),
+                    reviewers: asked,
+                },
+            )?);
+        }
+        tx.commit()?;
+        Ok(drawn)
+    }
+
+    /// Draw now, at somebody's request rather than the clock's. Takes
+    /// the merge capability on the repository, which owners hold.
+    pub fn draw_attention_now(
+        &mut self,
+        actor: &PrincipalId,
+        repo: &str,
+        day: &str,
+    ) -> CoreResult<Vec<Envelope>> {
+        {
+            let tx = self.conn.transaction()?;
+            authorize(&tx, actor, Capability::Merge, Some(repo))?;
+        }
+        self.draw_attention(repo, day)
+    }
+
     /// Start a discussion on a change, anchored to a line of a revision's
     /// diff, a claim, a verdict, or the change itself. A claim or verdict
     /// anchor pins the revision it was made on; otherwise the thread is

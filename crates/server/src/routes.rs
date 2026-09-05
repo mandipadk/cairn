@@ -1036,6 +1036,26 @@ pub async fn attention(
     Ok(Json(json!(items)))
 }
 
+#[derive(Deserialize)]
+pub struct DrawQuery {
+    /// The day to draw for, `YYYY-MM-DD`; today when absent.
+    pub day: Option<String>,
+}
+
+pub async fn draw_attention(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(repo): Path<String>,
+    Query(query): Query<DrawQuery>,
+) -> ApiResult<Json<Value>> {
+    let day = query.day.unwrap_or_else(crate::today);
+    let drawn = app.with_store(|s| s.draw_attention_now(&actor.0, &repo, &day))?;
+    for env in &drawn {
+        app.publish(env);
+    }
+    Ok(Json(json!({ "day": day, "drawn": drawn })))
+}
+
 // ---- path leases ----
 
 #[derive(Deserialize)]

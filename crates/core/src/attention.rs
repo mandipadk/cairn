@@ -52,6 +52,8 @@ signal_kinds! {
     /// Reviewers reached opposite conclusions — the case where a
     /// human's judgment is worth the most.
     ReviewersDisagree => "reviewers_disagree", 100;
+    /// The policy drew this for a human look and none has come yet.
+    Drawn => "drawn", 95;
     /// A runner could not reproduce a claim.
     DisputedClaim => "disputed_claim", 90;
     /// Someone blocked it and it has not moved since.
@@ -84,6 +86,32 @@ pub struct AttentionItem {
     pub change: Change,
     pub score: i64,
     pub signals: Vec<Signal>,
+    /// Set when the repository's attention policy drew this change for
+    /// a human look; it then waits for one before it lands.
+    #[serde(default)]
+    pub drawn: Option<Draw>,
+}
+
+/// One draw of the attention budget: which day, on what grounds, and
+/// which humans were asked.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Draw {
+    pub day: String,
+    pub signals: Vec<SignalKind>,
+    pub reviewers: Vec<crate::id::PrincipalId>,
+}
+
+/// Has a human given a verdict on this revision? The one thing a draw
+/// waits for.
+pub(crate) fn human_looked(conn: &Connection, change: &str, revision: i64) -> CoreResult<bool> {
+    for verdict in raw::verdicts_on(conn, change, revision)? {
+        if raw::principal(conn, verdict.by.as_str())?
+            .is_some_and(|p| p.kind == PrincipalKind::Human)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 impl AttentionItem {
@@ -269,6 +297,29 @@ pub(crate) fn evaluate(conn: &Connection, repo: &str) -> CoreResult<Vec<Attentio
             }
         }
 
+        let drawn = raw::draw_of(conn, change.id.as_str())?;
+        if let Some(draw) = &drawn
+            && !human_looked(conn, change.id.as_str(), revision)?
+        {
+            signals.push(Signal {
+                kind: SignalKind::Drawn,
+                weight: SignalKind::Drawn.weight(),
+                description: format!("drawn for a human look on {}", draw.day),
+                evidence: format!(
+                    "asked: {}; grounds: {}",
+                    draw.reviewers
+                        .iter()
+                        .map(|r| r.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    draw.signals
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            });
+        }
         if signals.is_empty() {
             continue;
         }
@@ -277,6 +328,7 @@ pub(crate) fn evaluate(conn: &Connection, repo: &str) -> CoreResult<Vec<Attentio
             score: signals.iter().map(|s| s.weight).sum(),
             change,
             signals,
+            drawn,
         });
     }
     // Heaviest first; ties go to the older change, which has waited longer.

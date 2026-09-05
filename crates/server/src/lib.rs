@@ -34,6 +34,11 @@ use axum::routing::{get, post};
 /// any real push.
 const GIT_BODY_LIMIT: usize = 256 * 1024 * 1024;
 
+/// Today's date in UTC, the unit the attention budget is spent in.
+pub fn today() -> String {
+    jiff::Timestamp::now().strftime("%Y-%m-%d").to_string()
+}
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/principals", post(routes::register_principal))
@@ -99,6 +104,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/changes/{id}/dequeue", post(routes::dequeue_change))
         .route("/api/repos/{name}/queue", get(routes::list_queue))
         .route("/api/repos/{name}/attention", get(routes::attention))
+        .route(
+            "/api/repos/{name}/attention/draw",
+            post(routes::draw_attention),
+        )
         .route(
             "/api/repos/{name}/awaiting-verification",
             get(routes::awaiting_verification),

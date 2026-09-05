@@ -130,6 +130,18 @@ could not run the command at all — a missing toolchain, a full disk —
 refuses and records nothing, since "I could not check" is not evidence
 that the claim is false.
 
+## Attention as a budget
+
+Human judgment is the scarce input, so the forge spends it deliberately.
+Every open change is ranked by explainable signals — reviewers who
+disagree, a claim a runner could not reproduce, a block, a case resting
+on argument alone, a sampled spot check — and a repository may set an
+attention budget: how many changes a day the policy draws for a human
+look. Each draw is an event that names the day, the grounds and the
+humans asked, and a drawn change waits for a human verdict before it
+lands. What is not drawn proceeds on the policy's other rules, which is
+the point: review becomes triage of disagreement, not a queue.
+
 ## Discussion as evidence
 
 Discussion is part of the graph, not a comment box beside it. A thread is

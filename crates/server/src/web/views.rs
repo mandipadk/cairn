@@ -600,7 +600,10 @@ pub fn home(theme: Theme, viewer: &Viewer, data: &super::HomeData) -> Markup {
                         span class="sec3" { (entry.repo) " #" (entry.item.change.number) }
                         span class="strong" { (entry.item.change.title) }
                         span class="reasons" {
-                            @for (index, signal) in entry.item.signals.iter().take(2).enumerate() {
+                            @if let Some(draw) = &entry.item.drawn {
+                                span class="drawn" { "drawn " (draw.day) } span class="sec3" { " · " }
+                            }
+                            @for (index, signal) in entry.item.signals.iter().filter(|s| s.kind != cairn_core::SignalKind::Drawn).take(2).enumerate() {
                                 @if index > 0 { span class="sec3" { " · " } }
                                 span class={ @if index == 0 { "lead" } @else { "sec3" } } {
                                     (signal.description)
@@ -2442,7 +2445,10 @@ pub fn landing(
                                 span class="sec3" { "#" (item.change.number) }
                                 span class="strong" { (item.change.title) }
                                 span class="reasons" {
-                                    @for (index, signal) in item.signals.iter().enumerate() {
+                                    @if let Some(draw) = &item.drawn {
+                                        span class="drawn" { "drawn " (draw.day) } span class="sec3" { " · " }
+                                    }
+                                    @for (index, signal) in item.signals.iter().filter(|s| s.kind != cairn_core::SignalKind::Drawn).enumerate() {
                                         @if index > 0 { span class="sec3" { " · " } }
                                         span class={ @if index == 0 { "lead" } @else { "sec3" } } {
                                             (signal.description)
@@ -2744,6 +2750,23 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
             html! {
                 b { (actor) } " raised a " (thread_kind.as_str()) " on "
                 (change_num(numbers, change.as_str())) (anchor_words(anchor))
+            },
+        ),
+        Event::AttentionDrawn {
+            change,
+            signals,
+            reviewers,
+            ..
+        } => (
+            "dot idle",
+            html! {
+                "the policy drew " (change_num(numbers, change.as_str())) " for a human look"
+                @if !signals.is_empty() {
+                    ": " (signals.iter().map(|s| s.as_str().replace('_', " ")).collect::<Vec<_>>().join(", "))
+                }
+                @if !reviewers.is_empty() {
+                    " · asked " (reviewers.iter().map(|r| r.as_str()).collect::<Vec<_>>().join(", "))
+                }
             },
         ),
         Event::ThreadReplied { change, .. } => (

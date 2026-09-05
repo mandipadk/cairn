@@ -1697,6 +1697,88 @@ fn viewer_from(headers: &HeaderMap, state: &AppState) -> Option<Viewer> {
         .map(|chrome| Viewer(who, chrome))
 }
 
+/// Whoever is looking, signed in or not. Never refuses: the page
+/// decides what nobody may see.
+pub struct Reader(pub Option<Viewer>);
+
+impl FromRequestParts<AppState> for Reader {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(Reader(viewer_from(&parts.headers, state)))
+    }
+}
+
+/// The chrome a stranger sees: the public repositories, nothing personal.
+fn chrome_public(app: &AppState) -> Result<Chrome, cairn_core::CoreError> {
+    app.with_store(|store| {
+        let mut repos = Vec::new();
+        for repo in store.repos()? {
+            if repo.visibility != cairn_core::Visibility::Public {
+                continue;
+            }
+            let open = store
+                .changes_in_repo(&repo.name)?
+                .iter()
+                .filter(|c| c.state == cairn_core::ChangeState::Open)
+                .count();
+            repos.push(ChromeRepo {
+                name: repo.name.clone(),
+                open,
+            });
+        }
+        Ok(Chrome {
+            repos,
+            working: Vec::new(),
+            yours: 0,
+            unread: 0,
+            admin: false,
+            owned: Vec::new(),
+        })
+    })
+}
+
+/// Who a repository page renders for, once the boundary has been checked.
+pub enum Who {
+    Signed(Viewer),
+    Anonymous(Chrome),
+}
+
+impl Who {
+    fn reading(&self) -> views::Reading<'_> {
+        match self {
+            Who::Signed(viewer) => views::Reading::Signed(viewer),
+            Who::Anonymous(chrome) => views::Reading::Anonymous(chrome),
+        }
+    }
+}
+
+/// The read boundary for pages. A public repository is readable by
+/// anyone; a private one by those it is theirs to see, and a stranger is
+/// sent to sign in rather than told anything.
+fn read_repo(app: &AppState, reader: Reader, repo: &str) -> Result<(Repo, Who), Box<Response>> {
+    let record = match app.with_store(|s| s.repo(repo)) {
+        Ok(record) => record,
+        Err(err) => return Err(Box::new(oops(err))),
+    };
+    match (record, reader.0) {
+        (Some(record), None) if record.visibility == cairn_core::Visibility::Public => {
+            match chrome_public(app) {
+                Ok(chrome) => Ok((record, Who::Anonymous(chrome))),
+                Err(err) => Err(Box::new(oops(err))),
+            }
+        }
+        (_, None) => Err(Box::new(Redirect::to("/login").into_response())),
+        (_, Some(viewer)) => {
+            let record = readable(app, &viewer, repo)?;
+            Ok((record, Who::Signed(viewer)))
+        }
+    }
+}
+
 impl FromRequestParts<AppState> for Viewer {
     type Rejection = Response;
 
@@ -2210,25 +2292,25 @@ pub(crate) async fn themed_fallbacks(
 async fn repo_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
-    viewer: Viewer,
+    reader: Reader,
     Path(repo): Path<String>,
 ) -> Response {
-    render_tree(app, theme, viewer, repo, String::new()).await
+    render_tree(app, theme, reader, repo, String::new()).await
 }
 
 async fn tree_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
-    viewer: Viewer,
+    reader: Reader,
     Path((repo, path)): Path<(String, String)>,
 ) -> Response {
-    render_tree(app, theme, viewer, repo, path).await
+    render_tree(app, theme, reader, repo, path).await
 }
 
 async fn render_tree(
     app: AppState,
     theme: views::Theme,
-    viewer: Viewer,
+    reader: Reader,
     repo: String,
     path: String,
 ) -> Response {
@@ -2240,8 +2322,8 @@ async fn render_tree(
     let Some(git) = app.git() else {
         return not_found();
     };
-    let record = match readable(&app, &viewer, &repo) {
-        Ok(record) => record,
+    let (record, who) = match read_repo(&app, reader, &repo) {
+        Ok(found) => found,
         Err(response) => return *response,
     };
     let branch = record.default_branch.clone();
@@ -2289,8 +2371,15 @@ async fn render_tree(
                                 .ok()
                                 .flatten()
                         });
-                    return views::file(theme, &viewer, &repo, &path, &text, landed_by.as_ref())
-                        .into_response();
+                    return views::file(
+                        theme,
+                        who.reading(),
+                        &repo,
+                        &path,
+                        &text,
+                        landed_by.as_ref(),
+                    )
+                    .into_response();
                 }
             }
             Ok(None) => return not_found(),
@@ -2353,7 +2442,7 @@ async fn render_tree(
     };
     views::repository(
         theme,
-        &viewer,
+        who.reading(),
         &repo,
         &branch,
         tip.as_deref(),
@@ -2407,14 +2496,14 @@ fn sidebar_data(
 async fn blame_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
-    viewer: Viewer,
+    reader: Reader,
     Path((repo, path)): Path<(String, String)>,
 ) -> Response {
     let Some(git) = app.git() else {
         return not_found();
     };
-    let record = match readable(&app, &viewer, &repo) {
-        Ok(record) => record,
+    let (record, who) = match read_repo(&app, reader, &repo) {
+        Ok(found) => found,
         Err(response) => return *response,
     };
     let rev = format!("refs/heads/{}", record.default_branch);
@@ -2468,22 +2557,23 @@ async fn blame_page(
             provenance,
         });
     }
-    views::blame(theme, &viewer, &repo, &path, &rows).into_response()
+    views::blame(theme, who.reading(), &repo, &path, &rows).into_response()
 }
 
 async fn changes_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
-    viewer: Viewer,
+    reader: Reader,
     Path(repo): Path<String>,
 ) -> Response {
-    if let Err(response) = readable(&app, &viewer, &repo) {
-        return *response;
-    }
+    let who = match read_repo(&app, reader, &repo) {
+        Ok((_, who)) => who,
+        Err(response) => return *response,
+    };
     match app.with_store(|s| s.changes_in_repo(&repo)) {
         Ok(mut changes) => {
             changes.reverse();
-            views::changes(theme, &viewer, &repo, &changes).into_response()
+            views::changes(theme, who.reading(), &repo, &changes).into_response()
         }
         Err(err) => oops(err),
     }
@@ -2501,13 +2591,14 @@ struct ChangeQuery {
 async fn change_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
-    viewer: Viewer,
+    reader: Reader,
     Path((repo, number)): Path<(String, i64)>,
     Query(query): Query<ChangeQuery>,
 ) -> Response {
-    if let Err(response) = readable(&app, &viewer, &repo) {
-        return *response;
-    }
+    let who = match read_repo(&app, reader, &repo) {
+        Ok((_, who)) => who,
+        Err(response) => return *response,
+    };
     let change = match app.with_store(|s| s.change_by_number(&repo, number)) {
         Ok(Some(change)) => change,
         Ok(None) => return not_found(),
@@ -2573,7 +2664,7 @@ async fn change_page(
 
     views::change(views::ChangePage {
         theme,
-        viewer: &viewer,
+        who: who.reading(),
         repo: &repo,
         change: &change,
         task: task.as_ref(),
@@ -2887,18 +2978,18 @@ fn flash(back: &str, message: &str) -> Response {
 async fn landing_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
-    viewer: Viewer,
+    reader: Reader,
     Path(repo): Path<String>,
 ) -> Response {
-    let record = match readable(&app, &viewer, &repo) {
-        Ok(record) => record,
+    let (record, who) = match read_repo(&app, reader, &repo) {
+        Ok(found) => found,
         Err(response) => return *response,
     };
     let data = match landing_data(&app, &repo, &record.default_branch) {
         Ok(data) => data,
         Err(err) => return oops(err),
     };
-    views::landing(theme, &viewer, &repo, &record.default_branch, &data).into_response()
+    views::landing(theme, who.reading(), &repo, &record.default_branch, &data).into_response()
 }
 
 pub(crate) struct LandingData {
@@ -3009,16 +3100,19 @@ struct LessonQuery {
 async fn lessons_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
-    viewer: Viewer,
+    reader: Reader,
     Path(repo): Path<String>,
     Query(query): Query<LessonQuery>,
 ) -> Response {
-    if let Err(response) = readable(&app, &viewer, &repo) {
-        return *response;
-    }
+    let who = match read_repo(&app, reader, &repo) {
+        Ok((_, who)) => who,
+        Err(response) => return *response,
+    };
     let search = query.q.as_deref().filter(|q| !q.trim().is_empty());
     match app.with_store(|s| s.lessons(Some(&repo), search, false, 100)) {
-        Ok(lessons) => views::lessons(theme, &viewer, &repo, search, &lessons).into_response(),
+        Ok(lessons) => {
+            views::lessons(theme, who.reading(), &repo, search, &lessons).into_response()
+        }
         Err(err) => oops(err),
     }
 }
@@ -3167,13 +3261,14 @@ async fn transfer_answer(
 async fn log_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
-    viewer: Viewer,
+    reader: Reader,
     Path(repo): Path<String>,
     Query(query): Query<LogQuery>,
 ) -> Response {
-    if let Err(response) = readable(&app, &viewer, &repo) {
-        return *response;
-    }
+    let who = match read_repo(&app, reader, &repo) {
+        Ok((_, who)) => who,
+        Err(response) => return *response,
+    };
     let after = query.after.unwrap_or(0);
     let numbers: HashMap<String, (i64, String)> = match app.with_store(|s| s.changes_in_repo(&repo))
     {
@@ -3186,7 +3281,9 @@ async fn log_page(
     // This repository's own log, not the forge's. The scope is on the
     // event, so the page does not have to guess which rows belong here.
     match app.with_store(|s| s.events_for_repo(&repo, cairn_core::EventSeq(after), 100)) {
-        Ok(events) => views::log(theme, &viewer, &repo, &numbers, after, &events).into_response(),
+        Ok(events) => {
+            views::log(theme, who.reading(), &repo, &numbers, after, &events).into_response()
+        }
         Err(err) => oops(err),
     }
 }

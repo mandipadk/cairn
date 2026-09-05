@@ -303,12 +303,24 @@ async fn the_dev_header_is_inert_when_dev_mode_is_off() {
     let forge = boot_token_only().await;
     let app = &forge.app;
 
+    // A read with only the header is a stranger's read: a private
+    // repository answers as if it were not there.
     let (status, refused) = api(app, "GET", "/api/repos/demo", "ada", None).await;
     assert_eq!(
         status,
-        StatusCode::UNAUTHORIZED,
+        StatusCode::NOT_FOUND,
         "x-cairn-principal must carry no authority here: {refused}"
     );
+    // And a write with only the header has no identity at all.
+    let (status, refused) = api(
+        app,
+        "POST",
+        "/api/changes",
+        "ada",
+        Some(json!({ "repo": "demo", "target": "main", "title": "Asserted" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{refused}");
 
     // And it cannot ride along with a real token to change who is acting.
     let (status, _) = api_with_token(app, "GET", "/api/repos/demo", &forge.scout_token, None).await;

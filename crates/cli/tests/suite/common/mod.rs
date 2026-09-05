@@ -254,6 +254,33 @@ pub fn git_raw(dir: &Path, args: &[&str]) -> std::process::Output {
 
 /// Make a request authenticated the way the outside world must:
 /// a bearer token, with no dev header anywhere.
+/// A request with no identity at all: what a stranger's browser or a
+/// script without a token sends.
+pub async fn api_anonymous(
+    app: &Router,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    let request = Request::builder().method(method).uri(path);
+    let request = match body {
+        Some(body) => request
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap(),
+        None => request.body(Body::empty()).unwrap(),
+    };
+    let response = tower::ServiceExt::oneshot(app.clone(), request)
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, value)
+}
+
 pub async fn api_with_token(
     app: &Router,
     method: &str,

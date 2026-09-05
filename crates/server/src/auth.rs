@@ -51,6 +51,34 @@ fn bearer(parts: &Parts) -> Option<&str> {
         .map(str::trim)
 }
 
+/// Whoever is calling, if anyone: a bad credential is still refused, but
+/// no credential at all is a stranger, who may read what is public.
+pub struct MaybeActor(pub Option<Actor>);
+
+impl MaybeActor {
+    pub fn scope(&self) -> Option<&cairn_core::Scope> {
+        self.0.as_ref().and_then(|actor| actor.1.as_ref())
+    }
+}
+
+impl FromRequestParts<AppState> for MaybeActor {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let has_identity = bearer(parts).is_some()
+            || (state.dev_identity() && parts.headers.contains_key(PRINCIPAL_HEADER));
+        if !has_identity {
+            return Ok(MaybeActor(None));
+        }
+        Actor::from_request_parts(parts, state)
+            .await
+            .map(|actor| MaybeActor(Some(actor)))
+    }
+}
+
 /// Identity for the one endpoint a proc-receive hook calls.
 ///
 /// Accepts the ephemeral push secret as well as a real token, and is

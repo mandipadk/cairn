@@ -29,6 +29,7 @@ mod mirror_flow;
 mod pages_flow;
 mod passkeys_flow;
 mod password_flow;
+mod public_flow;
 mod read_boundary_flow;
 mod recovery_flow;
 mod reset_flow;

@@ -5,7 +5,7 @@
 //! Reads return projections. Nothing here contains domain logic — that
 //! all lives in the core, where it is tested.
 
-use crate::auth::Actor;
+use crate::auth::{Actor, MaybeActor};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use axum::Json;
@@ -51,12 +51,26 @@ fn readable_repo(app: &AppState, actor: &Actor, name: &str) -> ApiResult<Repo> {
     )
 }
 
-fn readable_change(app: &AppState, actor: &Actor, id: &ChangeId) -> ApiResult<Change> {
-    let change = found(
-        app.with_store(|s| s.acting_as(actor.1.as_ref()).change(id))?,
-        "change",
-    )?;
-    readable_repo(app, actor, &change.repo)?;
+/// The read boundary for strangers: a public repository answers anyone,
+/// a private or missing one answers a stranger as if nothing were there.
+fn readable_repo_by(app: &AppState, who: &MaybeActor, name: &str) -> ApiResult<Repo> {
+    let record = found(app.with_store(|s| s.repo(name))?, "repo")?;
+    if record.visibility == cairn_core::Visibility::Public {
+        return Ok(record);
+    }
+    match &who.0 {
+        Some(actor) => readable_repo(app, actor, name),
+        None => Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "repo not found",
+        )),
+    }
+}
+
+fn readable_change_by(app: &AppState, who: &MaybeActor, id: &ChangeId) -> ApiResult<Change> {
+    let change = found(app.with_store(|s| s.change(id))?, "change")?;
+    readable_repo_by(app, who, &change.repo)?;
     Ok(change)
 }
 
@@ -334,10 +348,10 @@ pub async fn decline_transfer(
 
 pub async fn get_repo(
     State(app): State<AppState>,
-    actor: Actor,
+    who: MaybeActor,
     Path(name): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    Ok(Json(json!(readable_repo(&app, &actor, &name)?)))
+    Ok(Json(json!(readable_repo_by(&app, &who, &name)?)))
 }
 
 // ---- tasks ----
@@ -498,22 +512,19 @@ pub async fn open_change(
 
 pub async fn get_change(
     State(app): State<AppState>,
-    actor: Actor,
+    who: MaybeActor,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    Ok(Json(json!(readable_change(&app, &actor, &ChangeId(id))?)))
+    Ok(Json(json!(readable_change_by(&app, &who, &ChangeId(id))?)))
 }
 
 pub async fn get_change_by_number(
     State(app): State<AppState>,
-    actor: Actor,
+    who: MaybeActor,
     Path((repo, number)): Path<(String, i64)>,
 ) -> ApiResult<Json<Value>> {
-    readable_repo(&app, &actor, &repo)?;
-    let change = app.with_store(|s| {
-        s.acting_as(actor.1.as_ref())
-            .change_by_number(&repo, number)
-    })?;
+    readable_repo_by(&app, &who, &repo)?;
+    let change = app.with_store(|s| s.acting_as(who.scope()).change_by_number(&repo, number))?;
     Ok(Json(json!(found(change, "change")?)))
 }
 
@@ -524,12 +535,12 @@ pub struct ChangesQuery {
 
 pub async fn list_changes(
     State(app): State<AppState>,
-    actor: Actor,
+    who: MaybeActor,
     Path(repo): Path<String>,
     Query(query): Query<ChangesQuery>,
 ) -> ApiResult<Json<Value>> {
-    readable_repo(&app, &actor, &repo)?;
-    let mut changes = app.with_store(|s| s.acting_as(actor.1.as_ref()).changes_in_repo(&repo))?;
+    readable_repo_by(&app, &who, &repo)?;
+    let mut changes = app.with_store(|s| s.acting_as(who.scope()).changes_in_repo(&repo))?;
     if let Some(state) = query.state {
         changes.retain(|change| change.state == state);
     }
@@ -569,11 +580,11 @@ pub async fn push_revision(
 
 pub async fn list_revisions(
     State(app): State<AppState>,
-    actor: Actor,
+    who: MaybeActor,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    readable_change(&app, &actor, &ChangeId(id.clone()))?;
-    let revisions = app.with_store(|s| s.acting_as(actor.1.as_ref()).revisions(&ChangeId(id)))?;
+    readable_change_by(&app, &who, &ChangeId(id.clone()))?;
+    let revisions = app.with_store(|s| s.acting_as(who.scope()).revisions(&ChangeId(id)))?;
     Ok(Json(json!(revisions)))
 }
 
@@ -619,14 +630,14 @@ pub async fn attach_claim(
 
 pub async fn list_claims(
     State(app): State<AppState>,
-    actor: Actor,
+    who: MaybeActor,
     Path(id): Path<String>,
     Query(query): Query<RevisionQuery>,
 ) -> ApiResult<Json<Value>> {
     let change = ChangeId(id);
-    readable_change(&app, &actor, &change)?;
+    readable_change_by(&app, &who, &change)?;
     let revision = resolve_revision(&app, &change, query.revision)?;
-    let claims = app.with_store(|s| s.acting_as(actor.1.as_ref()).claims_on(&change, revision))?;
+    let claims = app.with_store(|s| s.acting_as(who.scope()).claims_on(&change, revision))?;
     Ok(Json(json!(claims)))
 }
 
@@ -663,25 +674,24 @@ pub async fn give_verdict(
 
 pub async fn list_verdicts(
     State(app): State<AppState>,
-    actor: Actor,
+    who: MaybeActor,
     Path(id): Path<String>,
     Query(query): Query<RevisionQuery>,
 ) -> ApiResult<Json<Value>> {
     let change = ChangeId(id);
-    readable_change(&app, &actor, &change)?;
+    readable_change_by(&app, &who, &change)?;
     let revision = resolve_revision(&app, &change, query.revision)?;
-    let verdicts =
-        app.with_store(|s| s.acting_as(actor.1.as_ref()).verdicts_on(&change, revision))?;
+    let verdicts = app.with_store(|s| s.acting_as(who.scope()).verdicts_on(&change, revision))?;
     Ok(Json(json!(verdicts)))
 }
 
 pub async fn merge_readiness(
     State(app): State<AppState>,
-    actor: Actor,
+    who: MaybeActor,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let change = readable_change(&app, &actor, &ChangeId(id))?;
-    let trace = app.with_store(|s| s.acting_as(actor.1.as_ref()).merge_readiness(&change.id))?;
+    let change = readable_change_by(&app, &who, &ChangeId(id))?;
+    let trace = app.with_store(|s| s.acting_as(who.scope()).merge_readiness(&change.id))?;
     Ok(Json(json!(trace)))
 }
 
@@ -955,13 +965,13 @@ pub struct QueueQuery {
 
 pub async fn list_queue(
     State(app): State<AppState>,
-    actor: Actor,
+    who: MaybeActor,
     Path(repo): Path<String>,
     Query(query): Query<QueueQuery>,
 ) -> ApiResult<Json<Value>> {
-    let record = readable_repo(&app, &actor, &repo)?;
+    let record = readable_repo_by(&app, &who, &repo)?;
     let target = query.target.unwrap_or(record.default_branch);
-    let entries = app.with_store(|s| s.acting_as(actor.1.as_ref()).queue_for(&repo, &target))?;
+    let entries = app.with_store(|s| s.acting_as(who.scope()).queue_for(&repo, &target))?;
     Ok(Json(json!(entries)))
 }
 
@@ -1015,13 +1025,13 @@ pub struct ThreadQuery {
 
 pub async fn list_threads(
     State(app): State<AppState>,
-    actor: Actor,
+    who: MaybeActor,
     Path(id): Path<String>,
     Query(query): Query<ThreadQuery>,
 ) -> ApiResult<Json<Value>> {
     let change = ChangeId(id);
-    readable_change(&app, &actor, &change)?;
-    let mut threads = app.with_store(|s| s.acting_as(actor.1.as_ref()).threads_on(&change))?;
+    readable_change_by(&app, &who, &change)?;
+    let mut threads = app.with_store(|s| s.acting_as(who.scope()).threads_on(&change))?;
     if let Some(revision) = query.revision {
         threads.retain(|t| t.revision == revision);
     }
@@ -1035,14 +1045,14 @@ pub async fn list_threads(
 
 pub async fn get_thread(
     State(app): State<AppState>,
-    actor: Actor,
+    who: MaybeActor,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let thread = found(
-        app.with_store(|s| s.acting_as(actor.1.as_ref()).thread(&ThreadId(id)))?,
+        app.with_store(|s| s.acting_as(who.scope()).thread(&ThreadId(id)))?,
         "thread",
     )?;
-    readable_change(&app, &actor, &thread.change)?;
+    readable_change_by(&app, &who, &thread.change)?;
     Ok(Json(json!(thread)))
 }
 
@@ -1104,17 +1114,15 @@ pub async fn verify_claim(
 
 pub async fn list_verifications(
     State(app): State<AppState>,
-    actor: Actor,
+    who: MaybeActor,
     Path(id): Path<String>,
     Query(query): Query<RevisionQuery>,
 ) -> ApiResult<Json<Value>> {
     let change = ChangeId(id);
-    readable_change(&app, &actor, &change)?;
+    readable_change_by(&app, &who, &change)?;
     let revision = resolve_revision(&app, &change, query.revision)?;
-    let verifications = app.with_store(|s| {
-        s.acting_as(actor.1.as_ref())
-            .verifications_on(&change, revision)
-    })?;
+    let verifications =
+        app.with_store(|s| s.acting_as(who.scope()).verifications_on(&change, revision))?;
     Ok(Json(json!(verifications)))
 }
 
@@ -1122,11 +1130,11 @@ pub async fn list_verifications(
 /// and the evidence behind each ranking.
 pub async fn attention(
     State(app): State<AppState>,
-    actor: Actor,
+    who: MaybeActor,
     Path(repo): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    readable_repo(&app, &actor, &repo)?;
-    let items = app.with_store(|s| s.acting_as(actor.1.as_ref()).attention_for(&repo))?;
+    readable_repo_by(&app, &who, &repo)?;
+    let items = app.with_store(|s| s.acting_as(who.scope()).attention_for(&repo))?;
     Ok(Json(json!(items)))
 }
 
@@ -1222,29 +1230,28 @@ pub struct PathsQuery {
 /// Who is already working where, before you start.
 pub async fn path_conflicts(
     State(app): State<AppState>,
-    actor: Actor,
+    who: MaybeActor,
     Path(repo): Path<String>,
     Query(query): Query<PathsQuery>,
 ) -> ApiResult<Json<Value>> {
-    readable_repo(&app, &actor, &repo)?;
+    readable_repo_by(&app, &who, &repo)?;
     let paths: Vec<String> = query
         .paths
         .split(',')
         .map(|p| p.trim().to_owned())
         .filter(|p| !p.is_empty())
         .collect();
-    let overlaps =
-        app.with_store(|s| s.acting_as(actor.1.as_ref()).path_conflicts(&repo, &paths))?;
+    let overlaps = app.with_store(|s| s.acting_as(who.scope()).path_conflicts(&repo, &paths))?;
     Ok(Json(json!({ "paths": paths, "overlaps": overlaps })))
 }
 
 pub async fn list_leases(
     State(app): State<AppState>,
-    actor: Actor,
+    who: MaybeActor,
     Path(repo): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    readable_repo(&app, &actor, &repo)?;
-    let leases = app.with_store(|s| s.acting_as(actor.1.as_ref()).live_leases(&repo))?;
+    readable_repo_by(&app, &who, &repo)?;
+    let leases = app.with_store(|s| s.acting_as(who.scope()).live_leases(&repo))?;
     Ok(Json(json!(leases)))
 }
 
@@ -1262,14 +1269,14 @@ pub struct LessonQuery {
 /// the protocol rather than something anyone has to maintain.
 pub async fn lessons(
     State(app): State<AppState>,
-    actor: Actor,
+    who: MaybeActor,
     Query(query): Query<LessonQuery>,
 ) -> ApiResult<Json<Value>> {
     if let Some(repo) = &query.repo {
-        readable_repo(&app, &actor, repo)?;
+        readable_repo_by(&app, &who, repo)?;
     }
     let mut lessons = app.with_store(|s| {
-        s.acting_as(actor.1.as_ref());
+        s.acting_as(who.scope());
         s.lessons(
             query.repo.as_deref(),
             query.q.as_deref().filter(|q| !q.trim().is_empty()),
@@ -1280,7 +1287,14 @@ pub async fn lessons(
     // Searching across everything is searching across what you may see.
     lessons.retain(|lesson| {
         lesson.repo.as_deref().is_none_or(|repo| {
-            app.with_store(|s| s.acting_as(actor.1.as_ref()).may_read(&actor.0, repo))
+            app.with_store(|s| match &who.0 {
+                Some(actor) => s.acting_as(who.scope()).may_read(&actor.0, repo),
+                None => s
+                    .repo(repo)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|r| r.visibility == cairn_core::Visibility::Public),
+            })
         })
     });
     Ok(Json(json!(lessons)))
@@ -1440,10 +1454,10 @@ pub struct PolicyBody {
 /// without committing to it.
 pub async fn get_policy(
     State(app): State<AppState>,
-    actor: Actor,
+    who: MaybeActor,
     Path(repo): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let record = readable_repo(&app, &actor, &repo)?;
+    let record = readable_repo_by(&app, &who, &repo)?;
     Ok(Json(json!(record.policy)))
 }
 

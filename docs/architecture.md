@@ -238,7 +238,9 @@ Repositories are private unless someone says otherwise, and that is
 enforced at the transport: a private repository cannot be cloned without
 a token, and it answers a stranger exactly as a repository that does not
 exist does. Making one public is an admin decision and is recorded like
-any other.
+any other, and it means public: its pages and its read-only API answer
+without anyone signing in, with nothing to act on and no sidebar but the
+public repositories; every write still needs identity.
 
 ## Imports and mirrors
 

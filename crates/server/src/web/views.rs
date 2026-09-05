@@ -3,7 +3,7 @@
 //! rendered with raw HTML events stripped before it gets here.
 
 use super::diff::{FileDiff, LineKind};
-use super::{Brief, LandingData, Sidebar, Viewer};
+use super::{Brief, Chrome, LandingData, Sidebar, Viewer};
 use cairn_core::{Anchor, Resolution, Side, Thread, ThreadKind};
 use cairn_core::{
     BrowserSession, Change, ChangeState, Claim, Contact, Disposition, Envelope, Event, HitKind,
@@ -94,6 +94,42 @@ fn layout_with(
     frame(theme, viewer, repo, None, active, title, body, rail)
 }
 
+/// Who is reading a repository page: somebody signed in, or nobody,
+/// who sees a public repository with the forge's public chrome and no
+/// way to act.
+#[derive(Clone, Copy)]
+pub enum Reading<'a> {
+    Signed(&'a Viewer),
+    Anonymous(&'a Chrome),
+}
+
+impl<'a> Reading<'a> {
+    pub fn viewer(&self) -> Option<&'a Viewer> {
+        match self {
+            Reading::Signed(viewer) => Some(viewer),
+            Reading::Anonymous(_) => None,
+        }
+    }
+
+    fn chrome(&self) -> &'a Chrome {
+        match self {
+            Reading::Signed(viewer) => &viewer.1,
+            Reading::Anonymous(chrome) => chrome,
+        }
+    }
+}
+
+fn layout_reading(
+    theme: Theme,
+    who: Reading<'_>,
+    repo: Option<&str>,
+    active: Option<Tab>,
+    title: &str,
+    body: Markup,
+) -> Markup {
+    frame_in(theme, Some(who), repo, None, active, title, body, None)
+}
+
 /// A page that belongs to a section of the sidebar - the inbox, people,
 /// teams - rather than to a repository. It highlights its entry in the
 /// sidebar and renders no repository header, because it is not one.
@@ -127,6 +163,29 @@ fn frame(
     body: Markup,
     rail: Option<Markup>,
 ) -> Markup {
+    frame_in(
+        theme,
+        viewer.map(Reading::Signed),
+        repo,
+        section,
+        active,
+        title,
+        body,
+        rail,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn frame_in(
+    theme: Theme,
+    who: Option<Reading<'_>>,
+    repo: Option<&str>,
+    section: Option<&str>,
+    active: Option<Tab>,
+    title: &str,
+    body: Markup,
+    rail: Option<Markup>,
+) -> Markup {
     html! {
         (DOCTYPE)
         html lang="en" data-theme=(theme.attr()) {
@@ -138,11 +197,12 @@ fn frame(
                 script defer src=(super::script_href()) {}
             }
             body {
-                @match viewer {
-                    Some(viewer) => {
+                @match who {
+                    Some(who) => {
+                        @let viewer = who.viewer();
                         div class={ "app" @if rail.is_none() { " narrow" } } {
                             (topbar(theme, viewer))
-                            (sidebar(viewer, section.or(repo)))
+                            (sidebar(who.chrome(), viewer.is_some(), section.or(repo)))
                             main class="main" {
                                 @if let Some(repo) = repo {
                                     div class="repohead" {
@@ -153,7 +213,8 @@ fn frame(
                                             (tab(repo, "/landing", "Landing", active == Some(Tab::Landing)))
                                             (tab(repo, "/lessons", "Lessons", active == Some(Tab::Lessons)))
                                             (tab(repo, "/log", "Log", active == Some(Tab::Log)))
-                                            @if viewer.1.admin || viewer.1.owned.iter().any(|r| r == repo) {
+                                            @if let Some(viewer) = viewer
+                                                && (viewer.1.admin || viewer.1.owned.iter().any(|r| r == repo)) {
                                                 (tab(repo, "/settings", "Settings", active == Some(Tab::Settings)))
                                             }
                                         }
@@ -173,7 +234,7 @@ fn frame(
     }
 }
 
-fn topbar(theme: Theme, viewer: &Viewer) -> Markup {
+fn topbar(theme: Theme, viewer: Option<&Viewer>) -> Markup {
     html! {
         div class="bar" {
             a class="brand" href="/" aria-label="Home" {
@@ -185,25 +246,29 @@ fn topbar(theme: Theme, viewer: &Viewer) -> Markup {
                       autocomplete="off" aria-label="Search";
             }
             div class="baractions" {
-                a class="quiet" href="/new" { "New" }
+                @if viewer.is_some() { a class="quiet" href="/new" { "New" } }
                 a class="quiet menu" href="#nav" { "Menu" }
                 form method="post" action="/theme" {
                     input type="hidden" name="to" value=(theme.other());
                     button class="quiet" type="submit" { (theme.switch_label()) }
                 }
-                form method="post" action="/logout" {
-                    button class="quiet danger" type="submit" { "Sign out" }
-                }
-                span class="avatar" title=(viewer.0.as_str()) {
-                    (viewer.0.as_str().chars().next().unwrap_or('?').to_uppercase())
+                @match viewer {
+                    Some(viewer) => {
+                        form method="post" action="/logout" {
+                            button class="quiet danger" type="submit" { "Sign out" }
+                        }
+                        span class="avatar" title=(viewer.0.as_str()) {
+                            (viewer.0.as_str().chars().next().unwrap_or('?').to_uppercase())
+                        }
+                    }
+                    None => { a class="quiet" href="/login" { "Sign in" } }
                 }
             }
         }
     }
 }
 
-fn sidebar(viewer: &Viewer, current: Option<&str>) -> Markup {
-    let chrome = &viewer.1;
+fn sidebar(chrome: &Chrome, signed: bool, current: Option<&str>) -> Markup {
     html! {
         nav class="side" id="nav" {
             a class="onlynarrow" href="/search" { span { "Search" } span class="n" {} }
@@ -230,6 +295,7 @@ fn sidebar(viewer: &Viewer, current: Option<&str>) -> Markup {
                 }
             }
 
+            @if signed {
             div class="sep" {}
             h4 { "You" }
             a class={ @if current == Some("inbox") { "on" } @else { "" } } href="/inbox" {
@@ -257,6 +323,7 @@ fn sidebar(viewer: &Viewer, current: Option<&str>) -> Markup {
             }
             a class={ @if current == Some("settings") { "on" } @else { "" } } href="/you/settings" {
                 span { "Settings" } span class="n" {}
+            }
             }
         }
     }
@@ -1579,7 +1646,7 @@ pub fn not_found_page(theme: Theme) -> Markup {
 #[allow(clippy::too_many_arguments)]
 pub fn repository(
     theme: Theme,
-    viewer: &Viewer,
+    who: Reading<'_>,
     repo: &str,
     branch: &str,
     tip: Option<&str>,
@@ -1589,9 +1656,9 @@ pub fn repository(
     sidebar: &Sidebar,
     clone_url: &str,
 ) -> Markup {
-    layout(
+    layout_reading(
         theme,
-        Some(viewer),
+        who,
         Some(repo),
         Some(Tab::Code),
         repo,
@@ -1729,7 +1796,7 @@ fn markdown(source: &str) -> Markup {
 
 pub fn file(
     theme: Theme,
-    viewer: &Viewer,
+    who: Reading<'_>,
     repo: &str,
     path: &str,
     text: &str,
@@ -1742,9 +1809,9 @@ pub fn file(
         _ => &lines[..],
     };
     let binary = text.contains('\u{0}');
-    layout(
+    layout_reading(
         theme,
-        Some(viewer),
+        who,
         Some(repo),
         Some(Tab::Code),
         path,
@@ -1791,10 +1858,10 @@ fn is_comment(line: &str) -> bool {
         || t == "#"
 }
 
-pub fn changes(theme: Theme, viewer: &Viewer, repo: &str, changes: &[Change]) -> Markup {
-    layout(
+pub fn changes(theme: Theme, who: Reading<'_>, repo: &str, changes: &[Change]) -> Markup {
+    layout_reading(
         theme,
-        Some(viewer),
+        who,
         Some(repo),
         Some(Tab::Changes),
         "Changes",
@@ -1820,7 +1887,7 @@ pub fn changes(theme: Theme, viewer: &Viewer, repo: &str, changes: &[Change]) ->
 
 pub struct ChangePage<'a> {
     pub theme: Theme,
-    pub viewer: &'a Viewer,
+    pub who: Reading<'a>,
     pub repo: &'a str,
     pub change: &'a Change,
     pub task: Option<&'a Task>,
@@ -1886,7 +1953,7 @@ impl ThreadAt {
 pub fn change(page: ChangePage) -> Markup {
     let ChangePage {
         theme,
-        viewer,
+        who,
         repo,
         change,
         task,
@@ -1922,11 +1989,12 @@ pub fn change(page: ChangePage) -> Markup {
         Some(ThreadAt::Line { path, side, line }) => Some((path.as_str(), side.as_str(), *line)),
         _ => None,
     };
-    let can_discuss = change.state == ChangeState::Open;
+    let signed = who.viewer().is_some();
+    let can_discuss = change.state == ChangeState::Open && signed;
     let satisfied = trace.requirements.iter().filter(|r| r.satisfied).count();
-    layout(
+    layout_reading(
         theme,
-        Some(viewer),
+        who,
         Some(repo),
         Some(Tab::Changes),
         &title,
@@ -2027,7 +2095,7 @@ pub fn change(page: ChangePage) -> Markup {
                             }
                         }
                     }
-                    @if change.state == ChangeState::Open {
+                    @if change.state == ChangeState::Open && signed {
                         form class="composer" method="post" action={ "/" (repo) "/changes/" (change.number) "/verdict" } {
                             input type="hidden" name="revision" value=(shown);
                             select name="domain" aria-label="Domain" {
@@ -2053,7 +2121,7 @@ pub fn change(page: ChangePage) -> Markup {
                                 a class="quiet discuss" href={ "/" (repo) "/changes/" (change.number) "?r=" (shown) "&at=claim:" (claim.id.as_str()) "#at" } { "Discuss" }
                             }
                         }
-                        @if change.state == ChangeState::Open {
+                        @if change.state == ChangeState::Open && signed {
                             form class="composer claim" method="post" action={ "/" (repo) "/changes/" (change.number) "/claim" } {
                                 input type="hidden" name="revision" value=(shown);
                                 div class="line" {
@@ -2107,7 +2175,7 @@ pub fn change(page: ChangePage) -> Markup {
                             p class="hint" { "A line number starts a thread on that line." }
                         }
                     }
-                    @if change.state == ChangeState::Open {
+                    @if change.state == ChangeState::Open && signed {
                         div class="ready" {
                             div class="head" {
                                 b { @if trace.satisfied { "Ready" } @else { "Not ready" } }
@@ -2414,7 +2482,7 @@ fn verdict_row(verdict: &Verdict) -> Markup {
 
 pub fn landing(
     theme: Theme,
-    viewer: &Viewer,
+    who: Reading<'_>,
     repo: &str,
     branch: &str,
     data: &LandingData,
@@ -2424,9 +2492,9 @@ pub fn landing(
         .iter()
         .map(|(id, (number, title))| (id.as_str(), (*number, title.as_str())))
         .collect();
-    layout(
+    layout_reading(
         theme,
-        Some(viewer),
+        who,
         Some(repo),
         Some(Tab::Landing),
         "Landing",
@@ -2888,7 +2956,7 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
 
 pub fn log(
     theme: Theme,
-    viewer: &Viewer,
+    who: Reading<'_>,
     repo: &str,
     numbers: &HashMap<String, (i64, String)>,
     after: i64,
@@ -2898,9 +2966,9 @@ pub fn log(
         .iter()
         .map(|(id, (number, title))| (id.as_str(), (*number, title.as_str())))
         .collect();
-    layout(
+    layout_reading(
         theme,
-        Some(viewer),
+        who,
         Some(repo),
         Some(Tab::Log),
         "Log",
@@ -2947,7 +3015,7 @@ pub fn log(
 /// executed check, or whose claims named a gap, are marked — the
 /// question "which code here was never actually verified" is the one
 /// this view exists to answer.
-pub fn blame(theme: Theme, viewer: &Viewer, repo: &str, path: &str, rows: &[BlameRow]) -> Markup {
+pub fn blame(theme: Theme, who: Reading<'_>, repo: &str, path: &str, rows: &[BlameRow]) -> Markup {
     // A line is flagged when the judgment behind it left something
     // open: no executed check at all, or a claim that named a gap.
     let flagged = |row: &BlameRow| {
@@ -2957,9 +3025,9 @@ pub fn blame(theme: Theme, viewer: &Viewer, repo: &str, path: &str, rows: &[Blam
     };
     let with_gaps = rows.iter().filter(|r| flagged(r)).count();
     let unattributed = rows.iter().filter(|r| r.provenance.is_none()).count();
-    layout(
+    layout_reading(
         theme,
-        Some(viewer),
+        who,
         Some(repo),
         Some(Tab::Code),
         path,
@@ -3112,14 +3180,14 @@ fn brief(repo: &str, brief: &Brief) -> Markup {
 /// outcome, so failure leaves knowledge behind by construction.
 pub fn lessons(
     theme: Theme,
-    viewer: &Viewer,
+    who: Reading<'_>,
     repo: &str,
     search: Option<&str>,
     lessons: &[cairn_core::Lesson],
 ) -> Markup {
-    layout(
+    layout_reading(
         theme,
-        Some(viewer),
+        who,
         Some(repo),
         Some(Tab::Lessons),
         "Lessons",

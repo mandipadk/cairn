@@ -208,7 +208,16 @@ only as narrow as whoever issues them.
 ## Development
 
 ```sh
-cargo test --workspace
+cargo nextest run --workspace   # or: cargo test --workspace
+cargo test --workspace --doc
 cargo clippy --workspace --all-targets
 cargo fmt
 ```
+
+Each crate's end-to-end tests are one binary (`tests/suite/main.rs`), so
+the suite links once rather than once per file; a new test file needs a
+`mod` line there. `cargo nextest run` (install with `cargo install
+cargo-nextest --locked`) runs each test in its own process and stops a
+hung test after two minutes; `.config/nextest.toml` holds the settings,
+and its `ci` profile writes a JUnit report. Plain `cargo test` runs the
+same tests and is what the verify runner falls back to.

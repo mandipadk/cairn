@@ -386,21 +386,51 @@ pub async fn create_task(
 #[derive(Deserialize)]
 pub struct TaskFilter {
     pub state: Option<TaskState>,
+    pub repo: Option<String>,
+    /// Page by cursor: tasks created before this event seq, newest first.
+    pub before: Option<i64>,
+    /// At most this many; 50 when absent, 200 at most.
+    pub limit: Option<i64>,
 }
 
+/// Without `before` or `limit` the answer is the whole list, oldest
+/// first, as it always was. With either, it is one page newest first,
+/// wrapped with the cursor for the next: `{"tasks": [...], "next_before": seq}`.
 pub async fn list_tasks(
     State(app): State<AppState>,
     actor: Actor,
     Query(filter): Query<TaskFilter>,
 ) -> ApiResult<Json<Value>> {
-    let mut tasks = app.with_store(|s| s.acting_as(actor.1.as_ref()).tasks(filter.state))?;
     // A task with no repository is forge-wide work and everybody's.
-    tasks.retain(|task| {
+    let readable = |task: &Task| {
         task.repo.as_deref().is_none_or(|repo| {
             app.with_store(|s| s.acting_as(actor.1.as_ref()).may_read(&actor.0, repo))
         })
-    });
-    Ok(Json(json!(tasks)))
+    };
+    if filter.before.is_none() && filter.limit.is_none() {
+        let mut tasks = app.with_store(|s| s.acting_as(actor.1.as_ref()).tasks(filter.state))?;
+        if let Some(repo) = &filter.repo {
+            tasks.retain(|task| task.repo.as_deref() == Some(repo));
+        }
+        tasks.retain(|task| readable(task));
+        return Ok(Json(json!(tasks)));
+    }
+    let limit = filter.limit.unwrap_or(50).clamp(1, 200);
+    let mut tasks = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref()).tasks_page(
+            filter.state,
+            filter.repo.as_deref(),
+            filter.before,
+            limit,
+        )
+    })?;
+    // The cursor is cut before the read filter, so a page can come back
+    // short but never skips past anything the caller may see.
+    let next_before = (tasks.len() as i64 == limit)
+        .then(|| tasks.last().map(|task| task.seq))
+        .flatten();
+    tasks.retain(|task| readable(task));
+    Ok(Json(json!({ "tasks": tasks, "next_before": next_before })))
 }
 
 pub async fn get_task(
@@ -1582,24 +1612,36 @@ pub struct InboxQuery {
     #[serde(default)]
     pub unread: bool,
     pub limit: Option<usize>,
+    /// Page by cursor: notices before this seq.
+    pub before: Option<i64>,
 }
 
 /// What has been addressed to the caller: judgments on their changes,
-/// disputes on their claims, authority given to them. Newest first.
+/// disputes on their claims, authority given to them. Newest first, a
+/// page at a time; `next_before` is the cursor for the next page, or
+/// null at the end.
 pub async fn inbox(
     State(app): State<AppState>,
     actor: Actor,
     Query(query): Query<InboxQuery>,
 ) -> ApiResult<Json<Value>> {
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
     let mut notices = app.with_store(|s| {
         s.acting_as(actor.1.as_ref())
-            .inbox(&actor.0, query.limit.unwrap_or(100).min(500))
+            .inbox_before(&actor.0, query.before, limit)
     })?;
+    let next_before = (notices.len() == limit)
+        .then(|| notices.last().map(|notice| notice.seq))
+        .flatten();
     if query.unread {
         notices.retain(|notice| !notice.read);
     }
     let unread = app.with_store(|s| s.acting_as(actor.1.as_ref()).unread_count(&actor.0))?;
-    Ok(Json(json!({ "unread": unread, "notices": notices })))
+    Ok(Json(json!({
+        "unread": unread,
+        "notices": notices,
+        "next_before": next_before,
+    })))
 }
 
 #[derive(Deserialize)]

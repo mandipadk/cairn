@@ -13,6 +13,10 @@ use tokio::net::TcpStream;
 use tower::ServiceExt;
 
 fn test_router() -> Router {
+    router(test_state())
+}
+
+fn test_state() -> AppState {
     // Dev identity is explicit here: these tests exercise the protocol,
     // not credentials. Token enforcement has its own test below.
     //
@@ -33,7 +37,7 @@ fn test_router() -> Router {
         )
         .unwrap();
     store.grant_bootstrap_admin(&ada).unwrap();
-    router(AppState::new(store).with_dev_identity())
+    AppState::new(store).with_dev_identity()
 }
 
 async fn call(
@@ -618,7 +622,10 @@ async fn claim_storm_has_exactly_one_winner() {
 async fn sustained_concurrent_writes_keep_stream_and_pages_consistent() {
     const WRITERS: usize = 50;
     const PER_WRITER: usize = 30;
-    let app = test_router();
+    // Fifty writers acting as one principal is a load probe, not a
+    // caller; the allowance that stops a runaway loop would stop this
+    // by design, so it is off here.
+    let app = router(test_state().with_write_allowance(0));
     seed(&app).await; // the bootstrap grant, then the seeded world
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -166,6 +166,19 @@ async fn full_agent_workflow_over_mcp() {
         "merge_readiness",
         "merge_change",
         "list_events",
+        // Parity with the HTTP API: everything an agent may read or do.
+        "search",
+        "inbox",
+        "mark_read",
+        "list_claims",
+        "list_verdicts",
+        "list_verifications",
+        "list_revisions",
+        "abandon_change",
+        "queue",
+        "awaiting_verification",
+        "get_repo",
+        "get_thread",
     ] {
         assert!(
             tools.contains(&expected),
@@ -179,6 +192,26 @@ async fn full_agent_workflow_over_mcp() {
         .await;
     assert!(!is_error);
     assert_eq!(found[0]["id"], task.as_str());
+
+    // The same questions a person asks the search box and the inbox.
+    let (hits, is_error) = mcp
+        .call_tool(30, "search", json!({ "q": "try the adapter" }))
+        .await;
+    assert!(!is_error, "{hits}");
+    assert!(
+        hits["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|hit| hit["kind"] == "task" && hit["title"] == "Try the adapter"),
+        "{hits}"
+    );
+    let (inbox, is_error) = mcp.call_tool(31, "inbox", json!({ "limit": 5 })).await;
+    assert!(!is_error, "{inbox}");
+    assert!(
+        inbox["unread"].is_number() && inbox["notices"].is_array(),
+        "{inbox}"
+    );
 
     let (_, is_error) = mcp
         .call_tool(4, "claim_task", json!({ "task": task.as_str() }))

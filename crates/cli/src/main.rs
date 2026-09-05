@@ -91,6 +91,10 @@ enum Command {
         /// The audience a workload token must name; the public URL when absent.
         #[arg(long)]
         workload_audience: Option<String>,
+        /// API writes one principal may make per minute before being told
+        /// to wait (429 with Retry-After). 0 turns the allowance off.
+        #[arg(long, default_value_t = cairn_server::DEFAULT_WRITES_PER_MINUTE)]
+        api_writes_per_minute: u32,
     },
     /// Offline administration against the forge database. Having file
     /// access to the database is the root authority.
@@ -246,6 +250,7 @@ async fn main() -> anyhow::Result<()> {
             oidc_link_by_email,
             workload_issuer,
             workload_audience,
+            api_writes_per_minute,
         } => {
             let git_version = cairn_git::preflight().context("checking the git on PATH")?;
             let store = Store::open(&db)
@@ -271,6 +276,7 @@ async fn main() -> anyhow::Result<()> {
             if trust_proxy {
                 state = state.trusting_proxy();
             }
+            state = state.with_write_allowance(api_writes_per_minute);
             match mailer_from(smtp_url, mail_command, mail_from)? {
                 Some(mailer) => {
                     tracing::info!("mail: {}", mailer.describe());

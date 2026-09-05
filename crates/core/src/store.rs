@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 19;
+const SCHEMA_VERSION: i64 = 20;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -149,6 +149,21 @@ CREATE TABLE IF NOT EXISTS password_resets (
   expires    TEXT NOT NULL,
   used       INTEGER NOT NULL DEFAULT 0
 ) STRICT;
+
+-- What an API write answered, by the key its caller chose, so the same
+-- request asked twice gets the same answer once. Not in the log: the
+-- log records what happened, and a replay is precisely nothing new.
+CREATE TABLE IF NOT EXISTS idempotency (
+  principal    TEXT NOT NULL,
+  key          TEXT NOT NULL,
+  fingerprint  TEXT NOT NULL,
+  status       INTEGER NOT NULL,
+  content_type TEXT,
+  body         TEXT NOT NULL,
+  created      TEXT NOT NULL,
+  PRIMARY KEY (principal, key)
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_idempotency_created ON idempotency (created);
 ";
 
 /// Everything derived. Dropping and replaying these is always safe:
@@ -243,16 +258,18 @@ CREATE INDEX IF NOT EXISTS idx_team_members_member ON team_members (member);
 CREATE INDEX IF NOT EXISTS idx_event_scope_subject ON event_scope (subject);
 
 CREATE TABLE IF NOT EXISTS tasks (
-  id         TEXT PRIMARY KEY,
-  repo       TEXT,
-  title      TEXT NOT NULL,
-  spec       TEXT NOT NULL,
-  parent     TEXT,
-  state      TEXT NOT NULL,
-  claimed_by TEXT,
-  created_by TEXT NOT NULL
+  id          TEXT PRIMARY KEY,
+  repo        TEXT,
+  title       TEXT NOT NULL,
+  spec        TEXT NOT NULL,
+  parent      TEXT,
+  state       TEXT NOT NULL,
+  claimed_by  TEXT,
+  created_by  TEXT NOT NULL,
+  created_seq INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks (state);
+CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks (created_seq);
 
 CREATE TABLE IF NOT EXISTS sessions (
   id      TEXT PRIMARY KEY,
@@ -1899,15 +1916,16 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             parent,
         } => {
             tx.execute(
-                "INSERT INTO tasks (id, repo, title, spec, parent, state, created_by)
-                 VALUES (?, ?, ?, ?, ?, 'open', ?)",
+                "INSERT INTO tasks (id, repo, title, spec, parent, state, created_by, created_seq)
+                 VALUES (?, ?, ?, ?, ?, 'open', ?, ?)",
                 params![
                     task.as_str(),
                     repo,
                     title,
                     spec,
                     parent.as_ref().map(|p| p.as_str()),
-                    actor
+                    actor,
+                    env.seq.0
                 ],
             )?;
         }

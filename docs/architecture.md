@@ -264,6 +264,45 @@ not, an unreachable mirror never holds up work on the forge that owns it,
 and the credential that authorises the push belongs to whoever runs the
 forge and is never written to the graph.
 
+## The API's conventions
+
+Every consumer speaks the same HTTP API: the CLI, the pages, the MCP
+adapter, a runner in CI. Four conventions hold across all of it.
+
+**Errors are typed.** A refusal is `{"kind": "...", "error": "..."}`,
+sometimes with `detail`: a `policy_unsatisfied` carries the full
+readiness trace, so the caller learns which requirement to go satisfy
+rather than just "no". The kinds are stable vocabulary for machines; the
+messages are for whoever reads the log.
+
+**Writes take an idempotency key.** Any `POST` under `/api/` may carry
+`Idempotency-Key`, up to 200 printable characters of the caller's
+choosing. The first answer under a key is kept for a day, per principal;
+the same request under the same key gets that answer back unchanged,
+marked `Idempotent-Replayed: true`, and nothing is done again. A
+different request under a used key is refused (`422
+idempotency_mismatch`), and a copy arriving while the first is still
+being answered is asked to wait (`409 idempotency_in_flight`). Answers
+the forge itself failed to give are not kept, so a retry can succeed.
+The MCP adapter sends a key with every write and retries once when the
+connection fails, which is exactly the case the key exists for.
+
+**Lists that grow without bound come in pages.** Changes, tasks and the
+inbox take `limit` and `before`; a page answers newest first with
+`next_before` naming the next page, null at the end. Events take `after`
+and answer oldest first, because a log is followed forwards. Without
+either parameter, changes and tasks still answer whole and oldest first,
+as they did before pages existed. Lists bounded by their parent - the
+revisions of a change, the claims on a revision, a branch's queue - come
+whole, since paging a page helps nobody. Search and lessons are ranked
+questions, not lists, and take only `limit`.
+
+**A caller who will not wait is told how long.** Each principal may make
+600 writes a minute (`--api-writes-per-minute` changes it; 0 turns it
+off). Past that, `429 rate_limited` with `Retry-After` in seconds and
+the same number in `detail.retry_after`. Sign-in and the other forms a
+stranger can post to are limited per source address instead.
+
 ## Layout
 
 - `crates/core` — event log, projections, domain commands, merge policy

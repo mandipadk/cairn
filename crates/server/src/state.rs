@@ -1,6 +1,6 @@
 use cairn_core::{Envelope, PrincipalId, Store};
 use cairn_git::GitStore;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
@@ -11,6 +11,11 @@ const PUSH_TOKEN_TTL: Duration = Duration::from_secs(600);
 
 /// How long a browser stays signed in without signing in again.
 const SESSION_TTL_DAYS: i64 = 14;
+
+/// API writes one principal may make in a minute before being told to
+/// wait. Ten a second sustained is far past any agent doing work and
+/// well short of what a loop stuck on a refusal produces.
+pub const DEFAULT_WRITES_PER_MINUTE: u32 = 600;
 
 /// One change the log says landed, and where.
 struct Landed {
@@ -61,6 +66,11 @@ pub struct AppState {
     pub(crate) waitlist_limiter: crate::guard::LoginLimiter,
     /// Asking for a password reset is a public form too.
     pub(crate) reset_limiter: crate::guard::LoginLimiter,
+    /// API writes, per principal: a runaway loop is told to wait.
+    pub(crate) write_limiter: crate::guard::Limiter<PrincipalId>,
+    /// Writes under an idempotency key that have not answered yet, so a
+    /// second copy arriving meanwhile is refused rather than done twice.
+    writes_in_flight: Arc<Mutex<HashSet<(PrincipalId, String)>>>,
     /// How the forge sends mail, if it can. None means it cannot, and
     /// the pages that would need to say so.
     mailer: Option<Arc<crate::mail::Mailer>>,
@@ -97,6 +107,11 @@ impl AppState {
             login_limiter: crate::guard::LoginLimiter::default(),
             waitlist_limiter: crate::guard::LoginLimiter::new(5, Duration::from_secs(300)),
             reset_limiter: crate::guard::LoginLimiter::new(5, Duration::from_secs(300)),
+            write_limiter: crate::guard::Limiter::new(
+                DEFAULT_WRITES_PER_MINUTE,
+                Duration::from_secs(60),
+            ),
+            writes_in_flight: Arc::new(Mutex::new(HashSet::new())),
             mailer: None,
             webauthn: None,
             public_url: None,
@@ -200,6 +215,33 @@ impl AppState {
 
     pub(crate) fn proxy_trust(&self) -> crate::guard::ProxyTrust {
         self.proxy_trust
+    }
+
+    /// How many API writes a principal may make per minute; 0 means
+    /// there is no allowance to run out of.
+    pub fn with_write_allowance(mut self, per_minute: u32) -> Self {
+        self.write_limiter = if per_minute == 0 {
+            crate::guard::Limiter::unlimited()
+        } else {
+            crate::guard::Limiter::new(per_minute, Duration::from_secs(60))
+        };
+        self
+    }
+
+    /// Claim an idempotency key for the write about to run. False means
+    /// the first request under it is still being answered.
+    pub(crate) fn begin_write(&self, principal: &PrincipalId, key: &str) -> bool {
+        self.writes_in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert((principal.clone(), key.to_owned()))
+    }
+
+    pub(crate) fn finish_write(&self, principal: &PrincipalId, key: &str) {
+        self.writes_in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&(principal.clone(), key.to_owned()));
     }
 
     /// Issue an ephemeral token for a hook spawned on behalf of an

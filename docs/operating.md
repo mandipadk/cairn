@@ -230,7 +230,11 @@ admin's.
 Responses carry a strict content policy, frame and sniffing protections,
 and HSTS. Sign-in attempts are rate limited per source address — behind a
 reverse proxy, pass `--trust-proxy` so callers are told apart by the
-forwarded address rather than sharing the proxy's. `/healthz` answers
+forwarded address rather than sharing the proxy's. API writes are allowed
+per principal, 600 a minute unless `--api-writes-per-minute` says
+otherwise (0 turns the allowance off); past that a caller gets `429` with
+`Retry-After`, which is how a loop stuck on a refusal is stopped without
+stopping anyone else. `/healthz` answers
 unauthenticated, for whatever is watching. Every free-text field a caller
 controls is bounded, so the log cannot be inflated by a stranger. Git
 subprocesses have timeouts, so a hung transfer cannot hold a connection
@@ -251,10 +255,10 @@ Reading authenticates on the token alone — the username in Basic auth is
 decoration — while a push still requires the two to agree, because a
 mismatch there is usually somebody's mistake worth catching.
 
-Not defended yet: request-rate limiting beyond sign-in and the waitlist;
-quotas on repository or push size; and a principal that holds legitimate
-capabilities and abuses them. Grants are the tool for that, and they are
-only as narrow as whoever issues them.
+Not defended yet: rate limiting on reads; quotas on repository or push
+size; and a principal that holds legitimate capabilities and abuses them.
+Grants are the tool for that, and they are only as narrow as whoever
+issues them.
 
 ## Session credentials
 

@@ -11,6 +11,7 @@
 //! are the trust layer scheduled to replace it; nothing else in the API
 //! will change shape when they do.
 
+mod api_guard;
 mod auth;
 mod debt;
 mod error;
@@ -27,7 +28,7 @@ mod web;
 
 pub use mail::Mailer;
 pub use queue::{reconcile_branches, spawn_queue_processor};
-pub use state::AppState;
+pub use state::{AppState, DEFAULT_WRITES_PER_MINUTE};
 
 use axum::Router;
 use axum::routing::{get, post};
@@ -183,6 +184,12 @@ pub fn router(state: AppState) -> Router {
                 .layer(axum::extract::DefaultBodyLimit::max(GIT_BODY_LIMIT)),
         )
         .merge(web::routes())
+        // Innermost, so every API write passes it after the origin
+        // check and every answer it gives still gets the headers.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            api_guard::api_writes,
+        ))
         .layer(axum::middleware::from_fn(guard::security_headers))
         .layer(axum::middleware::from_fn(guard::same_origin_writes))
         .layer(axum::middleware::from_fn(web::themed_fallbacks))

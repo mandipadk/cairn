@@ -271,6 +271,21 @@ pub struct Task {
     pub state: TaskState,
     pub claimed_by: Option<PrincipalId>,
     pub created_by: PrincipalId,
+    /// The event that created it, which is what a page of tasks is
+    /// cut at: newest first, `before` this.
+    pub seq: i64,
+}
+
+/// What an API write answered, kept under the key its caller chose so
+/// the same request asked again gets the same answer without being done
+/// again. The fingerprint is of the request; a different request under
+/// the same key is a mistake, not a retry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Replay {
+    pub fingerprint: String,
+    pub status: u16,
+    pub content_type: Option<String>,
+    pub body: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

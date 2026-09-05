@@ -211,12 +211,14 @@ pub(crate) mod raw {
                 parent: row.get::<_, Option<String>>(5)?.map(TaskId),
                 claimed_by: row.get::<_, Option<String>>(6)?.map(PrincipalId),
                 created_by: PrincipalId(row.get(7)?),
+                seq: row.get(8)?,
             },
             state,
         ))
     }
 
-    const TASK_COLS: &str = "id, repo, title, spec, state, parent, claimed_by, created_by";
+    const TASK_COLS: &str =
+        "id, repo, title, spec, state, parent, claimed_by, created_by, created_seq";
 
     pub fn task(conn: &Connection, id: &str) -> CoreResult<Option<Task>> {
         conn.prepare_cached(&format!("SELECT {TASK_COLS} FROM tasks WHERE id = ?"))?
@@ -246,6 +248,32 @@ pub(crate) mod raw {
             None => stmt.query_map([], task_from_row)?,
         }
         .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(mut task, state)| {
+                task.state = parsed(&format!("task {}", task.id), &state, TaskState::parse)?;
+                Ok(task)
+            })
+            .collect()
+    }
+
+    /// One page of tasks, newest first: those created before `before`
+    /// (an event seq), at most `limit`, narrowed by state and repository.
+    pub fn tasks_page(
+        conn: &Connection,
+        state: Option<&str>,
+        repo: Option<&str>,
+        before: Option<i64>,
+        limit: i64,
+    ) -> CoreResult<Vec<Task>> {
+        let rows = conn
+            .prepare_cached(&format!(
+                "SELECT {TASK_COLS} FROM tasks
+                  WHERE (?1 IS NULL OR state = ?1) AND (?2 IS NULL OR repo = ?2)
+                    AND (?3 IS NULL OR created_seq < ?3)
+                  ORDER BY created_seq DESC LIMIT ?4"
+            ))?
+            .query_map(params![state, repo, before, limit], task_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
             .map(|(mut task, state)| {
                 task.state = parsed(&format!("task {}", task.id), &state, TaskState::parse)?;
@@ -1242,6 +1270,16 @@ impl Store {
         raw::task(&self.conn, id.as_str())
     }
 
+    pub fn tasks_page(
+        &self,
+        state: Option<TaskState>,
+        repo: Option<&str>,
+        before: Option<i64>,
+        limit: i64,
+    ) -> CoreResult<Vec<Task>> {
+        raw::tasks_page(&self.conn, state.map(|s| s.as_str()), repo, before, limit)
+    }
+
     pub fn tasks(&self, state: Option<TaskState>) -> CoreResult<Vec<Task>> {
         raw::tasks(&self.conn, state)
     }
@@ -1372,6 +1410,17 @@ impl Store {
     /// than in it: the log says what happened, the reader says what they
     /// have dealt with.
     pub fn inbox(&self, who: &PrincipalId, limit: usize) -> CoreResult<Vec<Notice>> {
+        self.inbox_before(who, None, limit)
+    }
+
+    /// The same, one page at a time: notices before `before`, a seq
+    /// from the previous page.
+    pub fn inbox_before(
+        &self,
+        who: &PrincipalId,
+        before: Option<i64>,
+        limit: usize,
+    ) -> CoreResult<Vec<Notice>> {
         let rows = self
             .conn
             .prepare_cached(
@@ -1380,22 +1429,25 @@ impl Store {
                          OR EXISTS (SELECT 1 FROM inbox_read r
                                      WHERE r.principal = ?1 AND r.seq = n.seq)) AS read
                    FROM notices n JOIN events e ON e.seq = n.seq
-                  WHERE n.recipient = ?1
+                  WHERE n.recipient = ?1 AND (?3 IS NULL OR n.seq < ?3)
                   ORDER BY n.seq DESC LIMIT ?2",
             )?
-            .query_map(params![who.as_str(), limit.min(500) as i64], |row| {
-                Ok(Notice {
-                    seq: row.get(0)?,
-                    ts: row.get(1)?,
-                    kind: row.get(2)?,
-                    actor: PrincipalId(row.get(3)?),
-                    repo: row.get(4)?,
-                    change: row.get::<_, Option<String>>(5)?.map(ChangeId),
-                    number: row.get(6)?,
-                    what: row.get(7)?,
-                    read: row.get::<_, i64>(8)? != 0,
-                })
-            })?
+            .query_map(
+                params![who.as_str(), limit.min(500) as i64, before],
+                |row| {
+                    Ok(Notice {
+                        seq: row.get(0)?,
+                        ts: row.get(1)?,
+                        kind: row.get(2)?,
+                        actor: PrincipalId(row.get(3)?),
+                        repo: row.get(4)?,
+                        change: row.get::<_, Option<String>>(5)?.map(ChangeId),
+                        number: row.get(6)?,
+                        what: row.get(7)?,
+                        read: row.get::<_, i64>(8)? != 0,
+                    })
+                },
+            )?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }

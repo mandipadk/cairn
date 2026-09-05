@@ -18,8 +18,8 @@ use crate::queries::raw;
 use crate::store::{Store, append};
 use crate::types::{
     Anchor, BrowserSession, Capability, Change, ChangeSpec, ChangeState, ClaimSpec, Contact,
-    Disposition, Mirror, ObjectFormat, PasskeyRecord, Policy, Principal, PrincipalKind, Resolution,
-    ReviewDomain, Scope, SessionState, TaskState, ThreadKind, Visibility,
+    Disposition, Mirror, ObjectFormat, PasskeyRecord, Policy, Principal, PrincipalKind, Replay,
+    Resolution, ReviewDomain, Scope, SessionState, TaskState, ThreadKind, Visibility,
 };
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
@@ -660,6 +660,61 @@ impl Store {
             rusqlite::params![email.trim().to_lowercase()],
         )?;
         Ok(removed == 1)
+    }
+
+    /// What this principal's write under `key` answered, if it has been
+    /// made and is still remembered.
+    pub fn replay_for(&self, principal: &PrincipalId, key: &str) -> CoreResult<Option<Replay>> {
+        use rusqlite::OptionalExtension;
+        Ok(self
+            .conn
+            .prepare_cached(
+                "SELECT fingerprint, status, content_type, body FROM idempotency
+                  WHERE principal = ?1 AND key = ?2 AND created > ?3",
+            )?
+            .query_row(
+                rusqlite::params![principal.as_str(), key, replays_kept_since()],
+                |row| {
+                    Ok(Replay {
+                        fingerprint: row.get(0)?,
+                        status: row.get::<_, i64>(1)? as u16,
+                        content_type: row.get(2)?,
+                        body: row.get(3)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    /// Remember what a write answered, and forget what is too old to be
+    /// asked about again.
+    pub fn remember_replay(
+        &mut self,
+        principal: &PrincipalId,
+        key: &str,
+        replay: &Replay,
+    ) -> CoreResult<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM idempotency WHERE created <= ?1",
+            rusqlite::params![replays_kept_since()],
+        )?;
+        tx.execute(
+            "INSERT OR REPLACE INTO idempotency
+                 (principal, key, fingerprint, status, content_type, body, created)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                principal.as_str(),
+                key,
+                replay.fingerprint,
+                i64::from(replay.status),
+                replay.content_type,
+                replay.body,
+                jiff::Timestamp::now().to_string(),
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Check a password. Returns false for an unknown principal, one
@@ -3413,4 +3468,11 @@ impl Store {
 /// mean different amounts of elapsed time across a DST boundary.
 pub fn until_in_days(days: i64) -> String {
     (jiff::Timestamp::now() + jiff::Span::new().hours(days * 24)).to_string()
+}
+
+/// How long a write's answer stays replayable. A day is what the
+/// industry converged on: long enough for any retry loop, short enough
+/// that the table stays a cache rather than a second log.
+fn replays_kept_since() -> String {
+    (jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24)).to_string()
 }

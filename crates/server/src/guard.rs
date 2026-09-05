@@ -14,6 +14,7 @@ use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -102,15 +103,19 @@ fn refused(why: &'static str) -> Response {
     (StatusCode::FORBIDDEN, why).into_response()
 }
 
-/// A fixed-window limiter for sign-in attempts, keyed by source
-/// address. Deliberately small: it exists to make credential guessing
+/// A fixed-window limiter, keyed by whoever is asking: a source address
+/// for the forms a stranger can post to, a principal for API writes.
+/// Deliberately small: it exists to make guessing and runaway loops
 /// pointless, not to be a traffic shaper.
 #[derive(Clone)]
-pub struct LoginLimiter {
-    attempts: Arc<Mutex<HashMap<IpAddr, (u32, Instant)>>>,
+pub struct Limiter<K: Eq + Hash> {
+    attempts: Arc<Mutex<HashMap<K, (u32, Instant)>>>,
     allowed: u32,
     window: Duration,
 }
+
+/// Sign-in and the other public forms are keyed by source address.
+pub type LoginLimiter = Limiter<IpAddr>;
 
 impl Default for LoginLimiter {
     fn default() -> Self {
@@ -118,20 +123,32 @@ impl Default for LoginLimiter {
     }
 }
 
-impl LoginLimiter {
+impl<K: Eq + Hash> Limiter<K> {
     pub fn new(allowed: u32, window: Duration) -> Self {
-        LoginLimiter {
+        Limiter {
             attempts: Arc::new(Mutex::new(HashMap::new())),
             allowed,
             window,
         }
     }
 
+    /// A limiter that refuses nobody, for an operator who has turned
+    /// the allowance off.
+    pub fn unlimited() -> Self {
+        Self::new(u32::MAX, Duration::from_secs(60))
+    }
+
     /// Record an attempt; false means this caller has had enough.
-    pub fn accept(&self, from: IpAddr) -> bool {
+    pub fn accept(&self, from: K) -> bool {
+        self.check(from).is_ok()
+    }
+
+    /// Record an attempt. A refusal says how long until this caller's
+    /// window opens again, which is what `Retry-After` tells them.
+    pub fn check(&self, from: K) -> Result<(), Duration> {
         let mut attempts = match self.attempts.lock() {
             Ok(attempts) => attempts,
-            // A poisoned lock must not lock everyone out of signing in.
+            // A poisoned lock must not lock everyone out.
             Err(poisoned) => poisoned.into_inner(),
         };
         let now = Instant::now();
@@ -140,8 +157,12 @@ impl LoginLimiter {
         if now.duration_since(entry.1) >= self.window {
             *entry = (0, now);
         }
-        entry.0 += 1;
-        entry.0 <= self.allowed
+        entry.0 = entry.0.saturating_add(1);
+        if entry.0 <= self.allowed {
+            Ok(())
+        } else {
+            Err(self.window.saturating_sub(now.duration_since(entry.1)))
+        }
     }
 }
 
@@ -207,6 +228,23 @@ pub fn too_many_attempts() -> Response {
         .into_response()
 }
 
+/// The API's refusal: typed like every other API error, with the wait
+/// stated twice - in the header a client library reads, and in the body
+/// an agent does.
+pub fn rate_limited(wait: Duration) -> Response {
+    let seconds = wait.as_secs_f64().ceil().max(1.0) as u64;
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [(header::RETRY_AFTER, seconds.to_string())],
+        axum::Json(serde_json::json!({
+            "kind": "rate_limited",
+            "error": format!("too many writes; wait {seconds}s and try again"),
+            "detail": { "retry_after": seconds },
+        })),
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,7 +276,13 @@ mod tests {
         assert!(limiter.accept(caller));
         assert!(limiter.accept(caller));
         assert!(limiter.accept(caller));
-        assert!(!limiter.accept(caller), "the fourth attempt is refused");
+        let wait = limiter
+            .check(caller)
+            .expect_err("the fourth attempt is refused");
+        assert!(
+            wait > Duration::from_secs(55) && wait <= Duration::from_secs(60),
+            "the refusal says how long the window has left: {wait:?}"
+        );
         // One caller's noise never costs another their allowance.
         let other: IpAddr = "203.0.113.8".parse().unwrap();
         assert!(limiter.accept(other));

@@ -16,6 +16,8 @@
 use anyhow::Context;
 use serde_json::{Value, json};
 use std::io::{self, BufRead, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub fn run(server: &str, token: Option<&str>, principal: Option<&str>) -> anyhow::Result<()> {
     let client = ApiClient::new(server, token, principal);
@@ -88,7 +90,9 @@ fn initialize_result(message: &Value) -> Value {
             push_revision, attach_claim, then check merge_readiness. Attach honest \
             claims including what you did NOT check. Always end your session with an \
             outcome written for the next reader, especially on failure. If a merge is \
-            refused, the response names the exact unmet requirements."
+            refused, the response names the exact unmet requirements. Every write \
+            made through these tools carries its own idempotency key, so a call that \
+            failed in transport is retried once without being done twice."
     })
 }
 
@@ -97,6 +101,46 @@ fn need<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     args.get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| format!("missing required argument: {key}"))
+}
+
+fn arg_str(args: &Value, key: &str) -> Option<String> {
+    args.get(key).and_then(Value::as_str).map(str::to_owned)
+}
+
+fn arg_num(args: &Value, key: &str) -> Option<String> {
+    args.get(key).and_then(Value::as_i64).map(|n| n.to_string())
+}
+
+fn arg_flag(args: &Value, key: &str) -> Option<String> {
+    (args.get(key).and_then(Value::as_bool) == Some(true)).then(|| "true".to_owned())
+}
+
+/// A path plus whichever query parameters were given, percent-encoded.
+fn with_query(path: &str, params: &[(&str, Option<String>)]) -> String {
+    let mut out = path.to_owned();
+    let mut separator = '?';
+    for (name, value) in params {
+        if let Some(value) = value {
+            out.push(separator);
+            out.push_str(name);
+            out.push('=');
+            out.push_str(&encode(value));
+            separator = '&';
+        }
+    }
+    out
+}
+
+fn encode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            other => format!("%{other:02X}"),
+        })
+        .collect()
 }
 
 fn handle_call(client: &ApiClient, params: Option<&Value>) -> Result<Value, String> {
@@ -121,10 +165,15 @@ fn handle_call(client: &ApiClient, params: Option<&Value>) -> Result<Value, Stri
 /// since tool schemas mirror API request shapes.
 fn dispatch(client: &ApiClient, name: &str, args: &Value) -> Result<(u16, Value), String> {
     let call = match name {
-        "list_tasks" => match args.get("state").and_then(Value::as_str) {
-            Some(state) => client.get(&format!("/api/tasks?state={state}")),
-            None => client.get("/api/tasks"),
-        },
+        "list_tasks" => client.get(&with_query(
+            "/api/tasks",
+            &[
+                ("state", arg_str(args, "state")),
+                ("repo", arg_str(args, "repo")),
+                ("before", arg_num(args, "before")),
+                ("limit", arg_num(args, "limit")),
+            ],
+        )),
         "create_task" => client.post("/api/tasks", args),
         "get_task" => client.get(&format!("/api/tasks/{}", need(args, "task")?)),
         "claim_task" => client.post(&format!("/api/tasks/{}/claim", need(args, "task")?), args),
@@ -163,8 +212,58 @@ fn dispatch(client: &ApiClient, name: &str, args: &Value) -> Result<(u16, Value)
             client.restore();
             out
         }
-        "list_changes" => client.get(&format!("/api/repos/{}/changes", need(args, "repo")?)),
+        "list_changes" => client.get(&with_query(
+            &format!("/api/repos/{}/changes", need(args, "repo")?),
+            &[
+                ("state", arg_str(args, "state")),
+                ("before", arg_num(args, "before")),
+                ("limit", arg_num(args, "limit")),
+            ],
+        )),
         "get_change" => client.get(&format!("/api/changes/{}", need(args, "change")?)),
+        "get_repo" => client.get(&format!("/api/repos/{}", need(args, "repo")?)),
+        "get_session" => client.get(&format!("/api/sessions/{}", need(args, "session")?)),
+        "list_revisions" => {
+            client.get(&format!("/api/changes/{}/revisions", need(args, "change")?))
+        }
+        "list_claims" | "list_verdicts" | "list_verifications" => client.get(&with_query(
+            &format!(
+                "/api/changes/{}/{}",
+                need(args, "change")?,
+                name.trim_start_matches("list_")
+            ),
+            &[("revision", arg_num(args, "revision"))],
+        )),
+        "abandon_change" => client.post(
+            &format!("/api/changes/{}/abandon", need(args, "change")?),
+            args,
+        ),
+        "queue" => client.get(&with_query(
+            &format!("/api/repos/{}/queue", need(args, "repo")?),
+            &[("target", arg_str(args, "target"))],
+        )),
+        "awaiting_verification" => client.get(&format!(
+            "/api/repos/{}/awaiting-verification",
+            need(args, "repo")?
+        )),
+        "list_leases" => client.get(&format!("/api/repos/{}/leases", need(args, "repo")?)),
+        "search" => client.get(&with_query(
+            "/api/search",
+            &[
+                ("q", Some(need(args, "q")?.to_owned())),
+                ("limit", arg_num(args, "limit")),
+            ],
+        )),
+        "inbox" => client.get(&with_query(
+            "/api/inbox",
+            &[
+                ("unread", arg_flag(args, "unread")),
+                ("before", arg_num(args, "before")),
+                ("limit", arg_num(args, "limit")),
+            ],
+        )),
+        "mark_read" => client.post("/api/inbox/read", args),
+        "get_thread" => client.get(&format!("/api/threads/{}", need(args, "thread")?)),
         "open_change" => client.post("/api/changes", args),
         "push_revision" => client.post(
             &format!("/api/changes/{}/revisions", need(args, "change")?),
@@ -214,22 +313,18 @@ fn dispatch(client: &ApiClient, name: &str, args: &Value) -> Result<(u16, Value)
         ),
         "attention" => client.get(&format!("/api/repos/{}/attention", need(args, "repo")?)),
         "policy" => client.get(&format!("/api/repos/{}/policy", need(args, "repo")?)),
-        "lessons" => {
-            let mut path = format!(
-                "/api/lessons?limit={}",
-                args.get("limit").and_then(Value::as_i64).unwrap_or(20)
-            );
-            if let Some(repo) = args.get("repo").and_then(Value::as_str) {
-                path.push_str(&format!("&repo={repo}"));
-            }
-            if let Some(q) = args.get("query").and_then(Value::as_str) {
-                path.push_str(&format!("&q={q}"));
-            }
-            if args.get("failures_only").and_then(Value::as_bool) == Some(true) {
-                path.push_str("&failures_only=true");
-            }
-            client.get(&path)
-        }
+        "lessons" => client.get(&with_query(
+            "/api/lessons",
+            &[
+                (
+                    "limit",
+                    Some(arg_num(args, "limit").unwrap_or_else(|| "20".to_owned())),
+                ),
+                ("repo", arg_str(args, "repo")),
+                ("q", arg_str(args, "query")),
+                ("failures_only", arg_flag(args, "failures_only")),
+            ],
+        )),
         "declare_paths" => client.post(
             &format!("/api/sessions/{}/paths", need(args, "session")?),
             args,
@@ -275,9 +370,17 @@ fn tool_definitions() -> Vec<Value> {
     vec![
         tool(
             "list_tasks",
-            "List tasks, optionally filtered by state. Tasks are durable statements of intent.",
+            "List tasks, optionally filtered by state and repo. Tasks are durable statements \
+             of intent. Without `limit` or `before` the whole list comes back oldest first; \
+             with either, one page newest first as {tasks, next_before}, where next_before \
+             is the cursor for the next page or null at the end.",
             &[],
-            json!({ "state": { "type": "string", "enum": ["open", "claimed", "landed", "abandoned"] } }),
+            json!({
+                "state": { "type": "string", "enum": ["open", "claimed", "landed", "abandoned"] },
+                "repo": s("Only tasks of this repo (optional)"),
+                "before": { "type": "integer", "description": "Cursor from a previous page's next_before" },
+                "limit": { "type": "integer", "description": "Page size, up to 200" },
+            }),
         ),
         tool(
             "create_task",
@@ -328,15 +431,138 @@ fn tool_definitions() -> Vec<Value> {
         ),
         tool(
             "list_changes",
-            "List all changes in a repo, with states and latest revisions.",
+            "List changes in a repo, with states and latest revisions. Without `limit` or \
+             `before` the whole list comes back oldest first; with either, one page newest \
+             first as {changes, next_before}, next_before being the cursor for the next \
+             page or null at the end.",
             &["repo"],
-            json!({ "repo": s("Repo name") }),
+            json!({
+                "repo": s("Repo name"),
+                "state": { "type": "string", "enum": ["open", "merged", "abandoned"] },
+                "before": { "type": "integer", "description": "Cursor: a change number from a previous page's next_before" },
+                "limit": { "type": "integer", "description": "Page size, up to 200" },
+            }),
         ),
         tool(
             "get_change",
             "Fetch one change by id.",
             &["change"],
             json!({ "change": s("Change id") }),
+        ),
+        tool(
+            "get_repo",
+            "A repository's record: default branch, visibility, owner, policy, description.",
+            &["repo"],
+            json!({ "repo": s("Repo name") }),
+        ),
+        tool(
+            "get_session",
+            "One session: whose, on which task, active or ended, and its outcome.",
+            &["session"],
+            json!({ "session": s("Session id") }),
+        ),
+        tool(
+            "list_revisions",
+            "Every revision of a change, oldest first, each with its commit and the session \
+             that pushed it.",
+            &["change"],
+            json!({ "change": s("Change id") }),
+        ),
+        tool(
+            "list_claims",
+            "The verification claims on a revision (latest by default): what was checked, \
+             how, whether it passed, and what was declared unchecked. Read these before \
+             judging a change, and before trusting one.",
+            &["change"],
+            json!({
+                "change": s("Change id"),
+                "revision": { "type": "integer", "description": "Revision number (defaults to latest)" },
+            }),
+        ),
+        tool(
+            "list_verdicts",
+            "The review verdicts on a revision (latest by default), by domain and \
+             disposition, with each reviewer's rationale.",
+            &["change"],
+            json!({
+                "change": s("Change id"),
+                "revision": { "type": "integer", "description": "Revision number (defaults to latest)" },
+            }),
+        ),
+        tool(
+            "list_verifications",
+            "What runners saw when they re-ran the claims on a revision: reproduced or \
+             disputed, with the command and what was observed.",
+            &["change"],
+            json!({
+                "change": s("Change id"),
+                "revision": { "type": "integer", "description": "Revision number (defaults to latest)" },
+            }),
+        ),
+        tool(
+            "abandon_change",
+            "Abandon a change with a reason, on the record. The reason is read by whoever \
+             picks the work up next, so say what was learned.",
+            &["change", "reason"],
+            json!({ "change": s("Change id"), "reason": s("Why it is being abandoned") }),
+        ),
+        tool(
+            "queue",
+            "The landing queue for a branch: what is waiting to land, in order.",
+            &["repo"],
+            json!({ "repo": s("Repo name"), "target": s("Branch (defaults to the repo's default)") }),
+        ),
+        tool(
+            "awaiting_verification",
+            "Open changes whose claims name a command nobody has re-run: the work queue \
+             for a runner, and where an independent re-run is worth most.",
+            &["repo"],
+            json!({ "repo": s("Repo name") }),
+        ),
+        tool(
+            "list_leases",
+            "Every path currently declared by an active session in this repo, and by whom.",
+            &["repo"],
+            json!({ "repo": s("Repo name") }),
+        ),
+        tool(
+            "search",
+            "Ranked search over everything you may see: repositories, changes, tasks, \
+             people. Plain words, plus `kind:`, `repo:`, `state:` and `by:` filters, or a \
+             bare `#12` for a change by number. Ask before starting work whether it \
+             already exists.",
+            &["q"],
+            json!({
+                "q": s("The query"),
+                "limit": { "type": "integer", "description": "Max hits (default 50, cap 200)" },
+            }),
+        ),
+        tool(
+            "inbox",
+            "What has been addressed to you: verdicts on your changes, disputes on your \
+             claims, authority given to you. Newest first, paged by `before`; each notice \
+             says whether you have dealt with it.",
+            &[],
+            json!({
+                "unread": { "type": "boolean", "description": "Only what you have not dealt with" },
+                "before": { "type": "integer", "description": "Cursor from a previous page's next_before" },
+                "limit": { "type": "integer", "description": "Page size, up to 500" },
+            }),
+        ),
+        tool(
+            "mark_read",
+            "Mark one notice, or everything so far, dealt with.",
+            &[],
+            json!({
+                "seq": { "type": "integer", "description": "The notice's seq" },
+                "all": { "type": "boolean", "description": "Everything up to now" },
+            }),
+        ),
+        tool(
+            "get_thread",
+            "One discussion thread with its anchor, replies and resolution.",
+            &["thread"],
+            json!({ "thread": s("Thread id") }),
         ),
         tool(
             "open_change",
@@ -595,6 +821,8 @@ struct ApiClient {
     /// session's while one is open. A Bearer token normally, the
     /// asserted dev header against dev-mode servers.
     auth: std::sync::Mutex<(&'static str, String)>,
+    /// Makes each write's idempotency key its own.
+    writes: AtomicU64,
 }
 
 impl ApiClient {
@@ -614,7 +842,19 @@ impl ApiClient {
             base: server.trim_end_matches('/').to_owned(),
             standing: auth.clone(),
             auth: std::sync::Mutex::new(auth),
+            writes: AtomicU64::new(0),
         }
+    }
+
+    /// A key no other write from this process has used. Keys are scoped
+    /// to the principal on the forge, so they need only be unique here.
+    fn fresh_key(&self) -> String {
+        let n = self.writes.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        format!("mcp-{}-{nanos:x}-{n}", std::process::id())
     }
 
     fn header(&self) -> (&'static str, String) {
@@ -650,12 +890,29 @@ impl ApiClient {
         Ok((response.status().as_u16(), response.body_mut().read_json()?))
     }
 
+    /// Every write carries its own idempotency key, so a transport
+    /// failure - which says nothing about whether the forge received
+    /// the write - can be followed by one more attempt under the same
+    /// key: answered if it did arrive, done if it did not, never twice.
     fn post(&self, path: &str, body: &Value) -> anyhow::Result<(u16, Value)> {
-        let mut response = self
-            .agent
-            .post(format!("{}{path}", self.base))
-            .header(self.header().0, &self.header().1)
-            .send_json(body)?;
-        Ok((response.status().as_u16(), response.body_mut().read_json()?))
+        let key = self.fresh_key();
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            let (name, value) = self.header();
+            let sent = self
+                .agent
+                .post(format!("{}{path}", self.base))
+                .header(name, &value)
+                .header("Idempotency-Key", &key)
+                .send_json(body);
+            match sent {
+                Ok(mut response) => {
+                    return Ok((response.status().as_u16(), response.body_mut().read_json()?));
+                }
+                Err(_) if attempts < 2 => std::thread::sleep(Duration::from_millis(250)),
+                Err(err) => return Err(err.into()),
+            }
+        }
     }
 }

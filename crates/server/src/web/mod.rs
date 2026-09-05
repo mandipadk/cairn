@@ -265,7 +265,7 @@ async fn create_from_form(
         Ok::<_, cairn_core::CoreError>(())
     });
     if let Err(err) = created {
-        return views::new_repo(theme, &viewer, Some(&err.to_string())).into_response();
+        return views::new_repo(theme, &viewer, Some(&humane(&err))).into_response();
     }
     if let Some(git) = app.git()
         && let Err(err) = git.store.create_repo(&name, &branch, "sha1").await
@@ -277,7 +277,7 @@ async fn create_from_form(
     });
     match env {
         Ok(env) => app.publish(&env),
-        Err(err) => return views::new_repo(theme, &viewer, Some(&err.to_string())).into_response(),
+        Err(err) => return views::new_repo(theme, &viewer, Some(&humane(&err))).into_response(),
     }
 
     if !source.is_empty() {
@@ -572,7 +572,7 @@ async fn verify_email(
             if viewer_from(&headers, &app).is_some() {
                 Redirect::to("/you/settings?done=1").into_response()
             } else {
-                Redirect::to("/login?error=Address+confirmed.+Sign+in.").into_response()
+                Redirect::to("/login?done=Address+confirmed.+Sign+in.").into_response()
             }
         }
         Ok(None) => Redirect::to("/login?error=That+link+has+expired+or+been+used").into_response(),
@@ -759,7 +759,7 @@ async fn reset_submit(State(app): State<AppState>, Form(form): Form<ResetForm>) 
         Ok(env) => {
             app.end_sessions_of(&who);
             app.publish(&env);
-            Redirect::to("/login?error=Password+changed.+Sign+in.").into_response()
+            Redirect::to("/login?done=Password+changed.+Sign+in.").into_response()
         }
         Err(err) => {
             // The link was spent on a password the forge refused; give
@@ -793,7 +793,7 @@ async fn change_password(
             // surprising consequence, so say so on the way out.
             app.end_sessions_of(&viewer.0);
             app.publish(&env);
-            Redirect::to("/login?error=Password+changed.+Sign+in+again.").into_response()
+            Redirect::to("/login?done=Password+changed.+Sign+in+again.").into_response()
         }
         Err(err) => Redirect::to(&format!("/you/settings?error={}", urlencode(&humane(&err))))
             .into_response(),
@@ -962,7 +962,10 @@ async fn teams_action(
     let result = match form.action.as_str() {
         "create" => {
             let Some(id) = PrincipalId::new(form.id.trim()) else {
-                return back(Some(format!("{:?} is not a valid name", form.id)));
+                return back(Some(format!(
+                    "{} is not a valid name: lowercase letters, digits and hyphens",
+                    form.id.trim()
+                )));
             };
             let display = form.display.trim();
             let display = if display.is_empty() {
@@ -1129,7 +1132,10 @@ async fn people_action(
     let back =
         |error: &str| Redirect::to(&format!("/people?error={}", urlencode(error))).into_response();
     let Some(id) = PrincipalId::new(form.id.trim()) else {
-        return back(&format!("{:?} is not a valid name", form.id));
+        return back(&format!(
+            "{} is not a valid name: lowercase letters, digits and hyphens",
+            form.id.trim()
+        ));
     };
     let email = form.email.trim();
     match form.action.as_str() {
@@ -1427,7 +1433,13 @@ async fn agent_action(
     match form.action.as_str() {
         "register" => {
             let Some(id) = PrincipalId::new(form.id.trim()) else {
-                return back(Some(format!("{:?} is not a valid name", form.id)), None);
+                return back(
+                    Some(format!(
+                        "{} is not a valid name: lowercase letters, digits and hyphens",
+                        form.id.trim()
+                    )),
+                    None,
+                );
             };
             let model = form.model.trim();
             let registered = app.with_store(|s| {
@@ -1884,6 +1896,8 @@ struct FlashQuery {
     error: Option<String>,
     #[serde(default)]
     sent: Option<String>,
+    #[serde(default)]
+    done: Option<String>,
 }
 
 async fn login_page(
@@ -1897,6 +1911,7 @@ async fn login_page(
         app.mailer().is_some(),
         crate::passkeys::enabled(&app),
         flash.sent.is_some(),
+        flash.done.as_deref(),
         flash.error.as_deref(),
     )
     .into_response()
@@ -2084,7 +2099,12 @@ async fn logout(State(app): State<AppState>, headers: HeaderMap) -> Response {
 
 pub(crate) fn oops(err: impl std::fmt::Display) -> Response {
     tracing::error!(error = %err, "web: page render failed");
-    (StatusCode::INTERNAL_SERVER_ERROR, views::error_page()).into_response()
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        [(FALLBACK, "error")],
+        views::error_page(views::Theme::Dark),
+    )
+        .into_response()
 }
 
 /// The repository if the viewer may read it. A page for a private
@@ -2130,8 +2150,50 @@ pub(crate) fn humane(err: &cairn_core::CoreError) -> String {
     }
 }
 
+/// Rendered before the theme is known; `themed_fallbacks` re-renders it
+/// with the viewer's theme on the way out.
 fn not_found() -> Response {
-    (StatusCode::NOT_FOUND, views::not_found_page()).into_response()
+    (
+        StatusCode::NOT_FOUND,
+        [(FALLBACK, "not-found")],
+        views::not_found_page(views::Theme::Dark),
+    )
+        .into_response()
+}
+
+const FALLBACK: &str = "x-cairn-fallback";
+
+/// 404 and 500 pages are produced deep inside handlers that never saw
+/// the theme cookie. This runs after them: a marked fallback is rendered
+/// again in the theme the request asked for, and the marker is removed.
+pub(crate) async fn themed_fallbacks(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let theme = match cookie(request.headers(), THEME_COOKIE).as_deref() {
+        Some("light") => views::Theme::Light,
+        _ => views::Theme::Dark,
+    };
+    let mut response = next.run(request).await;
+    let Some(kind) = response
+        .headers()
+        .get(FALLBACK)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+    else {
+        return response;
+    };
+    response.headers_mut().remove(FALLBACK);
+    let status = response.status();
+    let page = match kind.as_str() {
+        "not-found" => views::not_found_page(theme),
+        _ => views::error_page(theme),
+    };
+    let mut fresh = (status, page).into_response();
+    for (name, value) in response.headers() {
+        fresh.headers_mut().insert(name, value.clone());
+    }
+    fresh
 }
 
 async fn repo_page(

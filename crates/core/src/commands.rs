@@ -821,20 +821,23 @@ impl Store {
         Ok(id)
     }
 
+    /// Take an in-flight ceremony's state: who it was for, what kind it
+    /// was, and the state itself - or nothing if it is unknown or old.
+    /// Spent on the way out, whatever the caller then makes of the kind:
+    /// one id, one attempt.
     pub fn take_webauthn_state(
         &mut self,
         id: &str,
-        kind: &str,
-    ) -> CoreResult<Option<(Option<PrincipalId>, String)>> {
+    ) -> CoreResult<Option<(Option<PrincipalId>, String, String)>> {
         let now = jiff::Timestamp::now().to_string();
         let tx = self.conn.transaction()?;
-        let row: Option<(Option<String>, String)> = tx
+        let row: Option<(Option<String>, String, String)> = tx
             .prepare_cached(
-                "SELECT principal, state FROM webauthn_states
-                  WHERE id = ? AND kind = ? AND expires > ?",
+                "SELECT principal, kind, state FROM webauthn_states
+                  WHERE id = ? AND expires > ?",
             )?
-            .query_row(rusqlite::params![id, kind, now], |r| {
-                Ok((r.get(0)?, r.get(1)?))
+            .query_row(rusqlite::params![id, now], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
             })
             .optional()?;
         tx.execute(
@@ -842,7 +845,7 @@ impl Store {
             rusqlite::params![id],
         )?;
         tx.commit()?;
-        Ok(row.map(|(p, s)| (p.map(PrincipalId), s)))
+        Ok(row.map(|(p, kind, state)| (p.map(PrincipalId), kind, state)))
     }
 
     /// Park something to show a person exactly once on their next page -

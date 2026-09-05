@@ -205,6 +205,7 @@ fn sidebar(viewer: &Viewer, current: Option<&str>) -> Markup {
     let chrome = &viewer.1;
     html! {
         nav class="side" id="nav" {
+            a class="onlynarrow" href="/search" { span { "Search" } span class="n" {} }
             h4 { "Repositories" }
             @if chrome.repos.is_empty() {
                 div class="row" { span class="n" { "None yet" } span {} }
@@ -388,7 +389,7 @@ fn outside(theme: Theme, title: &str, body: Markup) -> Markup {
                         span class="stones" aria-hidden="true" { span {} span {} span {} }
                         b { "cairn" }
                     }
-                    p style="font-weight: 500;" { (title) }
+                    p class="strong" { (title) }
                     (body)
                 }
             }
@@ -446,12 +447,14 @@ pub fn reset(theme: Theme, token: &str, error: Option<&str>) -> Markup {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn login(
     theme: Theme,
     dev: bool,
     can_mail: bool,
     can_passkey: bool,
     sent: bool,
+    done: Option<&str>,
     error: Option<&str>,
 ) -> Markup {
     layout(
@@ -468,6 +471,7 @@ pub fn login(
                         b { "cairn" }
                     }
                     @if let Some(error) = error { p class="error" { (error) } }
+                    @if let Some(done) = done { p class="done" { (done) } }
                     @if sent {
                         p class="hint" { "If that account has a confirmed address, a sign-in link is on its way. It works once, for fifteen minutes." }
                     }
@@ -487,9 +491,7 @@ pub fn login(
                         p class="hint" { a href="/forgot" { "Forgot your password?" } }
                     }
 
-                    @if can_passkey || can_mail {
-                        div class="or" { span { "or" } }
-                    }
+                    div class="or" { span { "or" } }
                     @if can_passkey {
                         button class="vbtn wide" type="button" data-passkey="login" data-say="passkey-note" {
                             "Sign in with a passkey"
@@ -585,7 +587,7 @@ pub fn home(theme: Theme, viewer: &Viewer, data: &super::HomeData) -> Markup {
                     a class="trow" href={ "/" (entry.repo) "/changes/" (entry.item.change.number) }
                       title=(attention_evidence(&entry.item)) {
                         span class="sec3" { (entry.repo) " #" (entry.item.change.number) }
-                        span style="font-weight: 500;" { (entry.item.change.title) }
+                        span class="strong" { (entry.item.change.title) }
                         span class="reasons" {
                             @for (index, signal) in entry.item.signals.iter().take(2).enumerate() {
                                 @if index > 0 { span class="sec3" { " · " } }
@@ -607,7 +609,7 @@ pub fn home(theme: Theme, viewer: &Viewer, data: &super::HomeData) -> Markup {
                     @for (repo, change) in &data.mine {
                         a class="trow" href={ "/" (repo) "/changes/" (change.number) } {
                             span class="sec3" { (repo) " #" (change.number) }
-                            span style="font-weight: 500;" { (change.title) }
+                            span class="strong" { (change.title) }
                             span class="sec3" { "revision " (change.latest_revision) }
                         }
                     }
@@ -656,7 +658,7 @@ pub fn first_run(theme: Theme, viewer: &Viewer) -> Markup {
                     b { "Import from GitHub" }
                     span { "recorded as imported, never as reviewed" }
                 }
-                a class="do" href="/you/tokens" {
+                a class="do" href="/agents" {
                     b { "Add an agent" }
                     span { "a token and a narrow capability grant" }
                 }
@@ -724,9 +726,9 @@ pub fn search(
                 p class="empty" { "Nothing matches " b { (query) } "." }
             }
             @for hit in hits {
-                a class="trow" href=(hit.href) style="grid-template-columns: 92px minmax(0,1fr) auto;" {
+                a class="trow hits" href=(hit.href) {
                     span class="sec3" { (hit.kind) }
-                    span style="font-weight: 500;" { (hit.label) }
+                    span class="strong" { (hit.label) }
                     span class="sec3" { (hit.detail) }
                 }
             }
@@ -789,9 +791,9 @@ pub fn you(theme: Theme, viewer: &Viewer, mine: &[(String, Change)]) -> Markup {
             }
             @for (repo, change) in mine {
                 a class="trow" href={ "/" (repo) "/changes/" (change.number) }
-                  style="grid-template-columns: 120px minmax(0,1fr) auto;" {
+                  class="mine" {
                     span class="sec3" { (repo) " #" (change.number) }
-                    span style="font-weight: 500;" { (change.title) }
+                    span class="strong" { (change.title) }
                     span class="sec3" { "revision " (change.latest_revision) }
                 }
             }
@@ -814,7 +816,7 @@ pub fn inbox(theme: Theme, viewer: &Viewer, notices: &[Notice], unread: usize) -
                 b { "Inbox" }
                 span { (unread) " unread" }
                 @if unread > 0 {
-                    form method="post" action="/inbox/read" style="margin-left: auto;" {
+                    form method="post" action="/inbox/read" class="right" {
                         input type="hidden" name="all" value="1";
                         button class="act" type="submit" { "Mark all read" }
                     }
@@ -914,7 +916,7 @@ pub fn repo_settings(
                     button class="btn" type="submit" { "Save" }
                 }
 
-                div class="sechead" style="margin-top: 30px;" { b { "Ownership" } span { (repo.owner.as_str()) } }
+                div class="sechead later" { b { "Ownership" } span { (repo.owner.as_str()) } }
                 @if let Some(pending) = &repo.pending_owner {
                     p class="note" { "Offered to " b { (pending.as_str()) } ". Nothing changes until they accept." }
                     form class="stack" method="post" action={ "/" (repo.name) "/settings/transfer" } {
@@ -1039,7 +1041,7 @@ pub fn sessions(theme: Theme, viewer: &Viewer, sessions: &[BrowserSession], done
                 b { "Where you are signed in" }
                 span { (sessions.len()) }
                 @if others > 0 {
-                    form method="post" action="/you/sessions" style="margin-left: auto;" {
+                    form method="post" action="/you/sessions" class="right" {
                         input type="hidden" name="others" value="1";
                         button class="act" type="submit" { "Sign out everywhere else" }
                     }
@@ -1047,7 +1049,7 @@ pub fn sessions(theme: Theme, viewer: &Viewer, sessions: &[BrowserSession], done
             }
             @if done { p class="done" { "Done." } }
             @for session in sessions {
-                div class="trow" style="grid-template-columns: minmax(0,1fr) 150px 150px 90px;" {
+                div class="trow sessions" {
                     span {
                         (browser_family(session.agent.as_deref()))
                         @if session.current { span class="sec3" { " · this session" } }
@@ -1069,7 +1071,7 @@ pub fn sessions(theme: Theme, viewer: &Viewer, sessions: &[BrowserSession], done
                     }
                 }
             }
-            p class="hint" style="padding: 16px 22px;" {
+            p class="hint pad" {
                 "Changing your password ends every session, this one included. Ending one here ends only that one."
             }
         },
@@ -1229,7 +1231,7 @@ pub fn tokens(
                 p class="empty" { "None yet." }
             }
             @for token in tokens {
-                div class="trow" style="grid-template-columns: minmax(0,1fr) 150px 130px 90px;" {
+                div class="trow tokens" {
                     span { (token.label.as_deref().unwrap_or("unlabelled")) }
                     span class="sec3" { (token.id.0) }
                     span class="sec3" {
@@ -1276,8 +1278,8 @@ pub fn teams(
             }
             @for row in teams {
                 div class="agent" {
-                    div class="trow" style="grid-template-columns: 150px minmax(0,1fr) auto;" {
-                        span style="font-weight: 500;" { (row.principal.id.as_str()) }
+                    div class="trow roster" {
+                        span class="strong" { (row.principal.id.as_str()) }
                         span class="sec3" {
                             @if row.members.is_empty() { "nobody yet" }
                             @else { (row.members.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ")) }
@@ -1322,7 +1324,7 @@ pub fn teams(
                 }
             }
 
-            div class="sechead" style="margin-top: 30px;" { b { "Add a team" } span {} }
+            div class="sechead later" { b { "Add a team" } span {} }
             form class="stack narrowcol" method="post" action="/teams" {
                 input type="hidden" name="action" value="create";
                 div {
@@ -1370,8 +1372,8 @@ pub fn people(
             }
 
             @for row in people {
-                div class="trow" style="grid-template-columns: 150px minmax(0,1fr) auto auto;" {
-                    span style="font-weight: 500;" { (row.principal.id.as_str()) }
+                div class="trow people" {
+                    span class="strong" { (row.principal.id.as_str()) }
                     span class="sec3" { (row.principal.display) }
                     span class="sec3" {
                         @if row.admin { "runs the forge" }
@@ -1387,24 +1389,26 @@ pub fn people(
                             @if let Some(until) = &invite.until { ", link good until " (day_of(until)) }
                         }
                     }
-                    @if row.invitation.is_some() {
+                    span class="acts" {
                         form method="post" action="/people" {
-                            input type="hidden" name="action" value="cancel";
+                            input type="hidden" name="action" value="relink";
                             input type="hidden" name="id" value=(row.principal.id.as_str());
-                            button class="quiet" type="submit" { "Cancel invitation" }
+                            button class="quiet" type="submit" {
+                                @if can_mail && (row.contact.email.is_some() || row.contact.pending.is_some()) { "Send a new sign-in link" } @else { "Make a sign-in link" }
+                            }
                         }
-                    }
-                    form method="post" action="/people" {
-                        input type="hidden" name="action" value="relink";
-                        input type="hidden" name="id" value=(row.principal.id.as_str());
-                        button class="quiet" type="submit" {
-                            @if can_mail && (row.contact.email.is_some() || row.contact.pending.is_some()) { "Send a new sign-in link" } @else { "Make a sign-in link" }
+                        @if row.invitation.is_some() {
+                            form method="post" action="/people" {
+                                input type="hidden" name="action" value="cancel";
+                                input type="hidden" name="id" value=(row.principal.id.as_str());
+                                button class="quiet" type="submit" { "Cancel invitation" }
+                            }
                         }
                     }
                 }
             }
 
-            div class="sechead" style="margin-top: 30px;" { b { "Add a person" } span {} }
+            div class="sechead later" { b { "Add a person" } span {} }
             form class="stack narrowcol" method="post" action="/people" {
                 input type="hidden" name="action" value="register";
                 div {
@@ -1459,8 +1463,8 @@ pub fn agents(
             }
             @for row in agents {
                 div class="agent" {
-                    div class="trow" style="grid-template-columns: 150px minmax(0,1fr) auto;" {
-                        span style="font-weight: 500;" { (row.principal.id.as_str()) }
+                    div class="trow roster" {
+                        span class="strong" { (row.principal.id.as_str()) }
                         span class="sec3" { (row.principal.display) }
                         span class="sec3" { (row.principal.model.as_deref().unwrap_or("")) }
                     }
@@ -1505,7 +1509,7 @@ pub fn agents(
                 }
             }
 
-            div class="sechead" style="margin-top: 30px;" { b { "Add an agent" } span {} }
+            div class="sechead later" { b { "Add an agent" } span {} }
             form class="stack narrowcol" method="post" action="/agents" {
                 input type="hidden" name="action" value="register";
                 div {
@@ -1532,28 +1536,24 @@ pub fn agents(
     )
 }
 
-pub fn error_page() -> Markup {
-    layout(
-        Theme::Dark,
-        None,
-        None,
-        None,
-        "Error",
+pub fn error_page(theme: Theme) -> Markup {
+    outside(
+        theme,
+        "Something went wrong",
         html! {
-            div class="center" { p class="plain" { "Something went wrong on our side. The log has the details." } }
+            p class="plain" { "On our side, not yours. The log has the details." }
+            p class="hint" { a href="/" { "Home" } }
         },
     )
 }
 
-pub fn not_found_page() -> Markup {
-    layout(
-        Theme::Dark,
-        None,
-        None,
-        None,
-        "Not found",
+pub fn not_found_page(theme: Theme) -> Markup {
+    outside(
+        theme,
+        "Nothing lives here",
         html! {
-            div class="center" { p class="plain" { "Nothing lives at this path." } }
+            p class="plain" { "The address may be wrong, or this may be something you cannot see." }
+            p class="hint" { a href="/" { "Home" } }
         },
     )
 }
@@ -1786,7 +1786,7 @@ pub fn changes(theme: Theme, viewer: &Viewer, repo: &str, changes: &[Change]) ->
                     a class="trow" href={ "/" (repo) "/changes/" (change.number) } {
                         (state_dot(change.state))
                         span class="sec3" { "#" (change.number) }
-                        span style="font-weight: 500;" { (change.title) }
+                        span class="strong" { (change.title) }
                         span class="sec2" { (change.owner) }
                         span class="sec3 r" { "r" (change.latest_revision) }
                     }
@@ -2125,7 +2125,7 @@ pub fn landing(
                             a class="trow" href={ "/" (repo) "/changes/" (item.change.number) }
                               title=(attention_evidence(item)) {
                                 span class="sec3" { "#" (item.change.number) }
-                                span style="font-weight: 500;" { (item.change.title) }
+                                span class="strong" { (item.change.title) }
                                 span class="reasons" {
                                     @for (index, signal) in item.signals.iter().enumerate() {
                                         @if index > 0 { span class="sec3" { " · " } }

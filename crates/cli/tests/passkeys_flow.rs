@@ -132,3 +132,40 @@ async fn ceremonies_start_park_state_once_and_refuse_answers_they_did_not_ask_fo
         "{body}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sign_in_answer_is_judged_against_the_state_it_was_issued_for() {
+    let forge = boot_with_passkeys().await;
+    let app = &forge.app;
+    let (_, begin) = post_json(app, "/passkeys/login/begin", "", json!({})).await;
+    let id = begin["id"].as_str().unwrap();
+    // A malformed answer to a live discoverable ceremony is refused as an
+    // answer, not reported as an expired ceremony: the state was there.
+    let junk = json!({ "id": id, "credential": { "id": "x", "rawId": "eA", "type": "public-key",
+        "response": { "authenticatorData": "AA", "clientDataJSON": "AA", "signature": "AA", "userHandle": null },
+        "extensions": {} } });
+    let (status, body) = post_json(app, "/passkeys/login/finish", "", junk.clone()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        !body["error"].as_str().unwrap().contains("expired"),
+        "{body}"
+    );
+    // And it was spent by that one attempt.
+    let (_, body) = post_json(app, "/passkeys/login/finish", "", junk).await;
+    assert!(
+        body["error"].as_str().unwrap().contains("expired"),
+        "{body}"
+    );
+}
+
+#[test]
+fn the_script_defines_what_it_uses() {
+    let script = cairn_server::passkeys::SCRIPT;
+    for helper in ["explain", "say", "post", "enc", "dec"] {
+        let defined = script
+            .find(&format!("var {helper} = "))
+            .unwrap_or_else(|| panic!("{helper} defined"));
+        let used = script.find(&format!("{helper}(")).unwrap();
+        assert!(defined < used, "{helper} is used before it is defined");
+    }
+}

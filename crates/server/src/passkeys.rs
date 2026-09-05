@@ -103,8 +103,8 @@ pub async fn register_finish(
     let Some(webauthn) = app.webauthn() else {
         return off();
     };
-    let taken = match app.with_store(|s| s.take_webauthn_state(&body.id, "register")) {
-        Ok(Some((Some(who), state))) if who == viewer.0 => state,
+    let taken = match app.with_store(|s| s.take_webauthn_state(&body.id)) {
+        Ok(Some((Some(who), kind, state))) if who == viewer.0 && kind == "register" => state,
         Ok(_) => return bad("that registration has expired; start again"),
         Err(err) => return crate::web::oops(err),
     };
@@ -212,16 +212,18 @@ pub async fn login_finish(
     let Some(webauthn) = app.webauthn() else {
         return off();
     };
-    // A named ceremony carries the person; a discoverable one does not,
-    // and the answer itself has to say who.
-    if let Ok(Some((Some(who), state))) =
-        app.with_store(|s| s.take_webauthn_state(&body.id, "login-named"))
-    {
-        return finish_named(app, headers, &body.credential, who, &state).await;
-    }
-    let taken = match app.with_store(|s| s.take_webauthn_state(&body.id, "login")) {
-        Ok(Some((_, state))) => state,
-        Ok(None) => return bad("that sign-in has expired; start again"),
+    // One id, one attempt: the state is taken once and its kind decides
+    // which ceremony this answer completes. A named ceremony carries the
+    // person; a discoverable one does not, and the answer must say who.
+    let taken = match app.with_store(|s| s.take_webauthn_state(&body.id)) {
+        Ok(Some((who, kind, state))) if kind == "login-named" => {
+            let Some(who) = who else {
+                return bad("that sign-in has expired; start again");
+            };
+            return finish_named(app, headers, &body.credential, who, &state).await;
+        }
+        Ok(Some((_, kind, state))) if kind == "login" => state,
+        Ok(_) => return bad("that sign-in has expired; start again"),
         Err(err) => return crate::web::oops(err),
     };
     let state: DiscoverableAuthentication = match serde_json::from_str(&taken) {
@@ -397,6 +399,11 @@ pub const SCRIPT: &str = r#"(function () {
     return fetch(url, { method: 'POST', credentials: 'same-origin',
       headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) })
       .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || r.statusText); return j; }); });
+  };
+  var explain = function (e) {
+    if (e && e.name === 'NotAllowedError') return 'No passkey for this site was offered, or the prompt was dismissed. If yours lives on a security key, type your name first.';
+    if (e && e.name === 'InvalidStateError') return 'This device already holds a passkey for this account.';
+    return (e && e.message) || String(e);
   };
   var say = function (el, text) { var out = document.getElementById(el.getAttribute('data-say')); if (out) out.textContent = text; };
   var register = document.querySelector('[data-passkey="register"]');

@@ -68,3 +68,35 @@ async fn a_write_from_another_site_is_refused_and_one_from_here_is_not() {
     // A non-browser client says nothing about where it came from.
     assert_eq!(post_from(app, &cookie, &[]).await, StatusCode::SEE_OTHER);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_missing_page_keeps_the_viewers_theme_and_offers_a_way_home() {
+    let forge = boot().await;
+    let app = &forge.app;
+    // An unknown path is a repository route, which asks a stranger to
+    // sign in; the 404 is what a signed-in person sees.
+    let (_, session) = sign_in_as(&forge, "ada").await;
+    let request = Request::builder()
+        .uri("/nowhere")
+        .header("cookie", format!("cairn_theme=light; {session}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = tower::ServiceExt::oneshot(app.clone(), request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(
+        response.headers().get("x-cairn-fallback").is_none(),
+        "the marker is ours, not the page's"
+    );
+    let body = String::from_utf8(
+        http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(body.contains(r#"data-theme="light""#), "{body}");
+    assert!(body.contains(r#"href="/""#), "a way home");
+}

@@ -687,7 +687,7 @@ pre { overflow-x: auto; }
 }
 
 @media (max-width: 600px) {
-  .trow, .notice { grid-template-columns: minmax(0, 1fr) !important; gap: 2px 8px; }
+  .trow, .notice { grid-template-columns: minmax(0, 1fr); gap: 2px 8px; }
   .notice .dot { display: none; }
   .notice .when { text-align: left; }
   .searchbig, .narrowcol { max-width: none; }
@@ -718,3 +718,42 @@ pre { overflow-x: auto; }
 .pref .hint { font-size: 12px; color: var(--ink3); margin-top: 8px; }
 .keyrow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 14px; align-items: baseline; padding: 8px 0; border-top: 1px solid var(--hair); font-size: 13px; }
 .keyrow:first-of-type { border-top: none; }
+
+/* Inputs in settings rows are inputs like any other. */
+.pref .row input {
+  font: inherit; font-size: 13px; color: var(--ink);
+  border: 1px solid var(--hair); border-radius: 6px; padding: 8px 10px; background: var(--raise);
+}
+.pref .row input:focus { outline: none; border-color: var(--ink2); }
+.hint:empty { display: none; }
+.keyrow .acts, .people .acts { display: flex; gap: 12px; justify-content: flex-end; }
+
+@media (max-width: 1100px) {
+  .chg-split { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .chg-split > .colr { border-left: none; border-top: 1px solid var(--hair); }
+}
+@media (max-width: 760px) {
+  .repohead { margin: -14px -12px 14px; padding: 0 12px; }
+}
+
+.onlynarrow { display: none; }
+@media (max-width: 600px) { .side .onlynarrow { display: grid; } }
+
+/* What used to be inline styles. The content policy allows no inline
+   style, so anything not in this file is not on the page. */
+.strong { font-weight: 500; }
+.sechead.later { margin-top: 30px; }
+.sechead .right, .sechead form.right { margin-left: auto; }
+.hint.pad { padding: 16px 22px; }
+.trow.roster { grid-template-columns: 150px minmax(0, 1fr) auto; }
+.trow.people { grid-template-columns: 150px minmax(0, 1fr) auto auto; }
+.trow.mine { grid-template-columns: 120px minmax(0, 1fr) auto; }
+.trow.hits { grid-template-columns: 92px minmax(0, 1fr) auto; }
+.trow.tokens { grid-template-columns: minmax(0, 1fr) 260px 130px 90px; }
+.trow.tokens .sec3 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trow.sessions { grid-template-columns: minmax(0, 1fr) 150px 150px 90px; }
+.side a.onlynarrow { display: none; }
+@media (max-width: 600px) {
+  .side a.onlynarrow { display: grid; }
+  .trow.roster, .trow.people, .trow.mine, .trow.hits, .trow.tokens, .trow.sessions { grid-template-columns: minmax(0, 1fr); }
+}

@@ -678,6 +678,51 @@ impl Store {
         Ok(env)
     }
 
+    /// A link that signs one person in once, for fifteen minutes. The
+    /// caller sends it to their confirmed address and nowhere else; this
+    /// only minds the secret. A new link retires any earlier unused one.
+    pub fn begin_signin_link(&mut self, who: &PrincipalId) -> CoreResult<String> {
+        let target = raw::principal(&self.conn, who.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("principal {who}")))?;
+        require(target.kind == PrincipalKind::Human, || {
+            format!("{who} is not a person")
+        })?;
+        let secret = random_token_secret();
+        let expires = (jiff::Timestamp::now() + jiff::SignedDuration::from_mins(15)).to_string();
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "UPDATE signin_links SET used = 1 WHERE principal = ? AND used = 0",
+            rusqlite::params![who.as_str()],
+        )?;
+        tx.execute(
+            "INSERT INTO signin_links (token_hash, principal, expires) VALUES (?, ?, ?)",
+            rusqlite::params![token_hash(&secret), who.as_str(), expires],
+        )?;
+        tx.commit()?;
+        Ok(secret)
+    }
+
+    /// Spend a sign-in link: who it was for, or nothing.
+    pub fn redeem_signin_link(&mut self, secret: &str) -> CoreResult<Option<PrincipalId>> {
+        let now = jiff::Timestamp::now().to_string();
+        let tx = self.conn.transaction()?;
+        let who: Option<String> = tx
+            .prepare_cached(
+                "SELECT principal FROM signin_links
+                  WHERE token_hash = ? AND used = 0 AND expires > ?",
+            )?
+            .query_row(rusqlite::params![token_hash(secret), now], |row| row.get(0))
+            .optional()?;
+        if who.is_some() {
+            tx.execute(
+                "UPDATE signin_links SET used = 1 WHERE token_hash = ?",
+                rusqlite::params![token_hash(secret)],
+            )?;
+        }
+        tx.commit()?;
+        Ok(who.map(PrincipalId))
+    }
+
     /// Begin a password reset: a secret that works once, for half an
     /// hour, for one person. Earlier unused secrets for them die here,
     /// so the newest link is the only one that works. Only the hash is

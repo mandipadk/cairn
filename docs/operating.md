@@ -82,8 +82,10 @@ address given, and following it proves that address. An address given
 later on the settings page is pending until a link mailed to it is
 followed, and changing an address goes the same way; a reset only ever
 goes to a confirmed address. From the sign-in page, a forgotten password
-gets a link that works once, for thirty minutes, and the form answers
-everyone the same way whether or not it knows them.
+gets a link that works once, for thirty minutes; and anyone with a
+confirmed address can ask for a sign-in link instead of typing a
+password - it works once, for fifteen minutes. Both forms answer
+everyone the same way whether or not they know them.
 
 Without mail, or for a person with no address on record, a reset request
 is not a dead end: the people who run the forge are told in their inbox

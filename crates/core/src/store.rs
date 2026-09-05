@@ -92,6 +92,13 @@ CREATE TABLE IF NOT EXISTS contact (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_contact_email ON contact (email);
 
+CREATE TABLE IF NOT EXISTS signin_links (
+  token_hash TEXT PRIMARY KEY,
+  principal  TEXT NOT NULL,
+  expires    TEXT NOT NULL,
+  used       INTEGER NOT NULL DEFAULT 0
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS email_verifications (
   token_hash TEXT PRIMARY KEY,
   principal  TEXT NOT NULL,

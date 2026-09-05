@@ -202,3 +202,61 @@ async fn an_invitation_goes_by_mail_when_the_forge_can_send_it() {
     let (_, page) = page_with_cookie(app, "/people", &ada).await;
     assert!(page.contains("email confirmed"), "{page}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sign_in_link_signs_you_in_once_and_only_to_a_confirmed_address() {
+    let outbox = tempfile::tempdir().unwrap();
+    let mail_file = outbox.path().join("mail.txt");
+    let forge = boot_mailing(&format!("cat > '{}'", mail_file.display())).await;
+    let app = &forge.app;
+    let (_, cookie) = sign_in_as(&forge, "ada").await;
+
+    // No confirmed address yet: the same answer, and no mail.
+    let (_, location) = post_form(app, "/login/link", "", "who=ada").await;
+    assert_eq!(location, "/login?sent=1");
+    assert!(!mail_file.exists());
+
+    // Confirm an address, then ask again.
+    post_form(
+        app,
+        "/you/settings/email",
+        &cookie,
+        "email=ada%40example.org",
+    )
+    .await;
+    let confirm = std::fs::read_to_string(&mail_file).unwrap();
+    std::fs::remove_file(&mail_file).unwrap();
+    get_redirect(app, &path_of(&link_in(&confirm)), &cookie).await;
+    let (_, location) = post_form(app, "/login/link", "", "who=ada%40example.org").await;
+    assert_eq!(location, "/login?sent=1");
+    let mail = std::fs::read_to_string(&mail_file).expect("a sign-in link was mailed");
+    assert!(mail.contains("Subject: Your cairn sign-in link"), "{mail}");
+    let path = path_of(&link_in(&mail));
+    assert!(path.starts_with("/signin?token="), "{path}");
+
+    // Following it signs in; following it again does not.
+    let response = tower::ServiceExt::oneshot(
+        app.clone(),
+        axum::http::Request::builder()
+            .uri(&path)
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers()["location"], "/");
+    let session = response.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        get_with_cookie(app, "/you/settings", &session).await,
+        StatusCode::OK
+    );
+    let (_, location) = get_redirect(app, &path, "").await;
+    assert!(location.starts_with("/login?error="), "{location}");
+}

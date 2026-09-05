@@ -445,7 +445,7 @@ pub fn reset(theme: Theme, token: &str, error: Option<&str>) -> Markup {
     )
 }
 
-pub fn login(theme: Theme, dev: bool, error: Option<&str>) -> Markup {
+pub fn login(theme: Theme, dev: bool, can_mail: bool, sent: bool, error: Option<&str>) -> Markup {
     layout(
         theme,
         None,
@@ -474,6 +474,23 @@ pub fn login(theme: Theme, dev: bool, error: Option<&str>) -> Markup {
                     }
                     button class="btn" type="submit" { "Sign in" }
                     p class="hint" { a href="/forgot" { "Forgot your password?" } }
+                }
+                @if sent {
+                    p class="hint" { "If that account has a confirmed address, a sign-in link is on its way. It works once, for fifteen minutes." }
+                }
+                @if can_mail && !sent {
+                    form class="login" method="post" action="/login/link" style="margin-top: 22px;" {
+                        details class="alt" {
+                            summary { "Email me a sign-in link instead" }
+                            div {
+                                label for="who" { "Your name or email" }
+                                input id="who" name="who" type="text" autocomplete="username";
+                            }
+                            button class="vbtn" type="submit" { "Send the link" }
+                        }
+                    }
+                }
+                div class="login" style="margin-top: 0;" {
                     details class="alt" {
                         summary { "Sign in with a token" }
                         div {

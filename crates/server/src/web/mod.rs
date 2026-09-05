@@ -47,6 +47,8 @@ pub fn routes() -> Router<AppState> {
         .route("/waitlist", post(join_waitlist))
         .route("/assets/{file}", get(asset))
         .route("/login", get(login_page).post(login_submit))
+        .route("/login/link", post(login_link))
+        .route("/signin", get(signin_with_link))
         .route("/forgot", get(forgot_page).post(forgot_submit))
         .route("/reset", get(reset_page).post(reset_submit))
         .route("/verify", get(verify_email))
@@ -1787,6 +1789,8 @@ fn describe(envelope: cairn_core::Envelope) -> Option<Recent> {
 #[derive(Deserialize)]
 struct FlashQuery {
     error: Option<String>,
+    #[serde(default)]
+    sent: Option<String>,
 }
 
 async fn login_page(
@@ -1794,7 +1798,97 @@ async fn login_page(
     Palette(theme): Palette,
     Query(flash): Query<FlashQuery>,
 ) -> Response {
-    views::login(theme, app.dev_identity(), flash.error.as_deref()).into_response()
+    views::login(
+        theme,
+        app.dev_identity(),
+        app.mailer().is_some(),
+        flash.sent.is_some(),
+        flash.error.as_deref(),
+    )
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct LinkForm {
+    #[serde(default)]
+    who: String,
+}
+
+/// Ask for a sign-in link. It goes only to a confirmed address, works
+/// once, and the page answers the same whether or not it knows you.
+async fn login_link(
+    State(app): State<AppState>,
+    crate::guard::ClientIp(client): crate::guard::ClientIp,
+    headers: HeaderMap,
+    Form(form): Form<LinkForm>,
+) -> Response {
+    let Some(mailer) = app.mailer() else {
+        return Redirect::to("/login").into_response();
+    };
+    if let Some(peer) = client
+        && !app.reset_limiter.accept(peer)
+    {
+        return crate::guard::too_many_attempts();
+    }
+    let who = form.who.trim();
+    let found = if who.contains('@') {
+        app.with_store(|s| s.principal_by_email(who))
+            .unwrap_or(None)
+    } else {
+        PrincipalId::new(who).filter(|id| {
+            matches!(
+                app.with_store(|s| s.principal(id)),
+                Ok(Some(p)) if p.kind == cairn_core::PrincipalKind::Human
+            )
+        })
+    };
+    if let Some(who) = found {
+        let contact = app.with_store(|s| s.contact_of(&who)).unwrap_or_default();
+        if let Some(email) = contact.email.filter(|_| contact.verified)
+            && let Ok(secret) = app.with_store(|s| s.begin_signin_link(&who))
+        {
+            let link = absolute(
+                &app,
+                &headers,
+                &format!("/signin?token={}", urlencode(&secret)),
+            );
+            let body = format!(
+                "Here is your sign-in link for {} on cairn. It works once, for fifteen \
+                 minutes:\n\n  {link}\n\nIf you did not ask for it, ignore this; nothing changes.\n",
+                who.as_str()
+            );
+            let sent = tokio::task::spawn_blocking(move || {
+                mailer.send(&email, "Your cairn sign-in link", &body)
+            })
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
+            if let Err(err) = sent {
+                tracing::error!(%err, "sign-in link mail failed");
+            }
+        }
+    }
+    Redirect::to("/login?sent=1").into_response()
+}
+
+#[derive(Deserialize)]
+struct SigninQuery {
+    #[serde(default)]
+    token: String,
+}
+
+async fn signin_with_link(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<SigninQuery>,
+) -> Response {
+    match app.with_store(|s| s.redeem_signin_link(query.token.trim())) {
+        Ok(Some(who)) => match app.start_session(&who, user_agent(&headers)) {
+            Ok(session) => signed_in(&app, SESSION_COOKIE, &session),
+            Err(err) => oops(err),
+        },
+        Ok(None) => Redirect::to("/login?error=That+link+has+expired+or+been+used").into_response(),
+        Err(err) => oops(err),
+    }
 }
 
 #[derive(Deserialize)]

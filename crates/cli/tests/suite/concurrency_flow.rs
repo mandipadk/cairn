@@ -382,7 +382,21 @@ async fn a_branch_that_lost_a_landed_change_is_reported() {
     )
     .await;
 
-    // Healthy to begin with.
+    // Healthy to begin with. Recording the merge and advancing the branch
+    // are two steps, so give the second a moment rather than catching the
+    // forge between them.
+    for _ in 0..100 {
+        if forge
+            .state
+            .branches_match_the_log()
+            .await
+            .unwrap()
+            .is_empty()
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
     assert!(
         forge
             .state

@@ -91,6 +91,24 @@ Without mail, or for a person with no address on record, a reset request
 is not a dead end: the people who run the forge are told in their inbox
 and can send a new sign-in link from the People page in one click.
 
+## Passkeys
+
+Passkeys bind to the forge's origin, so they exist only once the forge
+knows where it lives:
+
+```sh
+CAIRN_PUBLIC_URL='https://cairn.example.org' cairn serve ...
+```
+
+Do not change it once passkeys exist; every credential is bound to that
+host. With it set, a signed-in person adds a passkey from their settings
+page and the sign-in page offers "Sign in with a passkey". This is the
+one place the pages run script: a small first-party file, served under a
+content hash and permitted by the content policy for this origin alone.
+The in-flight ceremony state lives in the database for five minutes and
+is spent exactly once, so any forge process can finish what another
+started.
+
 ## Administration
 
 Having file access to the database is the root authority; these run

@@ -92,6 +92,29 @@ CREATE TABLE IF NOT EXISTS contact (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_contact_email ON contact (email);
 
+CREATE TABLE IF NOT EXISTS passkey_users (
+  principal TEXT PRIMARY KEY,
+  user_id   TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS passkeys (
+  cred_id   TEXT PRIMARY KEY,
+  principal TEXT NOT NULL,
+  passkey   TEXT NOT NULL,
+  label     TEXT NOT NULL,
+  created   TEXT NOT NULL,
+  last_used TEXT
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_passkeys_principal ON passkeys (principal);
+
+CREATE TABLE IF NOT EXISTS webauthn_states (
+  id        TEXT PRIMARY KEY,
+  principal TEXT,
+  kind      TEXT NOT NULL,
+  state     TEXT NOT NULL,
+  expires   TEXT NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS signin_links (
   token_hash TEXT PRIMARY KEY,
   principal  TEXT NOT NULL,

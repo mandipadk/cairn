@@ -16,6 +16,7 @@ mod error;
 mod git_http;
 mod guard;
 pub mod mail;
+pub mod passkeys;
 mod queue;
 mod routes;
 mod sse;

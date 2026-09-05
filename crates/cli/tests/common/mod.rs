@@ -40,6 +40,19 @@ pub async fn boot_with(object_format: &str) -> Forge {
     boot_inner(object_format, true, None).await
 }
 
+/// A forge that knows its public URL, so passkeys are on.
+pub async fn boot_with_passkeys() -> Forge {
+    let mut forge = boot_inner("sha1", true, None).await;
+    let state = forge
+        .state
+        .clone()
+        .with_public_url("https://forge.example")
+        .expect("a valid public URL");
+    forge.app = router(state.clone());
+    forge.state = state;
+    forge
+}
+
 /// A forge that can send mail, through a command of the test's choosing.
 pub async fn boot_mailing(command: &str) -> Forge {
     boot_inner(

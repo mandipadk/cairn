@@ -112,7 +112,9 @@ cargo run -- admin bootstrap --db forge.db you --display "You"
 cargo run -- serve --db forge.db --listen 127.0.0.1:6160
 ```
 
-Open `http://127.0.0.1:6160` and sign in with the token it printed. Push
+Open `http://127.0.0.1:6160` and sign in with the token it printed;
+people you invite sign in with a password, an emailed link, or a
+passkey. Push
 a change as above, attach a claim, and watch the readiness view fill in.
 To let an agent work alongside you:
 

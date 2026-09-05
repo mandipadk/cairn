@@ -6,7 +6,7 @@ use super::diff::{FileDiff, LineKind};
 use super::{Brief, LandingData, Sidebar, Viewer};
 use cairn_core::{
     BrowserSession, Change, ChangeState, Claim, Contact, Disposition, Envelope, Event, HitKind,
-    Notice, PolicyTrace, Repo, Revision, Task, Verdict, Verification, Visibility,
+    Notice, PasskeyRecord, PolicyTrace, Repo, Revision, Task, Verdict, Verification, Visibility,
 };
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 use std::collections::HashMap;
@@ -134,6 +134,7 @@ fn frame(
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 title { (title) " · cairn" }
                 link rel="stylesheet" href=(super::stylesheet_href());
+                script defer src=(super::script_href()) {}
             }
             body {
                 @match viewer {
@@ -445,7 +446,14 @@ pub fn reset(theme: Theme, token: &str, error: Option<&str>) -> Markup {
     )
 }
 
-pub fn login(theme: Theme, dev: bool, can_mail: bool, sent: bool, error: Option<&str>) -> Markup {
+pub fn login(
+    theme: Theme,
+    dev: bool,
+    can_mail: bool,
+    can_passkey: bool,
+    sent: bool,
+    error: Option<&str>,
+) -> Markup {
     layout(
         theme,
         None,
@@ -474,6 +482,12 @@ pub fn login(theme: Theme, dev: bool, can_mail: bool, sent: bool, error: Option<
                     }
                     button class="btn" type="submit" { "Sign in" }
                     p class="hint" { a href="/forgot" { "Forgot your password?" } }
+                }
+                @if can_passkey {
+                    div class="login" style="margin-top: 14px;" {
+                        button class="vbtn" type="button" data-passkey="login" data-say="passkey-note" { "Sign in with a passkey" }
+                        p class="hint" id="passkey-note" {}
+                    }
                 }
                 @if sent {
                     p class="hint" { "If that account has a confirmed address, a sign-in link is on its way. It works once, for fifteen minutes." }
@@ -1061,6 +1075,7 @@ pub fn settings(
     viewer: &Viewer,
     contact: &Contact,
     can_mail: bool,
+    passkeys: Option<&[PasskeyRecord]>,
     note: SettingsNote<'_>,
 ) -> Markup {
     let SettingsNote {
@@ -1105,6 +1120,32 @@ pub fn settings(
                     }
                 } @else {
                     p class="hint" { "This forge does not send mail, so an address cannot be confirmed here." }
+                }
+
+                @if let Some(passkeys) = passkeys {
+                    div class="sechead" style="padding-left: 0; margin-top: 28px;" { b { "Passkeys" } span { (passkeys.len()) } }
+                    @for key in passkeys {
+                        div class="trow" style="grid-template-columns: minmax(0,1fr) 150px 90px; padding-left: 0;" {
+                            span { (key.label) }
+                            span class="sec3" {
+                                @match &key.last_used {
+                                    Some(used) => { "used " (day_of(used)) }
+                                    None => { "added " (day_of(&key.created)) }
+                                }
+                            }
+                            form method="post" action="/you/passkeys/remove" {
+                                input type="hidden" name="cred_id" value=(key.cred_id);
+                                button class="quiet" type="submit" { "Remove" }
+                            }
+                        }
+                    }
+                    div class="composer claim" style="padding-left: 0;" {
+                        input id="passkey-label" type="text" placeholder="a name for this device" autocomplete="off";
+                        div class="line" {
+                            button class="vbtn" type="button" data-passkey="register" data-say="passkey-note" { "Add a passkey" }
+                        }
+                        p class="hint" id="passkey-note" { "Your device asks you to confirm; nothing leaves it but a public key." }
+                    }
                 }
 
                 form class="stack" method="post" action="/you/settings" style="margin-top: 28px;" {

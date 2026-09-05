@@ -36,7 +36,7 @@ const MAX_RENDERED_BLOB: u64 = 2 * 1024 * 1024;
 /// diff is parsed into per-file structures before it is displayed.
 const MAX_RENDERED_DIFF: usize = 1024 * 1024;
 
-const SESSION_COOKIE: &str = "cairn_session";
+pub(crate) const SESSION_COOKIE: &str = "cairn_session";
 const TOKEN_COOKIE: &str = "cairn_token";
 const DEV_COOKIE: &str = "cairn_dev";
 const THEME_COOKIE: &str = "cairn_theme";
@@ -62,6 +62,20 @@ pub fn routes() -> Router<AppState> {
         .route("/you/settings", get(settings_page).post(change_password))
         .route("/you/settings/email", post(change_email))
         .route("/you/sessions", get(sessions_page).post(sessions_action))
+        .route(
+            "/passkeys/register/begin",
+            post(crate::passkeys::register_begin),
+        )
+        .route(
+            "/passkeys/register/finish",
+            post(crate::passkeys::register_finish),
+        )
+        .route("/passkeys/login/begin", post(crate::passkeys::login_begin))
+        .route(
+            "/passkeys/login/finish",
+            post(crate::passkeys::login_finish),
+        )
+        .route("/you/passkeys/remove", post(crate::passkeys::remove))
         .route("/you/tokens", get(tokens_page).post(token_action))
         .route("/agents", get(agents_page).post(agent_action))
         .route("/people", get(people_page).post(people_action))
@@ -97,6 +111,16 @@ static STYLE_HASH: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     digest.iter().take(6).map(|b| format!("{b:02x}")).collect()
 });
 
+static SCRIPT_HASH: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(crate::passkeys::SCRIPT.as_bytes());
+    digest.iter().take(6).map(|b| format!("{b:02x}")).collect()
+});
+
+pub(crate) fn script_href() -> String {
+    format!("/assets/passkeys.{}.js", *SCRIPT_HASH)
+}
+
 pub(crate) fn stylesheet_href() -> String {
     format!("/assets/app.{}.css", *STYLE_HASH)
 }
@@ -104,20 +128,26 @@ pub(crate) fn stylesheet_href() -> String {
 /// Serve the stylesheet under its hashed name, immutable, or under its
 /// bare name for anything that still asks that way, uncached.
 async fn asset(Path(file): Path<String>) -> Response {
-    let hashed = format!("app.{}.css", *STYLE_HASH);
-    let cache = if file == hashed {
-        "public, max-age=31536000, immutable"
+    let (body, kind, cache) = if file == format!("app.{}.css", *STYLE_HASH) {
+        (
+            STYLE,
+            "text/css; charset=utf-8",
+            "public, max-age=31536000, immutable",
+        )
     } else if file == "app.css" {
-        "no-cache"
+        (STYLE, "text/css; charset=utf-8", "no-cache")
+    } else if file == format!("passkeys.{}.js", *SCRIPT_HASH) {
+        (
+            crate::passkeys::SCRIPT,
+            "text/javascript; charset=utf-8",
+            "public, max-age=31536000, immutable",
+        )
     } else {
         return not_found();
     };
     (
-        [
-            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
-            (header::CACHE_CONTROL, cache),
-        ],
-        STYLE,
+        [(header::CONTENT_TYPE, kind), (header::CACHE_CONTROL, cache)],
+        body,
     )
         .into_response()
 }
@@ -383,11 +413,15 @@ async fn settings_page(
     let contact = app
         .with_store(|s| s.contact_of(&viewer.0))
         .unwrap_or_default();
+    let passkeys = app
+        .with_store(|s| s.passkeys_of(&viewer.0))
+        .unwrap_or_default();
     views::settings(
         theme,
         &viewer,
         &contact,
         app.mailer().is_some(),
+        crate::passkeys::enabled(&app).then_some(passkeys.as_slice()),
         views::SettingsNote {
             error: flash.error.as_deref(),
             done: flash.done.is_some(),
@@ -1802,6 +1836,7 @@ async fn login_page(
         theme,
         app.dev_identity(),
         app.mailer().is_some(),
+        crate::passkeys::enabled(&app),
         flash.sent.is_some(),
         flash.error.as_deref(),
     )
@@ -1982,7 +2017,7 @@ async fn logout(State(app): State<AppState>, headers: HeaderMap) -> Response {
         .into_response()
 }
 
-fn oops(err: impl std::fmt::Display) -> Response {
+pub(crate) fn oops(err: impl std::fmt::Display) -> Response {
     tracing::error!(error = %err, "web: page render failed");
     (StatusCode::INTERNAL_SERVER_ERROR, views::error_page()).into_response()
 }

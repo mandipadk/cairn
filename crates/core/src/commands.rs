@@ -18,8 +18,8 @@ use crate::queries::raw;
 use crate::store::{Store, append};
 use crate::types::{
     BrowserSession, Capability, ChangeSpec, ChangeState, ClaimSpec, Contact, Disposition, Mirror,
-    ObjectFormat, Policy, Principal, PrincipalKind, ReviewDomain, SessionState, TaskState,
-    Visibility,
+    ObjectFormat, PasskeyRecord, Policy, Principal, PrincipalKind, ReviewDomain, SessionState,
+    TaskState, Visibility,
 };
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
@@ -676,6 +676,160 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(env)
+    }
+
+    /// The stable, opaque id a person is known by to their authenticators.
+    /// Made once, kept forever: changing it would orphan every passkey.
+    pub fn passkey_user_id(&mut self, who: &PrincipalId) -> CoreResult<String> {
+        if let Some(id) = self
+            .conn
+            .prepare_cached("SELECT user_id FROM passkey_users WHERE principal = ?")?
+            .query_row(rusqlite::params![who.as_str()], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()?
+        {
+            return Ok(id);
+        }
+        let id = random_token_secret();
+        self.conn.execute(
+            "INSERT INTO passkey_users (principal, user_id) VALUES (?, ?)",
+            rusqlite::params![who.as_str(), id],
+        )?;
+        Ok(id)
+    }
+
+    pub fn add_passkey(
+        &mut self,
+        who: &PrincipalId,
+        cred_id: &str,
+        passkey_json: &str,
+        label: &str,
+    ) -> CoreResult<()> {
+        bounded("passkey label", label, MAX_TITLE)?;
+        let now = jiff::Timestamp::now().to_string();
+        let n = self.conn.execute(
+            "INSERT OR IGNORE INTO passkeys (cred_id, principal, passkey, label, created)
+             VALUES (?, ?, ?, ?, ?)",
+            rusqlite::params![cred_id, who.as_str(), passkey_json, label.trim(), now],
+        )?;
+        require(n == 1, || "that passkey is already registered".to_owned())?;
+        Ok(())
+    }
+
+    pub fn passkeys_of(&self, who: &PrincipalId) -> CoreResult<Vec<PasskeyRecord>> {
+        Ok(self
+            .conn
+            .prepare_cached(
+                "SELECT cred_id, label, created, last_used FROM passkeys
+                  WHERE principal = ? ORDER BY created",
+            )?
+            .query_map(rusqlite::params![who.as_str()], |row| {
+                Ok(PasskeyRecord {
+                    cred_id: row.get(0)?,
+                    label: row.get(1)?,
+                    created: row.get(2)?,
+                    last_used: row.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// The stored credentials of one person, as the JSON the server put in.
+    pub fn passkey_json_of(&self, who: &PrincipalId) -> CoreResult<Vec<String>> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT passkey FROM passkeys WHERE principal = ?")?
+            .query_map(rusqlite::params![who.as_str()], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Whose credential this is.
+    pub fn passkey_owner(&self, cred_id: &str) -> CoreResult<Option<PrincipalId>> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT principal FROM passkeys WHERE cred_id = ?")?
+            .query_row(rusqlite::params![cred_id], |row| row.get::<_, String>(0))
+            .optional()?
+            .map(PrincipalId))
+    }
+
+    /// Whose user id this is, for a discoverable sign-in that names the
+    /// user handle rather than the credential.
+    pub fn principal_for_passkey_user(&self, user_id: &str) -> CoreResult<Option<PrincipalId>> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT principal FROM passkey_users WHERE user_id = ?")?
+            .query_row(rusqlite::params![user_id], |row| row.get::<_, String>(0))
+            .optional()?
+            .map(PrincipalId))
+    }
+
+    /// After a sign-in: the credential's counter moved, and it was used.
+    pub fn touch_passkey(&mut self, cred_id: &str, passkey_json: &str) -> CoreResult<()> {
+        self.conn.execute(
+            "UPDATE passkeys SET passkey = ?, last_used = ? WHERE cred_id = ?",
+            rusqlite::params![passkey_json, jiff::Timestamp::now().to_string(), cred_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_passkey(&mut self, who: &PrincipalId, cred_id: &str) -> CoreResult<bool> {
+        let n = self.conn.execute(
+            "DELETE FROM passkeys WHERE principal = ? AND cred_id = ?",
+            rusqlite::params![who.as_str(), cred_id],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Park an in-flight WebAuthn ceremony's server state for a few
+    /// minutes, under an id the browser hands back. Taken exactly once.
+    pub fn put_webauthn_state(
+        &mut self,
+        principal: Option<&PrincipalId>,
+        kind: &str,
+        state_json: &str,
+    ) -> CoreResult<String> {
+        let id = random_token_secret();
+        let now = jiff::Timestamp::now();
+        let expires = (now + jiff::SignedDuration::from_mins(5)).to_string();
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM webauthn_states WHERE expires <= ?",
+            rusqlite::params![now.to_string()],
+        )?;
+        tx.execute(
+            "INSERT INTO webauthn_states (id, principal, kind, state, expires) VALUES (?, ?, ?, ?, ?)",
+            rusqlite::params![id, principal.map(|p| p.as_str()), kind, state_json, expires],
+        )?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    pub fn take_webauthn_state(
+        &mut self,
+        id: &str,
+        kind: &str,
+    ) -> CoreResult<Option<(Option<PrincipalId>, String)>> {
+        let now = jiff::Timestamp::now().to_string();
+        let tx = self.conn.transaction()?;
+        let row: Option<(Option<String>, String)> = tx
+            .prepare_cached(
+                "SELECT principal, state FROM webauthn_states
+                  WHERE id = ? AND kind = ? AND expires > ?",
+            )?
+            .query_row(rusqlite::params![id, kind, now], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()?;
+        tx.execute(
+            "DELETE FROM webauthn_states WHERE id = ?",
+            rusqlite::params![id],
+        )?;
+        tx.commit()?;
+        Ok(row.map(|(p, s)| (p.map(PrincipalId), s)))
     }
 
     /// A link that signs one person in once, for fifteen minutes. The

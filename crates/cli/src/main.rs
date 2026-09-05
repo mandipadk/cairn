@@ -62,6 +62,11 @@ enum Command {
         /// CAIRN_MAIL_FROM when unset.
         #[arg(long)]
         mail_from: Option<String>,
+        /// Where people reach this forge, e.g. https://cairn.example.org.
+        /// Passkeys bind to it, so it cannot change once they exist. Read
+        /// from CAIRN_PUBLIC_URL when unset; passkeys are off without it.
+        #[arg(long)]
+        public_url: Option<String>,
     },
     /// Offline administration against the forge database. Having file
     /// access to the database is the root authority.
@@ -209,6 +214,7 @@ async fn main() -> anyhow::Result<()> {
             smtp_url,
             mail_command,
             mail_from,
+            public_url,
         } => {
             let git_version = cairn_git::preflight().context("checking the git on PATH")?;
             let store = Store::open(&db)
@@ -243,6 +249,17 @@ async fn main() -> anyhow::Result<()> {
                     "no mail configured (CAIRN_SMTP_URL and CAIRN_MAIL_FROM): \
                      password resets and invitations fall back to the People page"
                 ),
+            }
+            match public_url.or_else(|| std::env::var("CAIRN_PUBLIC_URL").ok()) {
+                Some(url) => {
+                    state = state
+                        .with_public_url(&url)
+                        .map_err(|e| anyhow::anyhow!("--public-url: {e}"))?;
+                    tracing::info!("passkeys: enabled for {url}");
+                }
+                None => {
+                    tracing::info!("no public URL configured (CAIRN_PUBLIC_URL): passkeys are off")
+                }
             }
             if secure_cookies {
                 state = state.with_secure_cookies();

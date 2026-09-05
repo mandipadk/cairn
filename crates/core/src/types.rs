@@ -434,6 +434,16 @@ pub struct Contact {
     pub pending: Option<String>,
 }
 
+/// A passkey as its owner sees it. The credential itself is opaque to
+/// the core; the server that speaks WebAuthn keeps it as JSON here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PasskeyRecord {
+    pub cred_id: String,
+    pub label: String,
+    pub created: String,
+    pub last_used: Option<String>,
+}
+
 /// A browser session as its owner sees it: enough to recognise it and
 /// end it, never the secret. `id` is a prefix of the secret's hash.
 #[derive(Debug, Clone, Serialize, Deserialize)]

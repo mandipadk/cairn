@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 sha2 = "0.11.0"
+webauthn-rs = { version = "0.5", features = ["resident-key-support", "conditional-ui", "danger-allow-state-serialisation"] }
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "builder", "hostname", "pool", "rustls", "ring", "webpki-roots"] }
 jiff = "0.2.35"
 axum = "0.8.9"

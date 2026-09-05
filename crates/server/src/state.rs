@@ -58,6 +58,8 @@ pub struct AppState {
     /// How the forge sends mail, if it can. None means it cannot, and
     /// the pages that would need to say so.
     mailer: Option<Arc<crate::mail::Mailer>>,
+    /// The WebAuthn relying party, when the forge knows its public URL.
+    webauthn: Option<Arc<webauthn_rs::prelude::Webauthn>>,
     /// Ephemeral secrets handed to proc-receive hooks, mapped to the
     /// authenticated pusher. In-memory only, expiring, never logged.
     push_tokens: Arc<Mutex<HashMap<String, (PrincipalId, Instant)>>>,
@@ -80,6 +82,7 @@ impl AppState {
             waitlist_limiter: crate::guard::LoginLimiter::new(5, Duration::from_secs(300)),
             reset_limiter: crate::guard::LoginLimiter::new(5, Duration::from_secs(300)),
             mailer: None,
+            webauthn: None,
             push_tokens: Arc::new(Mutex::new(HashMap::new())),
             refs_needing_advancing: Arc::new(Mutex::new(Vec::new())),
         }
@@ -209,6 +212,16 @@ impl AppState {
     }
 
     /// Supply the credential mirror pushes authenticate with.
+    /// Tell the forge where it lives, which is what passkeys bind to.
+    pub fn with_public_url(mut self, url: &str) -> Result<Self, String> {
+        self.webauthn = Some(Arc::new(crate::passkeys::relying_party(url)?));
+        Ok(self)
+    }
+
+    pub(crate) fn webauthn(&self) -> Option<Arc<webauthn_rs::prelude::Webauthn>> {
+        self.webauthn.clone()
+    }
+
     pub fn with_mailer(mut self, mailer: crate::mail::Mailer) -> Self {
         self.mailer = Some(Arc::new(mailer));
         self

@@ -3247,7 +3247,6 @@ fn state_words(state: cairn_core::LineState) -> &'static str {
 /// stylesheet policy allows where an inline style would be refused.
 fn stack(counts: &crate::debt::Counts) -> Markup {
     let total = counts.total().max(1) as f64;
-    let width = |n: usize| n as f64 * 100.0 / total;
     let parts = [
         ("s-reproduced", counts.reproduced),
         ("s-claimed", counts.claimed),
@@ -3256,14 +3255,18 @@ fn stack(counts: &crate::debt::Counts) -> Markup {
         ("s-imported", counts.imported),
     ];
     let mut x = 0.0;
+    let mut rects = Vec::new();
+    for (class, n) in parts {
+        if n > 0 {
+            let w = n as f64 * 100.0 / total;
+            rects.push((class, format!("{x:.3}"), format!("{w:.3}")));
+            x += w;
+        }
+    }
     html! {
         svg class="stack" viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true" {
-            @for (class, n) in parts {
-                @if n > 0 {
-                    @let w = width(n);
-                    rect class=(class) x=(format!("{x:.3}")) y="0" width=(format!("{w:.3}")) height="6" {}
-                    @let _ = { x += w; };
-                }
+            @for (class, x, w) in &rects {
+                rect class=(class) x=(x) y="0" width=(w) height="6" {}
             }
         }
     }
@@ -3273,7 +3276,7 @@ fn thousands(n: usize) -> String {
     let digits = n.to_string();
     let mut out = String::new();
     for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(ch);

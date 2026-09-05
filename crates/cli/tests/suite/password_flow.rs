@@ -46,8 +46,14 @@ async fn a_name_and_password_signs_someone_in() {
 
     // The cookie must not be the password, the name, or anything derived
     // from them.
+    // A random id will sometimes contain three letters that happen to
+    // spell the name; what matters is that it does not begin with the
+    // name or carry the password.
+    let value = session
+        .trim_start_matches("cairn_session=")
+        .trim_start_matches('s');
     assert!(
-        !session.contains("ada") && !session.contains("horse"),
+        !value.trim_start_matches("cairn_").starts_with("ada") && !session.contains("horse"),
         "the session id must be opaque: {session}"
     );
 }

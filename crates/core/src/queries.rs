@@ -44,7 +44,7 @@ pub(crate) mod raw {
 
     pub fn principal(conn: &Connection, id: &str) -> CoreResult<Option<Principal>> {
         conn.prepare_cached(
-            "SELECT id, kind, display, model, harness FROM principals WHERE id = ?",
+            "SELECT id, kind, display, model, harness, active FROM principals WHERE id = ?",
         )?
         .query_row(params![id], |row| {
             Ok((
@@ -53,11 +53,13 @@ pub(crate) mod raw {
                 row.get::<_, String>(2)?,
                 row.get::<_, Option<String>>(3)?,
                 row.get::<_, Option<String>>(4)?,
+                row.get::<_, i64>(5)?,
             ))
         })
         .optional()?
-        .map(|(id, kind, display, model, harness)| {
+        .map(|(id, kind, display, model, harness, active)| {
             Ok(Principal {
+                active: active != 0,
                 kind: parsed(&format!("principal {id}"), &kind, PrincipalKind::parse)?,
                 id: PrincipalId(id),
                 display,
@@ -720,9 +722,10 @@ pub(crate) mod raw {
     ) -> CoreResult<Option<(PrincipalId, Option<crate::types::Scope>)>> {
         let row: Option<(String, Option<String>)> = conn
             .prepare_cached(
-                "SELECT principal, scope FROM tokens
-                  WHERE hash = ? AND revoked = 0 AND (until_ts IS NULL OR until_ts > ?)
-                    AND (label IS NULL OR label NOT LIKE 'invitation%')",
+                "SELECT t.principal, t.scope FROM tokens t
+                  JOIN principals p ON p.id = t.principal AND p.active = 1
+                  WHERE t.hash = ? AND t.revoked = 0 AND (t.until_ts IS NULL OR t.until_ts > ?)
+                    AND (t.label IS NULL OR t.label NOT LIKE 'invitation%')",
             )?
             .query_row(params![hash, jiff::Timestamp::now().to_string()], |row| {
                 Ok((row.get(0)?, row.get(1)?))

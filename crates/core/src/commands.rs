@@ -36,6 +36,11 @@ pub(crate) fn token_hash(secret: &str) -> String {
 fn ensure_actor(tx: &Transaction, actor: &PrincipalId) -> CoreResult<Principal> {
     let principal = raw::principal(tx, actor.as_str())?
         .ok_or_else(|| CoreError::NotFound(format!("principal {actor}")))?;
+    if !principal.active {
+        return Err(CoreError::Forbidden(format!(
+            "{actor} is deactivated; whoever runs the forge can reactivate them"
+        )));
+    }
     // A team never acts. Its members do, carrying its grants.
     if principal.kind == PrincipalKind::Team {
         return Err(CoreError::Forbidden(format!(
@@ -310,6 +315,42 @@ fn new_repo_is_allowed(tx: &Transaction, name: &str, default_branch: &str) -> Co
 impl Store {
     /// Register a principal. Bootstrap exception: the very first principal
     /// may register itself, since no authority exists yet to vouch for it.
+    /// Deactivate or reactivate a principal. Running the forge decides;
+    /// nobody deactivates themselves, so the forge always has someone
+    /// left who can undo it.
+    pub fn set_active(
+        &mut self,
+        actor: &PrincipalId,
+        principal: &PrincipalId,
+        active: bool,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
+        require(actor != principal, || {
+            "you cannot deactivate yourself; ask whoever else runs the forge".into()
+        })?;
+        let subject = raw::principal(&tx, principal.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("principal {principal}")))?;
+        if subject.active == active {
+            return Err(CoreError::Conflict(format!(
+                "{principal} is already {}",
+                if active { "active" } else { "deactivated" }
+            )));
+        }
+        let event = if active {
+            Event::PrincipalReactivated {
+                principal: principal.clone(),
+            }
+        } else {
+            Event::PrincipalDeactivated {
+                principal: principal.clone(),
+            }
+        };
+        let env = append(&tx, actor, self.acting.as_ref().map(|s| &s.session), event)?;
+        tx.commit()?;
+        Ok(env)
+    }
+
     pub fn register_principal(
         &mut self,
         actor: &PrincipalId,
@@ -441,6 +482,7 @@ impl Store {
         // amounts of elapsed time across a DST boundary.
         let expires = now + jiff::Span::new().hours(ttl_days * 24);
         let tx = self.conn.transaction()?;
+        ensure_actor(&tx, principal)?;
         // Expired rows are dead weight; clear them whenever one is made.
         tx.execute(
             "DELETE FROM browser_sessions WHERE expires <= ?",
@@ -540,7 +582,9 @@ impl Store {
     pub fn session_holder(&self, secret: &str) -> Option<PrincipalId> {
         self.conn
             .prepare_cached(
-                "SELECT principal FROM browser_sessions WHERE id_hash = ? AND expires > ?",
+                "SELECT s.principal FROM browser_sessions s
+                  JOIN principals p ON p.id = s.principal AND p.active = 1
+                  WHERE s.id_hash = ? AND s.expires > ?",
             )
             .ok()?
             .query_row(

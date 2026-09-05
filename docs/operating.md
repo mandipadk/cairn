@@ -131,6 +131,17 @@ offline against it.
   exactly the log applied; exits non-zero on any divergence, so it can
   run from cron or a health check.
 
+## Account states
+
+Whoever runs the forge can deactivate a person or an agent from the
+People page or with `POST /api/principals/{id}/state {"active": false}`.
+From that moment they cannot sign in, their browser sessions are over,
+their tokens and session credentials stop answering, and nothing can be
+done in their name; what they did stays on the record, and repositories
+they own stay theirs until offered to someone else. Reactivation is the
+same call with `true`. Nobody can deactivate themselves, so the forge
+always keeps someone who can undo it.
+
 ## Repository lifecycle
 
 An owner, or whoever runs the forge, can rename, archive and delete a

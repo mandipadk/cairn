@@ -6,6 +6,7 @@
 //! and runs every test in parallel. Add a new file here with a `mod` line.
 
 mod account_flow;
+mod account_state_flow;
 mod assets_flow;
 mod attention_budget_flow;
 mod auth_flow;

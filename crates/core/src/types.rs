@@ -206,6 +206,10 @@ pub struct Principal {
     pub display: String,
     pub model: Option<String>,
     pub harness: Option<String>,
+    /// A deactivated principal cannot sign in, act, or be acted for;
+    /// what it did stays on the record.
+    #[serde(default = "yes")]
+    pub active: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

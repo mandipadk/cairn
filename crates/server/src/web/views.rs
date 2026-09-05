@@ -1488,7 +1488,8 @@ pub fn people(
                     span class="strong" { (row.principal.id.as_str()) }
                     span class="sec3" { (row.principal.display) }
                     span class="sec3" {
-                        @if row.admin { "runs the forge" }
+                        @if !row.principal.active { "deactivated" }
+                        @else if row.admin { "runs the forge" }
                         @else if row.has_password { "can sign in" }
                         @else { "no password yet" }
                         @match (&row.contact.email, &row.contact.pending) {
@@ -1502,11 +1503,24 @@ pub fn people(
                         }
                     }
                     span class="acts" {
+                        @if row.principal.active {
                         form method="post" action="/people" {
                             input type="hidden" name="action" value="relink";
                             input type="hidden" name="id" value=(row.principal.id.as_str());
                             button class="quiet" type="submit" {
                                 @if can_mail && (row.contact.email.is_some() || row.contact.pending.is_some()) { "Send a new sign-in link" } @else { "Make a sign-in link" }
+                            }
+                        }
+                        }
+                        @if row.principal.id != viewer.0 {
+                            form method="post" action="/people" {
+                                input type="hidden" name="action" value={ @if row.principal.active { "deactivate" } @else { "reactivate" } };
+                                input type="hidden" name="id" value=(row.principal.id.as_str());
+                                @if row.principal.active {
+                                    button class="quiet danger" type="submit" { "Deactivate" }
+                                } @else {
+                                    button class="quiet" type="submit" { "Reactivate" }
+                                }
                             }
                         }
                         @if row.invitation.is_some() {
@@ -2890,6 +2904,14 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
                 "session " code { (short(session.as_str())) } " ended; "
                 (revoked) @if *revoked == 1 { " credential died with it" } @else { " credentials died with it" }
             },
+        ),
+        Event::PrincipalDeactivated { principal } => (
+            "dot bad",
+            html! { b { (actor) } " deactivated " (principal.as_str()) },
+        ),
+        Event::PrincipalReactivated { principal } => (
+            "dot ok",
+            html! { b { (actor) } " reactivated " (principal.as_str()) },
         ),
         Event::RepoRenamed { repo, to } => (
             "dot idle",

@@ -66,6 +66,14 @@ pub enum Event {
     /// are in the log for good, but the event feed and the web UI hand
     /// their payloads to any authenticated caller, and a credential is
     /// not something to publish because it is already recorded.
+    /// The principal can no longer sign in or act; its sessions end and
+    /// its tokens stop answering. Whoever runs the forge decides.
+    PrincipalDeactivated {
+        principal: PrincipalId,
+    },
+    PrincipalReactivated {
+        principal: PrincipalId,
+    },
     PasswordSet {
         principal: PrincipalId,
         #[serde(default, skip_serializing)]
@@ -386,6 +394,8 @@ impl Event {
         match self {
             Event::PrincipalRegistered { .. } => "principal_registered",
             Event::PasswordSet { .. } => "password_set",
+            Event::PrincipalDeactivated { .. } => "principal_deactivated",
+            Event::PrincipalReactivated { .. } => "principal_reactivated",
             Event::TokenMinted { .. } => "token_minted",
             Event::TokenRevoked { .. } => "token_revoked",
             Event::GrantIssued { .. } => "grant_issued",

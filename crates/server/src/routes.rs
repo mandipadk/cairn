@@ -1139,6 +1139,26 @@ pub async fn attention(
 }
 
 #[derive(Deserialize)]
+pub struct PrincipalStateBody {
+    pub active: bool,
+}
+
+pub async fn set_principal_state(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Json(body): Json<PrincipalStateBody>,
+) -> ApiResult<Json<Value>> {
+    let subject = PrincipalId(id);
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .set_active(&actor.0, &subject, body.active)
+    })?;
+    app.publish(&env);
+    Ok(committed(None, &env))
+}
+
+#[derive(Deserialize)]
 pub struct RenameBody {
     pub to: String,
 }

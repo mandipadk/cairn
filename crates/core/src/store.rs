@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 16;
+const SCHEMA_VERSION: i64 = 17;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -160,7 +160,8 @@ CREATE TABLE IF NOT EXISTS principals (
   kind    TEXT NOT NULL,
   display TEXT NOT NULL,
   model   TEXT,
-  harness TEXT
+  harness TEXT,
+  active  INTEGER NOT NULL DEFAULT 1
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS tokens (
@@ -875,7 +876,9 @@ fn record_scope(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
         // Somebody's own account business.
         PasswordResetRequested { principal } => (None, Some(principal.as_str().to_owned())),
 
-        PasswordSet { principal, .. } => (None, Some(principal.as_str().to_owned())),
+        PasswordSet { principal, .. }
+        | PrincipalDeactivated { principal }
+        | PrincipalReactivated { principal } => (None, Some(principal.as_str().to_owned())),
         TokenMinted { principal, .. } => (None, Some(principal.as_str().to_owned())),
         TokenRevoked { token } => {
             let owner: Option<String> = tx
@@ -1547,6 +1550,24 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             tx.execute(
                 "UPDATE tokens SET revoked = 1 WHERE session = ?",
                 params![session.as_str()],
+            )?;
+        }
+        Event::PrincipalDeactivated { principal } => {
+            tx.execute(
+                "UPDATE principals SET active = 0 WHERE id = ?",
+                params![principal.as_str()],
+            )?;
+            // Sessions are operational rows; ending them here means a
+            // replay ends them too, which is what a replay should do.
+            tx.execute(
+                "DELETE FROM browser_sessions WHERE principal = ?",
+                params![principal.as_str()],
+            )?;
+        }
+        Event::PrincipalReactivated { principal } => {
+            tx.execute(
+                "UPDATE principals SET active = 1 WHERE id = ?",
+                params![principal.as_str()],
             )?;
         }
         Event::TokenRevoked { token } => {

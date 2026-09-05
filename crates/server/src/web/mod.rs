@@ -1178,6 +1178,15 @@ async fn people_action(
                 return back(&humane(&err));
             }
         }
+        "deactivate" | "reactivate" => {
+            match app.with_store(|s| s.set_active(&viewer.0, &id, form.action == "reactivate")) {
+                Ok(env) => {
+                    app.publish(&env);
+                    return Redirect::to("/people").into_response();
+                }
+                Err(err) => return back(&humane(&err)),
+            }
+        }
         "relink" | "cancel" => {
             match app.with_store(|s| s.principal(&id)) {
                 Ok(Some(p)) if p.kind == cairn_core::PrincipalKind::Human => {}

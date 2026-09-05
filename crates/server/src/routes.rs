@@ -45,17 +45,26 @@ fn found<T>(item: Option<T>, what: &str) -> ApiResult<T> {
 /// neither its contents nor its existence. Everything scoped to a
 /// repository - a change, a task, a session, a queue - goes through here.
 fn readable_repo(app: &AppState, actor: &Actor, name: &str) -> ApiResult<Repo> {
-    found(app.with_store(|s| s.readable(&actor.0, name))?, "repo")
+    found(
+        app.with_store(|s| s.acting_as(actor.1.as_ref()).readable(&actor.0, name))?,
+        "repo",
+    )
 }
 
 fn readable_change(app: &AppState, actor: &Actor, id: &ChangeId) -> ApiResult<Change> {
-    let change = found(app.with_store(|s| s.change(id))?, "change")?;
+    let change = found(
+        app.with_store(|s| s.acting_as(actor.1.as_ref()).change(id))?,
+        "change",
+    )?;
     readable_repo(app, actor, &change.repo)?;
     Ok(change)
 }
 
 fn readable_task(app: &AppState, actor: &Actor, id: &TaskId) -> ApiResult<Task> {
-    let task = found(app.with_store(|s| s.task(id))?, "task")?;
+    let task = found(
+        app.with_store(|s| s.acting_as(actor.1.as_ref()).task(id))?,
+        "task",
+    )?;
     if let Some(repo) = &task.repo {
         readable_repo(app, actor, repo)?;
     }
@@ -86,6 +95,7 @@ pub async fn register_principal(
         )
     })?;
     let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref());
         s.register_principal(
             &actor.0,
             &id,
@@ -116,7 +126,10 @@ pub async fn set_password(
     Json(body): Json<SetPassword>,
 ) -> ApiResult<Json<Value>> {
     let principal = PrincipalId(id);
-    let env = app.with_store(|s| s.set_password(&actor.0, &principal, &body.password))?;
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .set_password(&actor.0, &principal, &body.password)
+    })?;
     app.end_sessions_of(&principal);
     app.publish(&env);
     Ok(committed(Some(principal.0), &env))
@@ -157,7 +170,10 @@ pub async fn create_repo(
     // left a directory behind — a side effect ahead of the check that
     // should have prevented it. create_repo applies these same rules
     // again when it appends the event.
-    app.with_store(|s| s.check_new_repo(&actor.0, &body.name, &body.default_branch))?;
+    app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .check_new_repo(&actor.0, &body.name, &body.default_branch)
+    })?;
     // Then the bare repo lands on disk before the graph event. An orphan
     // directory from a lost race is harmless — nothing serves a
     // repository the graph does not know about — whereas the reverse
@@ -172,6 +188,7 @@ pub async fn create_repo(
             .await?;
     }
     let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref());
         s.create_repo(
             &actor.0,
             &body.name,
@@ -214,7 +231,7 @@ pub async fn import_history(
     // Before dialling out: who is asking, and where. The url is a
     // caller's, and this forge does not connect anywhere on nothing but
     // a caller's say-so - nor on behalf of somebody who may not import.
-    app.with_store(|s| s.check_import(&actor.0, &name))?;
+    app.with_store(|s| s.acting_as(actor.1.as_ref()).check_import(&actor.0, &name))?;
     cairn_core::Store::validate_import_source(&body.source, app.dev_identity())?;
     let (tip, commits) = git
         .store
@@ -224,6 +241,7 @@ pub async fn import_history(
     // absent and the import can be retried, which is the harmless order.
     // The staging ref is dropped either way, so nothing half-done lingers.
     let recorded = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref());
         s.import_history(
             &actor.0,
             &name,
@@ -260,7 +278,10 @@ pub async fn set_visibility(
     Path(name): Path<String>,
     Json(body): Json<SetVisibility>,
 ) -> ApiResult<Json<Value>> {
-    let env = app.with_store(|s| s.set_visibility(&actor.0, &name, body.visibility))?;
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .set_visibility(&actor.0, &name, body.visibility)
+    })?;
     app.publish(&env);
     Ok(committed(Some(name), &env))
 }
@@ -277,7 +298,10 @@ pub async fn offer_transfer(
     Path(name): Path<String>,
     Json(body): Json<TransferRepo>,
 ) -> ApiResult<Json<Value>> {
-    let env = app.with_store(|s| s.offer_transfer(&actor.0, &name, &body.to))?;
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .offer_transfer(&actor.0, &name, &body.to)
+    })?;
     app.publish(&env);
     Ok(committed(Some(name), &env))
 }
@@ -287,7 +311,10 @@ pub async fn accept_transfer(
     actor: Actor,
     Path(name): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let env = app.with_store(|s| s.accept_transfer(&actor.0, &name))?;
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .accept_transfer(&actor.0, &name)
+    })?;
     app.publish(&env);
     Ok(committed(Some(name), &env))
 }
@@ -297,7 +324,10 @@ pub async fn decline_transfer(
     actor: Actor,
     Path(name): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let env = app.with_store(|s| s.decline_transfer(&actor.0, &name))?;
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .decline_transfer(&actor.0, &name)
+    })?;
     app.publish(&env);
     Ok(committed(Some(name), &env))
 }
@@ -326,6 +356,7 @@ pub async fn create_task(
     Json(body): Json<CreateTask>,
 ) -> ApiResult<Json<Value>> {
     let (task, env) = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref());
         s.create_task(
             &actor.0,
             body.repo.as_deref(),
@@ -348,12 +379,12 @@ pub async fn list_tasks(
     actor: Actor,
     Query(filter): Query<TaskFilter>,
 ) -> ApiResult<Json<Value>> {
-    let mut tasks = app.with_store(|s| s.tasks(filter.state))?;
+    let mut tasks = app.with_store(|s| s.acting_as(actor.1.as_ref()).tasks(filter.state))?;
     // A task with no repository is forge-wide work and everybody's.
     tasks.retain(|task| {
-        task.repo
-            .as_deref()
-            .is_none_or(|repo| app.with_store(|s| s.may_read(&actor.0, repo)))
+        task.repo.as_deref().is_none_or(|repo| {
+            app.with_store(|s| s.acting_as(actor.1.as_ref()).may_read(&actor.0, repo))
+        })
     });
     Ok(Json(json!(tasks)))
 }
@@ -371,7 +402,10 @@ pub async fn claim_task(
     actor: Actor,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let env = app.with_store(|s| s.claim_task(&actor.0, &TaskId(id)))?;
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .claim_task(&actor.0, &TaskId(id))
+    })?;
     app.publish(&env);
     Ok(committed(None, &env))
 }
@@ -387,7 +421,10 @@ pub async fn set_task_state(
     Path(id): Path<String>,
     Json(body): Json<SetTaskState>,
 ) -> ApiResult<Json<Value>> {
-    let env = app.with_store(|s| s.set_task_state(&actor.0, &TaskId(id), body.state))?;
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .set_task_state(&actor.0, &TaskId(id), body.state)
+    })?;
     app.publish(&env);
     Ok(committed(None, &env))
 }
@@ -399,7 +436,10 @@ pub async fn open_session(
     actor: Actor,
     Path(task): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let (session, env) = app.with_store(|s| s.open_session(&actor.0, &TaskId(task)))?;
+    let (session, env) = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .open_session(&actor.0, &TaskId(task))
+    })?;
     app.publish(&env);
     Ok(committed(Some(session.0), &env))
 }
@@ -409,7 +449,10 @@ pub async fn get_session(
     actor: Actor,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let session = found(app.with_store(|s| s.session(&SessionId(id)))?, "session")?;
+    let session = found(
+        app.with_store(|s| s.acting_as(actor.1.as_ref()).session(&SessionId(id)))?,
+        "session",
+    )?;
     readable_task(&app, &actor, &session.task)?;
     Ok(Json(json!(session)))
 }
@@ -426,8 +469,14 @@ pub async fn end_session(
     Path(id): Path<String>,
     Json(body): Json<EndSession>,
 ) -> ApiResult<Json<Value>> {
-    let env =
-        app.with_store(|s| s.end_session(&actor.0, &SessionId(id), body.state, &body.outcome))?;
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref()).end_session(
+            &actor.0,
+            &SessionId(id),
+            body.state,
+            &body.outcome,
+        )
+    })?;
     app.publish(&env);
     Ok(committed(None, &env))
 }
@@ -439,7 +488,8 @@ pub async fn open_change(
     actor: Actor,
     Json(body): Json<ChangeSpec>,
 ) -> ApiResult<Json<Value>> {
-    let (change, number, env) = app.with_store(|s| s.open_change(&actor.0, body))?;
+    let (change, number, env) =
+        app.with_store(|s| s.acting_as(actor.1.as_ref()).open_change(&actor.0, body))?;
     app.publish(&env);
     let mut response = committed(Some(change.0), &env);
     response.0["number"] = json!(number);
@@ -460,7 +510,10 @@ pub async fn get_change_by_number(
     Path((repo, number)): Path<(String, i64)>,
 ) -> ApiResult<Json<Value>> {
     readable_repo(&app, &actor, &repo)?;
-    let change = app.with_store(|s| s.change_by_number(&repo, number))?;
+    let change = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .change_by_number(&repo, number)
+    })?;
     Ok(Json(json!(found(change, "change")?)))
 }
 
@@ -476,7 +529,7 @@ pub async fn list_changes(
     Query(query): Query<ChangesQuery>,
 ) -> ApiResult<Json<Value>> {
     readable_repo(&app, &actor, &repo)?;
-    let mut changes = app.with_store(|s| s.changes_in_repo(&repo))?;
+    let mut changes = app.with_store(|s| s.acting_as(actor.1.as_ref()).changes_in_repo(&repo))?;
     if let Some(state) = query.state {
         changes.retain(|change| change.state == state);
     }
@@ -499,6 +552,7 @@ pub async fn push_revision(
 ) -> ApiResult<Json<Value>> {
     let change = ChangeId(id);
     let (revision, env) = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref());
         s.push_revision(
             &actor.0,
             &change,
@@ -519,7 +573,7 @@ pub async fn list_revisions(
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     readable_change(&app, &actor, &ChangeId(id.clone()))?;
-    let revisions = app.with_store(|s| s.revisions(&ChangeId(id)))?;
+    let revisions = app.with_store(|s| s.acting_as(actor.1.as_ref()).revisions(&ChangeId(id)))?;
     Ok(Json(json!(revisions)))
 }
 
@@ -555,8 +609,10 @@ pub async fn attach_claim(
 ) -> ApiResult<Json<Value>> {
     let change = ChangeId(id);
     let revision = resolve_revision(&app, &change, body.revision)?;
-    let (claim, env) =
-        app.with_store(|s| s.attach_claim(&actor.0, &change, revision, body.spec))?;
+    let (claim, env) = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .attach_claim(&actor.0, &change, revision, body.spec)
+    })?;
     app.publish(&env);
     Ok(committed(Some(claim.0), &env))
 }
@@ -570,7 +626,7 @@ pub async fn list_claims(
     let change = ChangeId(id);
     readable_change(&app, &actor, &change)?;
     let revision = resolve_revision(&app, &change, query.revision)?;
-    let claims = app.with_store(|s| s.claims_on(&change, revision))?;
+    let claims = app.with_store(|s| s.acting_as(actor.1.as_ref()).claims_on(&change, revision))?;
     Ok(Json(json!(claims)))
 }
 
@@ -591,6 +647,7 @@ pub async fn give_verdict(
     let change = ChangeId(id);
     let revision = resolve_revision(&app, &change, body.revision)?;
     let (verdict, env) = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref());
         s.give_verdict(
             &actor.0,
             &change,
@@ -613,7 +670,8 @@ pub async fn list_verdicts(
     let change = ChangeId(id);
     readable_change(&app, &actor, &change)?;
     let revision = resolve_revision(&app, &change, query.revision)?;
-    let verdicts = app.with_store(|s| s.verdicts_on(&change, revision))?;
+    let verdicts =
+        app.with_store(|s| s.acting_as(actor.1.as_ref()).verdicts_on(&change, revision))?;
     Ok(Json(json!(verdicts)))
 }
 
@@ -623,19 +681,20 @@ pub async fn merge_readiness(
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let change = readable_change(&app, &actor, &ChangeId(id))?;
-    let trace = app.with_store(|s| s.merge_readiness(&change.id))?;
+    let trace = app.with_store(|s| s.acting_as(actor.1.as_ref()).merge_readiness(&change.id))?;
     Ok(Json(json!(trace)))
 }
 
 /// Record a merge in the graph, translating a policy refusal into a
 /// 409 carrying the full trace. Publishing is the caller's job.
 pub(crate) fn merge_core(app: &AppState, actor: &Actor, change: &ChangeId) -> ApiResult<Envelope> {
-    match app.with_store(|s| s.merge_change(&actor.0, change)) {
+    match app.with_store(|s| s.acting_as(actor.1.as_ref()).merge_change(&actor.0, change)) {
         Ok(env) => Ok(env),
         // A refused merge answers with the full trace: the caller learns
         // exactly which requirement to go satisfy, not just "no".
         Err(CoreError::PolicyUnsatisfied(message)) => {
-            let trace = app.with_store(|s| s.merge_readiness(change))?;
+            let trace =
+                app.with_store(|s| s.acting_as(actor.1.as_ref()).merge_readiness(change))?;
             let mut error = ApiError::from(CoreError::PolicyUnsatisfied(message));
             error.detail = Some(json!({ "trace": trace }));
             Err(error)
@@ -669,7 +728,10 @@ pub async fn abandon_change(
     Path(id): Path<String>,
     Json(body): Json<AbandonChange>,
 ) -> ApiResult<Json<Value>> {
-    let env = app.with_store(|s| s.abandon_change(&actor.0, &ChangeId(id), &body.reason))?;
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .abandon_change(&actor.0, &ChangeId(id), &body.reason)
+    })?;
     app.publish(&env);
     Ok(committed(None, &env))
 }
@@ -691,7 +753,10 @@ pub async fn list_events(
     let limit = query.limit.unwrap_or(100).min(1000);
     // Who is asking decides what comes back. It used to only decide
     // whether anything came back at all.
-    let events = app.with_store(|s| s.events_visible_to(&actor.0, EventSeq(query.after), limit))?;
+    let events = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .events_visible_to(&actor.0, EventSeq(query.after), limit)
+    })?;
     Ok(Json(json!(events)))
 }
 
@@ -714,6 +779,7 @@ pub async fn mint_token(
 ) -> ApiResult<Json<Value>> {
     let principal = PrincipalId(id);
     let (token, secret, env) = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref());
         s.mint_token(
             &actor.0,
             &principal,
@@ -737,14 +803,16 @@ pub async fn list_tokens(
     // Credentials stay with their subject. Only the hashes are stored,
     // but which tokens somebody holds, and what they called them, is
     // still theirs - and the forge's operator's, since revoking is.
-    if actor.0.as_str() != id && !app.with_store(|s| s.is_admin(&actor.0)) {
+    if actor.0.as_str() != id
+        && !app.with_store(|s| s.acting_as(actor.1.as_ref()).is_admin(&actor.0))
+    {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "forbidden",
             "only the principal or an admin may list their tokens".to_owned(),
         ));
     }
-    let tokens = app.with_store(|s| s.tokens_of(&PrincipalId(id)))?;
+    let tokens = app.with_store(|s| s.acting_as(actor.1.as_ref()).tokens_of(&PrincipalId(id)))?;
     Ok(Json(json!(tokens)))
 }
 
@@ -753,7 +821,10 @@ pub async fn revoke_token(
     actor: Actor,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let env = app.with_store(|s| s.revoke_token(&actor.0, &TokenId(id)))?;
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .revoke_token(&actor.0, &TokenId(id))
+    })?;
     app.publish(&env);
     Ok(committed(None, &env))
 }
@@ -774,6 +845,7 @@ pub async fn issue_grant(
     Json(body): Json<IssueGrant>,
 ) -> ApiResult<Json<Value>> {
     let (grant, env) = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref());
         s.issue_grant(
             &actor.0,
             &body.grantee,
@@ -797,14 +869,14 @@ pub async fn list_grants(
     Query(filter): Query<GrantFilter>,
 ) -> ApiResult<Json<Value>> {
     let grantee = PrincipalId(filter.grantee);
-    let mut grants = app.with_store(|s| s.grants_of(&grantee))?;
+    let mut grants = app.with_store(|s| s.acting_as(actor.1.as_ref()).grants_of(&grantee))?;
     // Authority is auditable, but a grant names a repository, and a
     // repository you cannot read is not one you get to learn exists.
-    if grantee != actor.0 && !app.with_store(|s| s.is_admin(&actor.0)) {
+    if grantee != actor.0 && !app.with_store(|s| s.acting_as(actor.1.as_ref()).is_admin(&actor.0)) {
         grants.retain(|g| {
-            g.repo
-                .as_deref()
-                .is_none_or(|repo| app.with_store(|s| s.may_read(&actor.0, repo)))
+            g.repo.as_deref().is_none_or(|repo| {
+                app.with_store(|s| s.acting_as(actor.1.as_ref()).may_read(&actor.0, repo))
+            })
         });
     }
     Ok(Json(json!(grants)))
@@ -821,7 +893,10 @@ pub async fn revoke_grant(
     Path(id): Path<String>,
     Json(body): Json<RevokeGrant>,
 ) -> ApiResult<Json<Value>> {
-    let env = app.with_store(|s| s.revoke_grant(&actor.0, &GrantId(id), &body.reason))?;
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .revoke_grant(&actor.0, &GrantId(id), &body.reason)
+    })?;
     app.publish(&env);
     Ok(committed(None, &env))
 }
@@ -834,14 +909,18 @@ pub async fn enqueue_change(
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let change = ChangeId(id);
-    match app.with_store(|s| s.enqueue_change(&actor.0, &change)) {
+    match app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .enqueue_change(&actor.0, &change)
+    }) {
         Ok(env) => {
             app.publish(&env);
             Ok(committed(None, &env))
         }
         // Same teaching refusal as a direct merge: the full trace.
         Err(CoreError::PolicyUnsatisfied(message)) => {
-            let trace = app.with_store(|s| s.merge_readiness(&change))?;
+            let trace =
+                app.with_store(|s| s.acting_as(actor.1.as_ref()).merge_readiness(&change))?;
             let mut error = ApiError::from(CoreError::PolicyUnsatisfied(message));
             error.detail = Some(json!({ "trace": trace }));
             Err(error)
@@ -861,7 +940,10 @@ pub async fn dequeue_change(
     Path(id): Path<String>,
     Json(body): Json<DequeueChange>,
 ) -> ApiResult<Json<Value>> {
-    let env = app.with_store(|s| s.dequeue_change(&actor.0, &ChangeId(id), &body.reason))?;
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .dequeue_change(&actor.0, &ChangeId(id), &body.reason)
+    })?;
     app.publish(&env);
     Ok(committed(None, &env))
 }
@@ -879,7 +961,7 @@ pub async fn list_queue(
 ) -> ApiResult<Json<Value>> {
     let record = readable_repo(&app, &actor, &repo)?;
     let target = query.target.unwrap_or(record.default_branch);
-    let entries = app.with_store(|s| s.queue_for(&repo, &target))?;
+    let entries = app.with_store(|s| s.acting_as(actor.1.as_ref()).queue_for(&repo, &target))?;
     Ok(Json(json!(entries)))
 }
 
@@ -910,6 +992,7 @@ pub async fn open_thread(
 ) -> ApiResult<Json<Value>> {
     let change = ChangeId(id);
     let (thread, env) = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref());
         s.open_thread(
             &actor.0,
             &change,
@@ -938,7 +1021,7 @@ pub async fn list_threads(
 ) -> ApiResult<Json<Value>> {
     let change = ChangeId(id);
     readable_change(&app, &actor, &change)?;
-    let mut threads = app.with_store(|s| s.threads_on(&change))?;
+    let mut threads = app.with_store(|s| s.acting_as(actor.1.as_ref()).threads_on(&change))?;
     if let Some(revision) = query.revision {
         threads.retain(|t| t.revision == revision);
     }
@@ -955,7 +1038,10 @@ pub async fn get_thread(
     actor: Actor,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let thread = found(app.with_store(|s| s.thread(&ThreadId(id)))?, "thread")?;
+    let thread = found(
+        app.with_store(|s| s.acting_as(actor.1.as_ref()).thread(&ThreadId(id)))?,
+        "thread",
+    )?;
     readable_change(&app, &actor, &thread.change)?;
     Ok(Json(json!(thread)))
 }
@@ -971,7 +1057,10 @@ pub async fn reply_thread(
     Path(id): Path<String>,
     Json(body): Json<ReplyThread>,
 ) -> ApiResult<Json<Value>> {
-    let env = app.with_store(|s| s.reply_thread(&actor.0, &ThreadId(id), &body.body))?;
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .reply_thread(&actor.0, &ThreadId(id), &body.body)
+    })?;
     app.publish(&env);
     Ok(committed(None, &env))
 }
@@ -991,6 +1080,7 @@ pub async fn resolve_thread(
     Json(body): Json<ResolveThread>,
 ) -> ApiResult<Json<Value>> {
     let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref());
         s.resolve_thread(&actor.0, &ThreadId(id), body.how, body.revision, &body.note)
     })?;
     app.publish(&env);
@@ -1005,6 +1095,7 @@ pub async fn verify_claim(
 ) -> ApiResult<Json<Value>> {
     let claim = ClaimId(id);
     let (verification, env) = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref());
         s.verify_claim(&actor.0, &claim, body.agrees, &body.command, &body.observed)
     })?;
     app.publish(&env);
@@ -1020,7 +1111,10 @@ pub async fn list_verifications(
     let change = ChangeId(id);
     readable_change(&app, &actor, &change)?;
     let revision = resolve_revision(&app, &change, query.revision)?;
-    let verifications = app.with_store(|s| s.verifications_on(&change, revision))?;
+    let verifications = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .verifications_on(&change, revision)
+    })?;
     Ok(Json(json!(verifications)))
 }
 
@@ -1032,7 +1126,7 @@ pub async fn attention(
     Path(repo): Path<String>,
 ) -> ApiResult<Json<Value>> {
     readable_repo(&app, &actor, &repo)?;
-    let items = app.with_store(|s| s.attention_for(&repo))?;
+    let items = app.with_store(|s| s.acting_as(actor.1.as_ref()).attention_for(&repo))?;
     Ok(Json(json!(items)))
 }
 
@@ -1049,11 +1143,47 @@ pub async fn draw_attention(
     Query(query): Query<DrawQuery>,
 ) -> ApiResult<Json<Value>> {
     let day = query.day.unwrap_or_else(crate::today);
-    let drawn = app.with_store(|s| s.draw_attention_now(&actor.0, &repo, &day))?;
+    let drawn = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .draw_attention_now(&actor.0, &repo, &day)
+    })?;
     for env in &drawn {
         app.publish(env);
     }
     Ok(Json(json!({ "day": day, "drawn": drawn })))
+}
+
+#[derive(Deserialize, Default)]
+pub struct CredentialBody {
+    /// How long it lives, 1 to 480; an hour when absent.
+    pub minutes: Option<u32>,
+    /// The verbs to carry; everything the agent holds here when absent.
+    pub actions: Option<Vec<cairn_core::Capability>>,
+}
+
+pub async fn mint_session_credential(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Json(body): Json<CredentialBody>,
+) -> ApiResult<Json<Value>> {
+    let session = SessionId(id);
+    let (token, secret, scope, until, env) = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref()).mint_session_credential(
+            &actor.0,
+            &session,
+            body.minutes,
+            body.actions,
+        )
+    })?;
+    app.publish(&env);
+    Ok(Json(json!({
+        "id": token.0,
+        "token": secret,
+        "until": until,
+        "scope": scope,
+        "seq": env.seq.0,
+    })))
 }
 
 // ---- path leases ----
@@ -1073,8 +1203,10 @@ pub async fn declare_paths(
     Json(body): Json<DeclarePaths>,
 ) -> ApiResult<Json<Value>> {
     let session = SessionId(id);
-    let (overlaps, env) =
-        app.with_store(|s| s.declare_paths(&actor.0, &session, &body.repo, body.paths))?;
+    let (overlaps, env) = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .declare_paths(&actor.0, &session, &body.repo, body.paths)
+    })?;
     app.publish(&env);
     let mut response = committed(None, &env);
     response.0["overlaps"] = json!(overlaps);
@@ -1101,7 +1233,8 @@ pub async fn path_conflicts(
         .map(|p| p.trim().to_owned())
         .filter(|p| !p.is_empty())
         .collect();
-    let overlaps = app.with_store(|s| s.path_conflicts(&repo, &paths))?;
+    let overlaps =
+        app.with_store(|s| s.acting_as(actor.1.as_ref()).path_conflicts(&repo, &paths))?;
     Ok(Json(json!({ "paths": paths, "overlaps": overlaps })))
 }
 
@@ -1111,7 +1244,7 @@ pub async fn list_leases(
     Path(repo): Path<String>,
 ) -> ApiResult<Json<Value>> {
     readable_repo(&app, &actor, &repo)?;
-    let leases = app.with_store(|s| s.live_leases(&repo))?;
+    let leases = app.with_store(|s| s.acting_as(actor.1.as_ref()).live_leases(&repo))?;
     Ok(Json(json!(leases)))
 }
 
@@ -1136,6 +1269,7 @@ pub async fn lessons(
         readable_repo(&app, &actor, repo)?;
     }
     let mut lessons = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref());
         s.lessons(
             query.repo.as_deref(),
             query.q.as_deref().filter(|q| !q.trim().is_empty()),
@@ -1145,10 +1279,9 @@ pub async fn lessons(
     })?;
     // Searching across everything is searching across what you may see.
     lessons.retain(|lesson| {
-        lesson
-            .repo
-            .as_deref()
-            .is_none_or(|repo| app.with_store(|s| s.may_read(&actor.0, repo)))
+        lesson.repo.as_deref().is_none_or(|repo| {
+            app.with_store(|s| s.acting_as(actor.1.as_ref()).may_read(&actor.0, repo))
+        })
     });
     Ok(Json(json!(lessons)))
 }
@@ -1184,7 +1317,10 @@ pub async fn add_member(
     Path(team): Path<String>,
     Json(body): Json<Membership>,
 ) -> ApiResult<Json<Value>> {
-    let env = app.with_store(|s| s.add_team_member(&actor.0, &PrincipalId(team), &body.member))?;
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .add_team_member(&actor.0, &PrincipalId(team), &body.member)
+    })?;
     app.publish(&env);
     Ok(committed(None, &env))
 }
@@ -1195,8 +1331,10 @@ pub async fn remove_member(
     Path(team): Path<String>,
     Json(body): Json<Membership>,
 ) -> ApiResult<Json<Value>> {
-    let env =
-        app.with_store(|s| s.remove_team_member(&actor.0, &PrincipalId(team), &body.member))?;
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .remove_team_member(&actor.0, &PrincipalId(team), &body.member)
+    })?;
     app.publish(&env);
     Ok(committed(None, &env))
 }
@@ -1220,8 +1358,10 @@ pub async fn search(
     Query(params): Query<SearchParams>,
 ) -> ApiResult<Json<Value>> {
     let query = cairn_core::SearchQuery::parse(&params.q);
-    let hits =
-        app.with_store(|s| s.search(&actor.0, &query, params.limit.unwrap_or(50).min(200)))?;
+    let hits = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .search(&actor.0, &query, params.limit.unwrap_or(50).min(200))
+    })?;
     Ok(Json(json!({ "hits": hits })))
 }
 
@@ -1241,11 +1381,14 @@ pub async fn inbox(
     actor: Actor,
     Query(query): Query<InboxQuery>,
 ) -> ApiResult<Json<Value>> {
-    let mut notices = app.with_store(|s| s.inbox(&actor.0, query.limit.unwrap_or(100).min(500)))?;
+    let mut notices = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .inbox(&actor.0, query.limit.unwrap_or(100).min(500))
+    })?;
     if query.unread {
         notices.retain(|notice| !notice.read);
     }
-    let unread = app.with_store(|s| s.unread_count(&actor.0))?;
+    let unread = app.with_store(|s| s.acting_as(actor.1.as_ref()).unread_count(&actor.0))?;
     Ok(Json(json!({ "unread": unread, "notices": notices })))
 }
 
@@ -1264,8 +1407,10 @@ pub async fn mark_read(
     Json(body): Json<MarkRead>,
 ) -> ApiResult<Json<Value>> {
     match (body.all, body.seq) {
-        (true, _) => app.with_store(|s| s.mark_all_read(&actor.0))?,
-        (false, Some(seq)) => app.with_store(|s| s.mark_read(&actor.0, seq))?,
+        (true, _) => app.with_store(|s| s.acting_as(actor.1.as_ref()).mark_all_read(&actor.0))?,
+        (false, Some(seq)) => {
+            app.with_store(|s| s.acting_as(actor.1.as_ref()).mark_read(&actor.0, seq))?
+        }
         (false, None) => {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
@@ -1274,7 +1419,7 @@ pub async fn mark_read(
             ));
         }
     }
-    let unread = app.with_store(|s| s.unread_count(&actor.0))?;
+    let unread = app.with_store(|s| s.acting_as(actor.1.as_ref()).unread_count(&actor.0))?;
     Ok(Json(json!({ "unread": unread })))
 }
 
@@ -1310,7 +1455,10 @@ pub async fn set_policy(
 ) -> ApiResult<Json<Value>> {
     if body.preview {
         readable_repo(&app, &actor, &repo)?;
-        let previewed = app.with_store(|s| s.policy_preview(&repo, &body.policy))?;
+        let previewed = app.with_store(|s| {
+            s.acting_as(actor.1.as_ref())
+                .policy_preview(&repo, &body.policy)
+        })?;
         let would_block: Vec<Value> = previewed
             .iter()
             .filter(|(_, trace)| !trace.satisfied)
@@ -1333,7 +1481,10 @@ pub async fn set_policy(
             "would_block": would_block,
         })));
     }
-    let env = app.with_store(|s| s.set_policy(&actor.0, &repo, body.policy))?;
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .set_policy(&actor.0, &repo, body.policy)
+    })?;
     app.publish(&env);
     Ok(committed(Some(repo), &env))
 }
@@ -1355,7 +1506,10 @@ pub async fn set_mirror(
     Path(repo): Path<String>,
     Json(body): Json<MirrorBody>,
 ) -> ApiResult<Json<Value>> {
-    let env = app.with_store(|s| s.set_mirror(&actor.0, &repo, body.mirror, app.dev_identity()))?;
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref())
+            .set_mirror(&actor.0, &repo, body.mirror, app.dev_identity())
+    })?;
     app.publish(&env);
     Ok(committed(Some(repo), &env))
 }
@@ -1394,6 +1548,6 @@ pub async fn awaiting_verification(
     Path(repo): Path<String>,
 ) -> ApiResult<Json<Value>> {
     readable_repo(&app, &actor, &repo)?;
-    let waiting = app.with_store(|s| s.awaiting_verification(&repo))?;
+    let waiting = app.with_store(|s| s.acting_as(actor.1.as_ref()).awaiting_verification(&repo))?;
     Ok(Json(json!(waiting)))
 }

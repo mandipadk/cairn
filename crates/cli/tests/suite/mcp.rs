@@ -189,6 +189,9 @@ async fn full_agent_workflow_over_mcp() {
         .await;
     assert!(!is_error);
     let session_id = session["id"].as_str().unwrap().to_owned();
+    // The server drew a credential and says so; the secret stays with it.
+    assert!(session["credential"]["until"].is_string(), "{session}");
+    assert!(session["credential"].get("token").is_none(), "{session}");
 
     // A typed API refusal surfaces as a tool error with the kind intact.
     let (conflict, is_error) = mcp
@@ -219,7 +222,13 @@ async fn full_agent_workflow_over_mcp() {
         .map(|e| e["kind"].as_str().unwrap())
         .collect();
     assert!(kinds.contains(&"task_claimed"));
-    assert_eq!(kinds.last(), Some(&"session_ended"));
+    // The session ended, and the credential the server drew died with it.
+    let n = kinds.len();
+    assert_eq!(
+        &kinds[n - 2..],
+        ["session_ended", "session_credentials_revoked"],
+        "{kinds:?}"
+    );
 
     // Protocol edges: unknown method and unknown tool are typed errors.
     mcp.send(json!({ "jsonrpc": "2.0", "id": 9, "method": "resources/list" }));

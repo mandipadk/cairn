@@ -2769,6 +2769,25 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
                 }
             },
         ),
+        Event::SessionCredentialMinted {
+            session,
+            until,
+            scope,
+            ..
+        } => (
+            "dot idle",
+            html! {
+                b { (actor) } " drew a credential from session " code { (short(session.as_str())) }
+                " for " (scope.describe()) ", until " (day_of(until)) " " (clock_of(until))
+            },
+        ),
+        Event::SessionCredentialsRevoked { session, revoked } => (
+            "dot idle",
+            html! {
+                "session " code { (short(session.as_str())) } " ended; "
+                (revoked) @if *revoked == 1 { " credential died with it" } @else { " credentials died with it" }
+            },
+        ),
         Event::ThreadReplied { change, .. } => (
             "dot idle",
             html! {

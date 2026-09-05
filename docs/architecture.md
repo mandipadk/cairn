@@ -210,6 +210,19 @@ is itself a grant — an unscoped `admin` — held by whoever
 refusal names the missing capability and the exact grant that would fix
 it.
 
+An agent need not hold a standing token to work. A session - one run
+against a claimed task - can draw a credential of its own: a bearer token
+shown once, scoped to the task's repository and the verbs the agent holds
+there, alive for an hour unless asked otherwise and never past eight, and
+dead the moment the session ends. Scope is checked before any grant, on
+every call and every read, over the API and over git alike, so a leaked
+session credential buys exactly what it carried for exactly as long as it
+lived; the mint and the revocation are events. The MCP server draws one
+when it opens a session and works under it. A repository may insist
+(`agents_act_in_sessions`): agents' standing tokens are then refused for
+push, review and merge on it, while claiming a task and verifying stay
+open to them.
+
 A team is a principal that never acts: it holds grants, and its members
 act with them. Every authority check reads a principal's own grants and
 their teams' as one list, so joining a team is effective at once and

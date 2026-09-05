@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 14;
+const SCHEMA_VERSION: i64 = 15;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -168,9 +168,12 @@ CREATE TABLE IF NOT EXISTS tokens (
   label     TEXT,
   hash      TEXT NOT NULL,
   until_ts  TEXT,
-  revoked   INTEGER NOT NULL DEFAULT 0
+  revoked   INTEGER NOT NULL DEFAULT 0,
+  session   TEXT,
+  scope     TEXT
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_tokens_hash ON tokens (hash);
+CREATE INDEX IF NOT EXISTS idx_tokens_session ON tokens (session);
 
 CREATE TABLE IF NOT EXISTS grants (
   id      TEXT PRIMARY KEY,
@@ -418,6 +421,9 @@ pub struct Scoped {
 
 pub struct Store {
     pub(crate) conn: Connection,
+    /// The scope of the session credential this handle is acting under,
+    /// if any. Set per request by the server, cleared after.
+    pub(crate) acting: Option<crate::types::Scope>,
 }
 
 impl Store {
@@ -508,7 +514,7 @@ impl Store {
             rebuild_projections(&mut conn)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
-        Ok(Store { conn })
+        Ok(Store { conn, acting: None })
     }
 
     /// Events strictly after `cursor`, oldest first. The resume primitive:
@@ -825,7 +831,9 @@ fn record_scope(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             (repo_of_task(task.as_str())?, None)
         }
         SessionOpened { task, .. } => (repo_of_task(task.as_str())?, None),
-        SessionEnded { session, .. } => {
+        SessionEnded { session, .. }
+        | SessionCredentialMinted { session, .. }
+        | SessionCredentialsRevoked { session, .. } => {
             let task: Option<String> = tx
                 .prepare_cached("SELECT task FROM sessions WHERE id = ?")?
                 .query_row(params![session.as_str()], |row| row.get::<_, String>(0))
@@ -1483,6 +1491,34 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                 params![token.as_str(), principal.as_str(), label, hash, until],
             )?;
         }
+        Event::SessionCredentialMinted {
+            token,
+            session,
+            principal,
+            hash,
+            until,
+            scope,
+        } => {
+            tx.execute(
+                "INSERT INTO tokens (id, principal, label, hash, until_ts, session, scope)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    token.as_str(),
+                    principal.as_str(),
+                    format!("session:{}", session.as_str()),
+                    hash,
+                    until,
+                    session.as_str(),
+                    serde_json::to_string(scope).expect("scope serializes")
+                ],
+            )?;
+        }
+        Event::SessionCredentialsRevoked { session, .. } => {
+            tx.execute(
+                "UPDATE tokens SET revoked = 1 WHERE session = ?",
+                params![session.as_str()],
+            )?;
+        }
         Event::TokenRevoked { token } => {
             tx.execute(
                 "UPDATE tokens SET revoked = 1 WHERE id = ?",
@@ -2034,6 +2070,7 @@ mod concurrency_tests {
                     required_domains: Vec::new(),
                     require_concerns_resolved: true,
                     attention_budget: None,
+                    agents_act_in_sessions: false,
                 },
             )
             .unwrap();

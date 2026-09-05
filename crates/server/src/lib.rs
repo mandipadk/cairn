@@ -72,6 +72,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/tasks/{id}/sessions", post(routes::open_session))
         .route("/api/sessions/{id}", get(routes::get_session))
         .route("/api/sessions/{id}/end", post(routes::end_session))
+        .route(
+            "/api/sessions/{id}/credential",
+            post(routes::mint_session_credential),
+        )
         .route("/api/changes", post(routes::open_change))
         .route("/api/changes/{id}", get(routes::get_change))
         .route(

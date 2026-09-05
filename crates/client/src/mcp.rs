@@ -128,14 +128,41 @@ fn dispatch(client: &ApiClient, name: &str, args: &Value) -> Result<(u16, Value)
         "create_task" => client.post("/api/tasks", args),
         "get_task" => client.get(&format!("/api/tasks/{}", need(args, "task")?)),
         "claim_task" => client.post(&format!("/api/tasks/{}/claim", need(args, "task")?), args),
-        "open_session" => client.post(
-            &format!("/api/tasks/{}/sessions", need(args, "task")?),
-            args,
-        ),
-        "end_session" => client.post(
-            &format!("/api/sessions/{}/end", need(args, "session")?),
-            args,
-        ),
+        // Opening a session draws its credential and acts under it from
+        // here on; the agent never handles the secret. Ending the session
+        // goes back to the standing credential.
+        "open_session" => {
+            let task = need(args, "task")?;
+            (|| -> anyhow::Result<(u16, Value)> {
+                let (status, mut opened) =
+                    client.post(&format!("/api/tasks/{task}/sessions"), args)?;
+                if status == 200
+                    && let Some(id) = opened.get("id").and_then(Value::as_str).map(str::to_owned)
+                {
+                    let (drawn, credential) =
+                        client.post(&format!("/api/sessions/{id}/credential"), &json!({}))?;
+                    if drawn == 200
+                        && let Some(token) = credential.get("token").and_then(Value::as_str)
+                    {
+                        client.adopt(token);
+                        opened["credential"] = json!({
+                            "until": credential["until"],
+                            "scope": credential["scope"],
+                            "note": "this server now acts under the session's credential; it dies when the session ends",
+                        });
+                    }
+                }
+                Ok((status, opened))
+            })()
+        }
+        "end_session" => {
+            let out = client.post(
+                &format!("/api/sessions/{}/end", need(args, "session")?),
+                args,
+            );
+            client.restore();
+            out
+        }
         "list_changes" => client.get(&format!("/api/repos/{}/changes", need(args, "repo")?)),
         "get_change" => client.get(&format!("/api/changes/{}", need(args, "change")?)),
         "open_change" => client.post("/api/changes", args),
@@ -279,8 +306,10 @@ fn tool_definitions() -> Vec<Value> {
         ),
         tool(
             "open_session",
-            "Open a session: one run of work against a task you have claimed. Link your \
-             revisions to it for provenance.",
+            "Open a session: one run of work against a task you have claimed. From here on \
+             this server acts under a credential drawn from the session - scoped to the \
+             task's repository and your capabilities there, dead when the session ends - \
+             and your standing token is not sent again until then.",
             &["task"],
             json!({ "task": s("Task id you claimed") }),
         ),
@@ -549,9 +578,12 @@ fn tool_definitions() -> Vec<Value> {
 struct ApiClient {
     agent: ureq::Agent,
     base: String,
-    /// Header name and value: a Bearer token normally, the asserted
-    /// dev header against dev-mode servers.
-    auth: (&'static str, String),
+    /// The credential this process was started with.
+    standing: (&'static str, String),
+    /// Header name and value in use: the standing credential, or a
+    /// session's while one is open. A Bearer token normally, the
+    /// asserted dev header against dev-mode servers.
+    auth: std::sync::Mutex<(&'static str, String)>,
 }
 
 impl ApiClient {
@@ -569,15 +601,40 @@ impl ApiClient {
         ApiClient {
             agent: config.into(),
             base: server.trim_end_matches('/').to_owned(),
-            auth,
+            standing: auth.clone(),
+            auth: std::sync::Mutex::new(auth),
         }
+    }
+
+    fn header(&self) -> (&'static str, String) {
+        self.auth
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Act with a session's credential from here on.
+    fn adopt(&self, token: &str) {
+        *self
+            .auth
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            ("Authorization", format!("Bearer {token}"));
+    }
+
+    /// Back to the standing credential, once the session is over.
+    fn restore(&self) {
+        *self
+            .auth
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = self.standing.clone();
     }
 
     fn get(&self, path: &str) -> anyhow::Result<(u16, Value)> {
         let mut response = self
             .agent
             .get(format!("{}{path}", self.base))
-            .header(self.auth.0, &self.auth.1)
+            .header(self.header().0, &self.header().1)
             .call()?;
         Ok((response.status().as_u16(), response.body_mut().read_json()?))
     }
@@ -586,7 +643,7 @@ impl ApiClient {
         let mut response = self
             .agent
             .post(format!("{}{path}", self.base))
-            .header(self.auth.0, &self.auth.1)
+            .header(self.header().0, &self.header().1)
             .send_json(body)?;
         Ok((response.status().as_u16(), response.body_mut().read_json()?))
     }

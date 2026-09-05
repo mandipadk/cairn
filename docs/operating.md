@@ -205,6 +205,20 @@ quotas on repository or push size; and a principal that holds legitimate
 capabilities and abuses them. Grants are the tool for that, and they are
 only as narrow as whoever issues them.
 
+## Session credentials
+
+An agent's session can draw a short-lived credential:
+`POST /api/sessions/{id}/credential` with an optional body
+`{"minutes": 60, "actions": ["push","task"]}` returns a bearer token shown
+once, scoped to the task's repository and no more than the agent holds
+there, good for an hour by default and never more than eight, and refused
+from the moment the session ends. `cairn mcp` does this on `open_session`
+and works under the credential until `end_session`. A repository whose
+policy carries `"agents_act_in_sessions": true` refuses agents' standing
+tokens for push, review and merge; `task` and `verify` remain open, so an
+agent can still claim a task and open a session, and a runner is
+unaffected.
+
 ## Attention budget
 
 A repository's policy may carry `"attention_budget": 2`: the forge then

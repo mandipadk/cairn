@@ -154,6 +154,39 @@ str_enum!(
     }
 );
 
+/// What a session credential may do: these verbs, on one repository or
+/// anywhere, for one session. Checked before grants are consulted, so a
+/// leaked credential buys exactly this and nothing further.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Scope {
+    pub session: SessionId,
+    pub repo: Option<String>,
+    pub actions: Vec<Capability>,
+}
+
+impl Scope {
+    pub fn covers(&self, action: Capability, repo: Option<&str>) -> bool {
+        self.actions.contains(&action)
+            && match (&self.repo, repo) {
+                (None, _) => true,
+                (Some(mine), Some(target)) => mine == target,
+                (Some(_), None) => false,
+            }
+    }
+
+    pub fn describe(&self) -> String {
+        format!(
+            "{} on {}",
+            self.actions
+                .iter()
+                .map(|c| c.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            self.repo.as_deref().unwrap_or("every repository")
+        )
+    }
+}
+
 /// What a thread is about. Discussion is anchored to a thing in the
 /// graph, never to a page: a line of a revision's diff, a claim, a
 /// verdict, or the change as a whole.
@@ -425,6 +458,11 @@ pub struct Policy {
     /// draws nothing: attention stays a ranked list.
     #[serde(default)]
     pub attention_budget: Option<u32>,
+    /// Agents must act inside a session here: their standing tokens are
+    /// refused for push, review and merge, and only a session credential
+    /// is accepted. Claiming tasks and verifying stay open to them.
+    #[serde(default)]
+    pub agents_act_in_sessions: bool,
 }
 
 fn yes() -> bool {
@@ -440,6 +478,7 @@ impl Default for Policy {
             required_domains: Vec::new(),
             require_concerns_resolved: true,
             attention_budget: None,
+            agents_act_in_sessions: false,
         }
     }
 }

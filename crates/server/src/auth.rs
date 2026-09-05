@@ -28,14 +28,17 @@ use cairn_core::PrincipalId;
 pub const PRINCIPAL_HEADER: &str = "x-cairn-principal";
 
 /// The authenticated principal performing the request.
-pub struct Actor(pub PrincipalId);
+pub struct Actor(pub PrincipalId, pub Option<cairn_core::Scope>);
 
 fn unauthenticated(message: &str) -> ApiError {
     ApiError::new(StatusCode::UNAUTHORIZED, "unauthenticated", message)
 }
 
-pub(crate) fn resolve_bearer(app: &AppState, token: &str) -> Result<PrincipalId, ApiError> {
-    app.with_store(|s| s.principal_for_token(token))?
+pub(crate) fn resolve_bearer(
+    app: &AppState,
+    token: &str,
+) -> Result<(PrincipalId, Option<cairn_core::Scope>), ApiError> {
+    app.with_store(|s| s.identity_for_token(token))?
         .ok_or_else(|| unauthenticated("unknown or revoked token"))
 }
 
@@ -53,7 +56,7 @@ fn bearer(parts: &Parts) -> Option<&str> {
 /// Accepts the ephemeral push secret as well as a real token, and is
 /// used nowhere else — so a leaked hook credential buys a push it was
 /// already authorised to make, and nothing further.
-pub struct Pusher(pub PrincipalId);
+pub struct Pusher(pub PrincipalId, pub Option<cairn_core::Scope>);
 
 impl FromRequestParts<AppState> for Pusher {
     type Rejection = ApiError;
@@ -65,10 +68,10 @@ impl FromRequestParts<AppState> for Pusher {
         let Some(token) = bearer(parts) else {
             return Err(unauthenticated("the push hook must present its token"));
         };
-        if let Some(principal) = state.resolve_push_token(token) {
-            return Ok(Pusher(principal));
+        if let Some((principal, scope)) = state.resolve_push_token(token) {
+            return Ok(Pusher(principal, scope));
         }
-        resolve_bearer(state, token).map(Pusher)
+        resolve_bearer(state, token).map(|(principal, scope)| Pusher(principal, scope))
     }
 }
 
@@ -80,7 +83,7 @@ impl FromRequestParts<AppState> for Actor {
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         if let Some(token) = bearer(parts) {
-            return resolve_bearer(state, token).map(Actor);
+            return resolve_bearer(state, token).map(|(principal, scope)| Actor(principal, scope));
         }
 
         if state.dev_identity()
@@ -92,7 +95,7 @@ impl FromRequestParts<AppState> for Actor {
             let principal = PrincipalId::new(value).ok_or_else(|| {
                 unauthenticated(&format!("{value:?} is not a valid principal id"))
             })?;
-            return Ok(Actor(principal));
+            return Ok(Actor(principal, None));
         }
 
         Err(unauthenticated(
@@ -141,7 +144,7 @@ mod tests {
     async fn a_push_token_is_not_a_general_credential() {
         let (state, real) = forge();
         let ada = PrincipalId::new("ada").unwrap();
-        let push_token = state.issue_push_token(&ada);
+        let push_token = state.issue_push_token(&ada, None);
 
         assert_eq!(
             status_with_bearer(&state, "/api/principals/ada", &real).await,

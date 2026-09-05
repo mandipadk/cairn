@@ -688,6 +688,34 @@ pub(crate) mod raw {
     }
 
     /// Resolve a token secret's hash to its live owner.
+    /// Who a token belongs to and, for a session credential, what it may
+    /// do. Expired, revoked and invitation tokens resolve to nobody.
+    pub fn identity_for_token_hash(
+        conn: &Connection,
+        hash: &str,
+    ) -> CoreResult<Option<(PrincipalId, Option<crate::types::Scope>)>> {
+        let row: Option<(String, Option<String>)> = conn
+            .prepare_cached(
+                "SELECT principal, scope FROM tokens
+                  WHERE hash = ? AND revoked = 0 AND (until_ts IS NULL OR until_ts > ?)
+                    AND (label IS NULL OR label NOT LIKE 'invitation%')",
+            )?
+            .query_row(params![hash, jiff::Timestamp::now().to_string()], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .optional()?;
+        row.map(|(principal, scope)| {
+            let scope = scope
+                .map(|s| {
+                    serde_json::from_str(&s)
+                        .map_err(|e| corrupt(&format!("token of {principal}"), e))
+                })
+                .transpose()?;
+            Ok((PrincipalId(principal), scope))
+        })
+        .transpose()
+    }
+
     pub fn principal_for_token_hash(
         conn: &Connection,
         hash: &str,
@@ -1097,6 +1125,13 @@ impl Store {
     }
 
     /// Resolve a presented token secret to its live owner.
+    pub fn identity_for_token(
+        &self,
+        secret: &str,
+    ) -> CoreResult<Option<(PrincipalId, Option<crate::types::Scope>)>> {
+        raw::identity_for_token_hash(&self.conn, &crate::commands::token_hash(secret))
+    }
+
     pub fn principal_for_token(&self, secret: &str) -> CoreResult<Option<PrincipalId>> {
         raw::principal_for_token_hash(&self.conn, &crate::commands::token_hash(secret))
     }

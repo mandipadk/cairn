@@ -1679,7 +1679,9 @@ fn viewer_from(headers: &HeaderMap, state: &AppState) -> Option<Viewer> {
     // A pasted API token still works, for anyone driving the UI the way
     // a script would.
     else if let Some(token) = cookie(headers, TOKEN_COOKIE)
-        && let Ok(principal) = resolve_bearer(state, &token)
+        // Only a standing token signs a browser in: a session credential
+        // is scoped to one repository's work and the pages are not.
+        && let Ok((principal, None)) = resolve_bearer(state, &token)
     {
         principal
     } else if state.dev_identity()

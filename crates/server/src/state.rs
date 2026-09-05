@@ -39,6 +39,9 @@ pub(crate) struct GitContext {
 /// no handler holds the lock across an await. If fleet-scale contention
 /// ever bites, the event-sourced design ports to a pooled backend
 /// without touching the API layer.
+/// Who a hook acts as, under what scope, and since when.
+type PushToken = (PrincipalId, Option<cairn_core::Scope>, Instant);
+
 #[derive(Clone)]
 pub struct AppState {
     store: Arc<Mutex<Store>>,
@@ -67,7 +70,7 @@ pub struct AppState {
     public_url: Option<String>,
     /// Ephemeral secrets handed to proc-receive hooks, mapped to the
     /// authenticated pusher. In-memory only, expiring, never logged.
-    push_tokens: Arc<Mutex<HashMap<String, (PrincipalId, Instant)>>>,
+    push_tokens: Arc<Mutex<HashMap<String, PushToken>>>,
     /// Branches whose advance failed after the merge was recorded, so
     /// the next tick can replay the decision the log already holds.
     refs_needing_advancing: Arc<Mutex<Vec<(String, String)>>>,
@@ -194,26 +197,36 @@ impl AppState {
 
     /// Issue an ephemeral token for a hook spawned on behalf of an
     /// already-authenticated pusher.
-    pub(crate) fn issue_push_token(&self, principal: &PrincipalId) -> String {
+    pub(crate) fn issue_push_token(
+        &self,
+        principal: &PrincipalId,
+        scope: Option<&cairn_core::Scope>,
+    ) -> String {
         let secret = format!("cairnpush_{:032x}", rand::random::<u128>());
         let mut tokens = self
             .push_tokens
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        tokens.retain(|_, (_, issued)| issued.elapsed() < PUSH_TOKEN_TTL);
-        tokens.insert(secret.clone(), (principal.clone(), Instant::now()));
+        tokens.retain(|_, (_, _, issued)| issued.elapsed() < PUSH_TOKEN_TTL);
+        tokens.insert(
+            secret.clone(),
+            (principal.clone(), scope.cloned(), Instant::now()),
+        );
         secret
     }
 
-    pub(crate) fn resolve_push_token(&self, secret: &str) -> Option<PrincipalId> {
+    pub(crate) fn resolve_push_token(
+        &self,
+        secret: &str,
+    ) -> Option<(PrincipalId, Option<cairn_core::Scope>)> {
         let tokens = self
             .push_tokens
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         tokens
             .get(secret)
-            .filter(|(_, issued)| issued.elapsed() < PUSH_TOKEN_TTL)
-            .map(|(principal, _)| principal.clone())
+            .filter(|(_, _, issued)| issued.elapsed() < PUSH_TOKEN_TTL)
+            .map(|(principal, scope, _)| (principal.clone(), scope.clone()))
     }
 
     /// Enable git hosting. `base_url` must be reachable from spawned
@@ -402,7 +415,9 @@ impl AppState {
                 poisoned.into_inner()
             }
         };
-        f(&mut store)
+        let out = f(&mut store);
+        store.clear_acting();
+        out
     }
 
     /// Publish a committed event to live subscribers. Publishing is

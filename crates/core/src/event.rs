@@ -11,6 +11,7 @@ use crate::id::{
     VerificationId,
 };
 use crate::policy::PolicyTrace;
+use crate::types::Scope;
 use crate::types::{
     Anchor, Capability, ClaimKind, Disposition, Mirror, ObjectFormat, Policy, PrincipalKind,
     Resolution, ReviewDomain, SessionState, TaskState, ThreadKind, Visibility,
@@ -201,6 +202,22 @@ pub enum Event {
         paths: Vec<String>,
     },
 
+    /// A session drew a credential of its own: short-lived, scoped to the
+    /// task's repository and the verbs the agent holds there, dead when
+    /// the session ends. The secret is never recorded; its hash is.
+    SessionCredentialMinted {
+        token: TokenId,
+        session: SessionId,
+        principal: PrincipalId,
+        hash: String,
+        until: String,
+        scope: Scope,
+    },
+    /// The session ended and took its credentials with it.
+    SessionCredentialsRevoked {
+        session: SessionId,
+        revoked: i64,
+    },
     SessionEnded {
         session: SessionId,
         state: SessionState,
@@ -378,6 +395,8 @@ impl Event {
             Event::ThreadOpened { .. } => "thread_opened",
             Event::ThreadReplied { .. } => "thread_replied",
             Event::AttentionDrawn { .. } => "attention_drawn",
+            Event::SessionCredentialMinted { .. } => "session_credential_minted",
+            Event::SessionCredentialsRevoked { .. } => "session_credentials_revoked",
             Event::ThreadResolved { .. } => "thread_resolved",
             Event::ChangeEnqueued { .. } => "change_enqueued",
             Event::ChangeDequeued { .. } => "change_dequeued",

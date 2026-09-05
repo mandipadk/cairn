@@ -86,7 +86,10 @@ fn request_body(headers: &HeaderMap, body: Bytes) -> ApiResult<Vec<u8>> {
 /// The pushing principal. Normal path: HTTP Basic with the principal
 /// as username and a live API token as password. Dev mode additionally
 /// accepts a bare username or the dev header — asserted, not proven.
-fn push_principal(app: &AppState, headers: &HeaderMap) -> ApiResult<PrincipalId> {
+fn push_principal(
+    app: &AppState,
+    headers: &HeaderMap,
+) -> ApiResult<(PrincipalId, Option<cairn_core::Scope>)> {
     let unauthorized = || {
         ApiError::new(
             StatusCode::UNAUTHORIZED,
@@ -107,9 +110,9 @@ fn push_principal(app: &AppState, headers: &HeaderMap) -> ApiResult<PrincipalId>
         });
     if let Some((user, password)) = &basic {
         let claimed = PrincipalId::new(user).ok_or_else(unauthorized)?;
-        let owner = app.with_store(|s| s.principal_for_token(password))?;
-        match owner {
-            Some(owner) if owner == claimed => return Ok(claimed),
+        let identity = app.with_store(|s| s.identity_for_token(password))?;
+        match identity {
+            Some((owner, scope)) if owner == claimed => return Ok((claimed, scope)),
             Some(_) => return Err(unauthorized()),
             None if !app.dev_identity() => return Err(unauthorized()),
             None => {}
@@ -129,7 +132,7 @@ fn push_principal(app: &AppState, headers: &HeaderMap) -> ApiResult<PrincipalId>
         if app.with_store(|s| s.principal(&principal))?.is_none() {
             return Err(unauthorized());
         }
-        return Ok(principal);
+        return Ok((principal, None));
     }
     Err(unauthorized())
 }
@@ -142,7 +145,10 @@ fn push_principal(app: &AppState, headers: &HeaderMap) -> ApiResult<PrincipalId>
 /// because a mismatch there is usually somebody's mistake worth
 /// catching; refusing a *read* over it would only mean a valid
 /// credential is rejected for being labelled oddly.
-fn reader(app: &AppState, headers: &HeaderMap) -> ApiResult<PrincipalId> {
+fn reader(
+    app: &AppState,
+    headers: &HeaderMap,
+) -> ApiResult<(PrincipalId, Option<cairn_core::Scope>)> {
     let unauthorized = || {
         ApiError::new(
             StatusCode::UNAUTHORIZED,
@@ -162,9 +168,9 @@ fn reader(app: &AppState, headers: &HeaderMap) -> ApiResult<PrincipalId> {
                 .map(|(user, pass)| (user.to_owned(), pass.to_owned()))
         });
     if let Some((_, password)) = &basic
-        && let Some(owner) = app.with_store(|s| s.principal_for_token(password))?
+        && let Some(identity) = app.with_store(|s| s.identity_for_token(password))?
     {
-        return Ok(owner);
+        return Ok(identity);
     }
     if app.dev_identity() {
         return push_principal(app, headers);
@@ -197,8 +203,8 @@ fn may_read(app: &AppState, name: &str, headers: &HeaderMap) -> ApiResult<()> {
     }
     // Private, or not there at all — the caller learns which only by
     // authenticating first, and then only if it is theirs to see.
-    let who = reader(app, headers)?;
-    if repo.is_some() && app.with_store(|s| s.may_read(&who, name)) {
+    let (who, scope) = reader(app, headers)?;
+    if repo.is_some() && app.with_store(|s| s.acting_as(scope.as_ref()).may_read(&who, name)) {
         Ok(())
     } else {
         Err(ApiError::new(
@@ -305,7 +311,7 @@ pub async fn receive_pack(
         let name = repo_name(&repo);
         // Who first, then what: an anonymous caller learns nothing about
         // which repositories exist from the shape of the refusal.
-        let principal = push_principal(&app, &headers)?;
+        let (principal, scope) = push_principal(&app, &headers)?;
         ensure_repo(&app, &name)?;
         let input = request_body(&headers, body)?;
         // The hook inherits this env and records pushes back through
@@ -313,7 +319,10 @@ pub async fn receive_pack(
         // that outlives nothing but this receive-pack.
         let env = vec![
             ("CAIRN_SERVER".to_owned(), git.base_url.clone()),
-            ("CAIRN_TOKEN".to_owned(), app.issue_push_token(&principal)),
+            (
+                "CAIRN_TOKEN".to_owned(),
+                app.issue_push_token(&principal, scope.as_ref()),
+            ),
             ("CAIRN_REPO".to_owned(), name.clone()),
         ];
         let output = git
@@ -443,13 +452,15 @@ pub async fn record_push(
     let mut last_seq = 0i64;
     for commit in &body.commits {
         let existing = match &commit.change_id {
-            Some(key) => app.with_store(|s| s.change_by_key(&body.repo, key))?,
+            Some(key) => {
+                app.with_store(|s| s.acting_as(actor.1.as_ref()).change_by_key(&body.repo, key))?
+            }
             None => None,
         };
         let (change, number, created) = match existing {
             Some(change) if change.state == ChangeState::Open && change.target == body.target => {
                 let unchanged = app
-                    .with_store(|s| s.revisions(&change.id))?
+                    .with_store(|s| s.acting_as(actor.1.as_ref()).revisions(&change.id))?
                     .last()
                     .is_some_and(|r| r.commit_oid == commit.commit_oid);
                 if unchanged {
@@ -484,12 +495,14 @@ pub async fn record_push(
                     parent_change: parent.clone(),
                     ..cairn_core::ChangeSpec::new(&body.repo, &body.target, &commit.title)
                 };
-                let (id, number, env) = app.with_store(|s| s.open_change(&actor.0, spec))?;
+                let (id, number, env) =
+                    app.with_store(|s| s.acting_as(actor.1.as_ref()).open_change(&actor.0, spec))?;
                 app.publish(&env);
                 (id, number, true)
             }
         };
         let (revision, pushed) = app.with_store(|s| {
+            s.acting_as(actor.1.as_ref());
             s.push_revision(&actor.0, &change, &commit.commit_oid, None, &commit.message)
         })?;
         app.publish(&pushed);

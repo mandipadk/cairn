@@ -56,6 +56,6 @@ pub use types::{
     BrowserSession, Capability, Change, ChangeSpec, ChangeState, Claim, ClaimKind, ClaimSpec,
     Contact, Disposition, Grant, Independence, Lease, Lesson, Mirror, Notice, ObjectFormat,
     PasskeyRecord, Policy, Principal, PrincipalKind, Provenance, QueueEntry, Reply, Repo,
-    Resolution, Resolved, ReviewDomain, Revision, Session, SessionState, Side, Task, TaskState,
-    Thread, ThreadKind, TokenInfo, Verdict, Verification, Visibility,
+    Resolution, Resolved, ReviewDomain, Revision, Scope, Session, SessionState, Side, Task,
+    TaskState, Thread, ThreadKind, TokenInfo, Verdict, Verification, Visibility,
 };

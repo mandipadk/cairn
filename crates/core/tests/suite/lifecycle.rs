@@ -1475,6 +1475,7 @@ fn a_repo_chooses_the_rules_its_work_must_meet() {
         required_domains: vec![ReviewDomain::Security],
         require_concerns_resolved: true,
         attention_budget: None,
+        agents_act_in_sessions: false,
         ..cairn_core::Policy::default()
     };
 
@@ -1544,6 +1545,7 @@ fn a_repo_chooses_the_rules_its_work_must_meet() {
                 required_domains: vec![],
                 require_concerns_resolved: true,
                 attention_budget: None,
+                agents_act_in_sessions: false,
             },
         )
         .unwrap();

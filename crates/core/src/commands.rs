@@ -19,7 +19,7 @@ use crate::store::{Store, append};
 use crate::types::{
     Anchor, BrowserSession, Capability, Change, ChangeSpec, ChangeState, ClaimSpec, Contact,
     Disposition, Mirror, ObjectFormat, PasskeyRecord, Policy, Principal, PrincipalKind, Resolution,
-    ReviewDomain, SessionState, TaskState, ThreadKind, Visibility,
+    ReviewDomain, Scope, SessionState, TaskState, ThreadKind, Visibility,
 };
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
@@ -50,11 +50,42 @@ fn ensure_actor(tx: &Transaction, actor: &PrincipalId) -> CoreResult<Principal> 
 /// capability and how to obtain it, so an agent can act on them.
 fn authorize(
     tx: &Transaction,
+    acting: Option<&Scope>,
     actor: &PrincipalId,
     action: Capability,
     repo: Option<&str>,
 ) -> CoreResult<Principal> {
     let principal = ensure_actor(tx, actor)?;
+
+    // A session credential is checked before any grant: it carries what
+    // it carries, and a leak of it buys no more than that.
+    if let Some(scope) = acting
+        && !scope.covers(action, repo)
+    {
+        return Err(CoreError::Forbidden(format!(
+            "this session credential carries {}; '{}' on {} is outside it",
+            scope.describe(),
+            action.as_str(),
+            repo.unwrap_or("the forge")
+        )));
+    }
+    // A repository may insist that agents work inside sessions, so no
+    // standing token of theirs can push, review or merge on it.
+    if acting.is_none()
+        && principal.kind == PrincipalKind::Agent
+        && matches!(
+            action,
+            Capability::Push | Capability::Review | Capability::Merge
+        )
+        && let Some(name) = repo
+        && raw::repo(tx, name)?.is_some_and(|r| r.policy.agents_act_in_sessions)
+    {
+        return Err(CoreError::Forbidden(format!(
+            "{name} requires agents to act inside a session: claim a task, open a session on it \
+             (POST /api/tasks/{{task}}/sessions), and act with its credential \
+             (POST /api/sessions/{{session}}/credential)"
+        )));
+    }
 
     // Ownership is the one authority nobody is granted: it comes with
     // having made the thing. Everything else — for humans exactly as for
@@ -96,7 +127,12 @@ fn authorize(
 /// the change's owner, or anyone holding a capability on the repository.
 /// Reading alone is not enough - a concern is a commitment the change
 /// then carries, and that is not for passers-by to impose.
-fn may_discuss(tx: &Transaction, actor: &PrincipalId, change: &Change) -> CoreResult<Principal> {
+fn may_discuss(
+    tx: &Transaction,
+    acting: Option<&Scope>,
+    actor: &PrincipalId,
+    change: &Change,
+) -> CoreResult<Principal> {
     let principal = ensure_actor(tx, actor)?;
     if change.owner == *actor {
         return Ok(principal);
@@ -110,7 +146,7 @@ fn may_discuss(tx: &Transaction, actor: &PrincipalId, change: &Change) -> CoreRe
     ];
     if any
         .iter()
-        .any(|&c| authorize(tx, actor, c, Some(&change.repo)).is_ok())
+        .any(|&c| authorize(tx, acting, actor, c, Some(&change.repo)).is_ok())
     {
         return Ok(principal);
     }
@@ -293,7 +329,7 @@ impl Store {
         }
         let bootstrap = raw::principal_count(&tx)? == 0 && actor == id;
         if !bootstrap {
-            authorize(&tx, actor, Capability::Admin, None)?;
+            authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
         }
         let env = append(
             &tx,
@@ -339,7 +375,7 @@ impl Store {
                     "{actor} may not set another principal's password"
                 )));
             }
-            authorize(&tx, actor, Capability::Admin, None)?;
+            authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
         }
         // Long enough to resist guessing, short enough that a password
         // manager's output always fits.
@@ -1119,7 +1155,13 @@ impl Store {
     /// request costs nothing and fetches nothing.
     pub fn check_import(&self, actor: &PrincipalId, repo: &str) -> CoreResult<()> {
         let tx = self.conn.unchecked_transaction()?;
-        authorize(&tx, actor, Capability::Admin, Some(repo))?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Admin,
+            Some(repo),
+        )?;
         raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
         Ok(())
     }
@@ -1143,7 +1185,13 @@ impl Store {
         allow_local: bool,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        authorize(&tx, actor, Capability::Admin, Some(repo))?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Admin,
+            Some(repo),
+        )?;
         raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
         require(valid_branch(branch), || {
             format!("{branch:?} is not a valid branch name")
@@ -1177,6 +1225,13 @@ impl Store {
     /// "read" capability, because being trusted to push to a repository
     /// you cannot read would be a strange thing to arrange.
     pub fn may_read(&self, actor: &PrincipalId, repo: &str) -> bool {
+        // A session credential sees its own repository and nothing else.
+        if let Some(scope) = &self.acting
+            && let Some(mine) = &scope.repo
+            && mine != repo
+        {
+            return false;
+        }
         let Ok(Some(record)) = raw::repo(&self.conn, repo) else {
             return false;
         };
@@ -1264,7 +1319,13 @@ impl Store {
         to: &PrincipalId,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        authorize(&tx, actor, Capability::Admin, Some(repo))?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Admin,
+            Some(repo),
+        )?;
         let record =
             raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
         require(record.owner != *to, || "they already own it".to_owned())?;
@@ -1316,7 +1377,13 @@ impl Store {
             format!("{repo} is not on offer")
         })?;
         if record.pending_owner.as_ref() != Some(actor) {
-            authorize(&tx, actor, Capability::Admin, Some(repo))?;
+            authorize(
+                &tx,
+                self.acting.as_ref(),
+                actor,
+                Capability::Admin,
+                Some(repo),
+            )?;
         }
         let env = append(
             &tx,
@@ -1339,7 +1406,7 @@ impl Store {
         member: &PrincipalId,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        authorize(&tx, actor, Capability::Admin, None)?;
+        authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
         let team_record = raw::principal(&tx, team.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("principal {team}")))?;
         require(team_record.kind == PrincipalKind::Team, || {
@@ -1369,7 +1436,7 @@ impl Store {
         member: &PrincipalId,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        authorize(&tx, actor, Capability::Admin, None)?;
+        authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
         require(
             raw::members_of(&tx, team.as_str())?
                 .iter()
@@ -1395,7 +1462,13 @@ impl Store {
         visibility: Visibility,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        authorize(&tx, actor, Capability::Admin, Some(repo))?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Admin,
+            Some(repo),
+        )?;
         raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
         let env = append(
             &tx,
@@ -1418,7 +1491,13 @@ impl Store {
         policy: Policy,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        authorize(&tx, actor, Capability::Admin, Some(repo))?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Admin,
+            Some(repo),
+        )?;
         raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
         require(policy.required_domains.len() <= MAX_ITEMS, || {
             format!("at most {MAX_ITEMS} required domains")
@@ -1449,7 +1528,7 @@ impl Store {
         // The push uses the credential whoever runs the forge configured,
         // so where it goes is theirs to decide, not a repository owner's:
         // an owner pointing a mirror at their own host would be handed it.
-        authorize(&tx, actor, Capability::Admin, None)?;
+        authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
         raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
         if let Some(mirror) = &mirror {
             bounded("mirror url", &mirror.url, MAX_TITLE)?;
@@ -1515,7 +1594,7 @@ impl Store {
         parent: Option<&TaskId>,
     ) -> CoreResult<(TaskId, Envelope)> {
         let tx = self.conn.transaction()?;
-        authorize(&tx, actor, Capability::Task, repo)?;
+        authorize(&tx, self.acting.as_ref(), actor, Capability::Task, repo)?;
         require(!title.trim().is_empty(), || {
             "task title must not be empty".into()
         })?;
@@ -1551,7 +1630,13 @@ impl Store {
         let tx = self.conn.transaction()?;
         let current = raw::task(&tx, task.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("task {task}")))?;
-        authorize(&tx, actor, Capability::Task, current.repo.as_deref())?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Task,
+            current.repo.as_deref(),
+        )?;
         if current.state != TaskState::Open {
             return Err(CoreError::Conflict(format!(
                 "task {task} is {}, not open",
@@ -1572,7 +1657,13 @@ impl Store {
         let tx = self.conn.transaction()?;
         let current = raw::task(&tx, task.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("task {task}")))?;
-        authorize(&tx, actor, Capability::Task, current.repo.as_deref())?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Task,
+            current.repo.as_deref(),
+        )?;
         require(state != TaskState::Claimed, || {
             "use claim_task to claim; claiming records who claimed".into()
         })?;
@@ -1599,7 +1690,13 @@ impl Store {
         let tx = self.conn.transaction()?;
         let current = raw::task(&tx, task.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("task {task}")))?;
-        authorize(&tx, actor, Capability::Task, current.repo.as_deref())?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Task,
+            current.repo.as_deref(),
+        )?;
         if current.state != TaskState::Claimed || current.claimed_by.as_ref() != Some(actor) {
             return Err(CoreError::Conflict(format!(
                 "task {task} must be claimed by {actor} before opening a session"
@@ -1616,6 +1713,115 @@ impl Store {
         )?;
         tx.commit()?;
         Ok((session, env))
+    }
+
+    /// Act under a session credential's scope for the calls that follow
+    /// on this handle; `None` is a standing credential. The server sets
+    /// it per request and clears it afterwards.
+    pub fn acting_as(&mut self, scope: Option<&Scope>) -> &mut Self {
+        self.acting = scope.cloned();
+        self
+    }
+
+    pub fn clear_acting(&mut self) {
+        self.acting = None;
+    }
+
+    /// Draw a credential from an active session: a bearer token shown
+    /// once, scoped to the task's repository and the verbs the agent
+    /// holds there (or fewer, on request), alive for an hour unless said
+    /// otherwise and never past eight, and dead when the session ends.
+    /// Under a session credential, a new one can only be narrower.
+    pub fn mint_session_credential(
+        &mut self,
+        actor: &PrincipalId,
+        session: &SessionId,
+        minutes: Option<u32>,
+        actions: Option<Vec<Capability>>,
+    ) -> CoreResult<(TokenId, String, Scope, String, Envelope)> {
+        let tx = self.conn.transaction()?;
+        ensure_actor(&tx, actor)?;
+        let current = raw::session(&tx, session.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("session {session}")))?;
+        if current.agent != *actor {
+            return Err(CoreError::Forbidden(format!(
+                "session {session} belongs to {}; only its agent draws credentials from it",
+                current.agent
+            )));
+        }
+        if current.state != SessionState::Active {
+            return Err(CoreError::Conflict(format!(
+                "session {session} has ended; its credentials died with it"
+            )));
+        }
+        let task = raw::task(&tx, current.task.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("task {}", current.task)))?;
+        let repo = task.repo.clone();
+        let now = jiff::Timestamp::now();
+        let now_text = now.to_string();
+        let grants = raw::effective_grants(&tx, actor.as_str())?;
+        let held: Vec<Capability> = [
+            Capability::Task,
+            Capability::Push,
+            Capability::Review,
+            Capability::Verify,
+            Capability::Merge,
+        ]
+        .into_iter()
+        .filter(|&c| raw::grants_cover(&grants, c, repo.as_deref(), &now_text))
+        .filter(|&c| {
+            self.acting
+                .as_ref()
+                .is_none_or(|s| s.covers(c, repo.as_deref()))
+        })
+        .collect();
+        let actions = match actions {
+            Some(wanted) => {
+                for c in &wanted {
+                    require(held.contains(c), || {
+                        format!(
+                            "a credential cannot carry more than its holder: {actor} does not hold '{}' on {}",
+                            c.as_str(),
+                            repo.as_deref().unwrap_or("every repository")
+                        )
+                    })?;
+                }
+                wanted
+            }
+            None => held,
+        };
+        require(!actions.is_empty(), || {
+            format!(
+                "{actor} holds nothing on {} to put in a credential",
+                repo.as_deref().unwrap_or("any repository")
+            )
+        })?;
+        let minutes = minutes.unwrap_or(60);
+        require((1..=480).contains(&minutes), || {
+            "a session credential lives between 1 minute and 8 hours".into()
+        })?;
+        let until = (now + jiff::Span::new().minutes(i64::from(minutes))).to_string();
+        let scope = Scope {
+            session: session.clone(),
+            repo,
+            actions,
+        };
+        let token = TokenId::generate();
+        let secret = random_token_secret();
+        let env = append(
+            &tx,
+            actor,
+            Event::SessionCredentialMinted {
+                token: token.clone(),
+                session: session.clone(),
+                principal: actor.clone(),
+                hash: token_hash(&secret),
+                until: until.clone(),
+                scope: scope.clone(),
+            },
+        )?;
+        tx.commit()?;
+        Ok((token, secret, scope, until, env))
     }
 
     /// End a session. The outcome text is mandatory, for failures most of
@@ -1640,7 +1846,13 @@ impl Store {
             .ok_or_else(|| CoreError::NotFound(format!("session {session}")))?;
         let task = raw::task(&tx, current.task.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("task {}", current.task)))?;
-        authorize(&tx, actor, Capability::Task, task.repo.as_deref())?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Task,
+            task.repo.as_deref(),
+        )?;
         if current.agent != *actor {
             return Err(CoreError::Conflict(format!(
                 "session {session} belongs to {}",
@@ -1661,6 +1873,22 @@ impl Store {
                 outcome: outcome.to_owned(),
             },
         )?;
+        // Whatever credentials the session drew die with it, on the record.
+        let live: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM tokens WHERE session = ? AND revoked = 0",
+            rusqlite::params![session.as_str()],
+            |row| row.get(0),
+        )?;
+        if live > 0 {
+            append(
+                &tx,
+                actor,
+                Event::SessionCredentialsRevoked {
+                    session: session.clone(),
+                    revoked: live,
+                },
+            )?;
+        }
         tx.commit()?;
         Ok(env)
     }
@@ -1671,7 +1899,13 @@ impl Store {
         spec: ChangeSpec,
     ) -> CoreResult<(ChangeId, i64, Envelope)> {
         let tx = self.conn.transaction()?;
-        authorize(&tx, actor, Capability::Push, Some(&spec.repo))?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Push,
+            Some(&spec.repo),
+        )?;
         raw::repo(&tx, &spec.repo)?
             .ok_or_else(|| CoreError::NotFound(format!("repo {}", spec.repo)))?;
         require(valid_branch(&spec.target), || {
@@ -1744,7 +1978,13 @@ impl Store {
         })?;
         let current = raw::change(&tx, change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
-        authorize(&tx, actor, Capability::Push, Some(&current.repo))?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Push,
+            Some(&current.repo),
+        )?;
         if current.state != ChangeState::Open {
             return Err(CoreError::Conflict(format!(
                 "change {change} is {}, not open",
@@ -1800,7 +2040,13 @@ impl Store {
         }
         let current = raw::change(&tx, change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
-        authorize(&tx, actor, Capability::Push, Some(&current.repo))?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Push,
+            Some(&current.repo),
+        )?;
         require((1..=current.latest_revision).contains(&revision), || {
             format!("change {change} has no revision {revision}")
         })?;
@@ -1839,7 +2085,13 @@ impl Store {
         bounded("verdict rationale", rationale, MAX_TEXT)?;
         let current = raw::change(&tx, change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
-        authorize(&tx, actor, Capability::Review, Some(&current.repo))?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Review,
+            Some(&current.repo),
+        )?;
         if current.state != ChangeState::Open {
             return Err(CoreError::Conflict(format!(
                 "change {change} is {}, not open",
@@ -1934,7 +2186,13 @@ impl Store {
     ) -> CoreResult<Vec<Envelope>> {
         {
             let tx = self.conn.transaction()?;
-            authorize(&tx, actor, Capability::Merge, Some(repo))?;
+            authorize(
+                &tx,
+                self.acting.as_ref(),
+                actor,
+                Capability::Merge,
+                Some(repo),
+            )?;
         }
         self.draw_attention(repo, day)
     }
@@ -1959,7 +2217,7 @@ impl Store {
         bounded("thread", body, MAX_TEXT)?;
         let current = raw::change(&tx, change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
-        may_discuss(&tx, actor, &current)?;
+        may_discuss(&tx, self.acting.as_ref(), actor, &current)?;
         if current.state != ChangeState::Open {
             return Err(CoreError::Conflict(format!(
                 "change {change} is {}, not open",
@@ -2035,7 +2293,7 @@ impl Store {
         if existing.by == *actor {
             ensure_actor(&tx, actor)?;
         } else {
-            may_discuss(&tx, actor, &current)?;
+            may_discuss(&tx, self.acting.as_ref(), actor, &current)?;
         }
         let env = append(
             &tx,
@@ -2077,7 +2335,14 @@ impl Store {
             .ok_or_else(|| CoreError::NotFound(format!("change {}", existing.change)))?;
         let opener = existing.by == *actor;
         let owner_or_reviewer = current.owner == *actor
-            || authorize(&tx, actor, Capability::Review, Some(&current.repo)).is_ok();
+            || authorize(
+                &tx,
+                self.acting.as_ref(),
+                actor,
+                Capability::Review,
+                Some(&current.repo),
+            )
+            .is_ok();
         match how {
             Resolution::Withdrawn if !opener => {
                 return Err(CoreError::Forbidden(
@@ -2099,7 +2364,7 @@ impl Store {
         if opener {
             ensure_actor(&tx, actor)?;
         } else {
-            may_discuss(&tx, actor, &current)?;
+            may_discuss(&tx, self.acting.as_ref(), actor, &current)?;
         }
         let revision = match how {
             Resolution::Fixed => {
@@ -2161,7 +2426,13 @@ impl Store {
         raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
         let current = raw::session(&tx, session.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("session {session}")))?;
-        authorize(&tx, actor, Capability::Push, Some(repo))?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Push,
+            Some(repo),
+        )?;
         if current.agent != *actor {
             return Err(CoreError::Conflict(format!(
                 "session {session} belongs to {}",
@@ -2218,7 +2489,13 @@ impl Store {
         let tx = self.conn.transaction()?;
         let current = raw::change(&tx, change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
-        authorize(&tx, actor, Capability::Merge, Some(&current.repo))?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Merge,
+            Some(&current.repo),
+        )?;
         let env = append(
             &tx,
             actor,
@@ -2256,7 +2533,13 @@ impl Store {
             .ok_or_else(|| CoreError::NotFound(format!("claim {claim}")))?;
         let change = raw::change(&tx, current.change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {}", current.change)))?;
-        authorize(&tx, actor, Capability::Verify, Some(&change.repo))?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Verify,
+            Some(&change.repo),
+        )?;
         if current.by == *actor {
             return Err(CoreError::Conflict(format!(
                 "{actor} made claim {claim}; verification must be independent"
@@ -2307,7 +2590,13 @@ impl Store {
         let tx = self.conn.transaction()?;
         let current = raw::change(&tx, change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
-        authorize(&tx, actor, Capability::Merge, Some(&current.repo))?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Merge,
+            Some(&current.repo),
+        )?;
         if current.state != ChangeState::Open {
             return Err(CoreError::Conflict(format!(
                 "change {change} is {}, not open",
@@ -2348,7 +2637,13 @@ impl Store {
         let tx = self.conn.transaction()?;
         let current = raw::change(&tx, change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
-        authorize(&tx, actor, Capability::Merge, Some(&current.repo))?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Merge,
+            Some(&current.repo),
+        )?;
         if current.state != ChangeState::Open {
             return Err(CoreError::Conflict(format!(
                 "change {change} is {}, not open",
@@ -2405,7 +2700,13 @@ impl Store {
         let current = raw::change(&tx, change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
         if entry.enqueued_by != *actor && current.owner != *actor {
-            authorize(&tx, actor, Capability::Merge, Some(&current.repo))?;
+            authorize(
+                &tx,
+                self.acting.as_ref(),
+                actor,
+                Capability::Merge,
+                Some(&current.repo),
+            )?;
         } else {
             ensure_actor(&tx, actor)?;
         }
@@ -2434,7 +2735,13 @@ impl Store {
         bounded("abandon reason", reason, MAX_TEXT)?;
         let current = raw::change(&tx, change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
-        authorize(&tx, actor, Capability::Push, Some(&current.repo))?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Push,
+            Some(&current.repo),
+        )?;
         if current.state != ChangeState::Open {
             return Err(CoreError::Conflict(format!(
                 "change {change} is {}, not open",
@@ -2473,7 +2780,7 @@ impl Store {
         // somebody else is running the forge, not being a person; the
         // old rule let any signed-in human mint an admin's token.
         if actor != principal {
-            authorize(&tx, actor, Capability::Admin, None)?;
+            authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
         }
         let token = TokenId::generate();
         let secret = random_token_secret();
@@ -2499,7 +2806,7 @@ impl Store {
         let current = raw::token(&tx, token.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("token {token}")))?;
         if current.principal != *actor {
-            authorize(&tx, actor, Capability::Admin, None)?;
+            authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
         }
         if current.revoked {
             return Err(CoreError::Conflict(format!(
@@ -2537,7 +2844,7 @@ impl Store {
         // You cannot hand out what you do not hold. Owning the
         // repository is enough for a grant scoped to it; anything wider
         // needs the admin grant that running the forge consists of.
-        authorize(&tx, actor, Capability::Admin, repo)?;
+        authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, repo)?;
         raw::principal(&tx, grantee.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("principal {grantee}")))?;
         if let Some(repo) = repo {
@@ -2615,7 +2922,7 @@ impl Store {
         let current = raw::grant(&tx, grant.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("grant {grant}")))?;
         if current.grantor != *actor && current.grantee != *actor {
-            authorize(&tx, actor, Capability::Admin, None)?;
+            authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
         }
         if current.revoked {
             return Err(CoreError::Conflict(format!(

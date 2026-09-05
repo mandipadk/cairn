@@ -411,6 +411,10 @@ impl Store {
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(EVENT_SCHEMA)?;
         conn.execute_batch(OPERATIONAL_SCHEMA)?;
+        // Operational tables are not rebuilt from the log, so a new
+        // column is added in place, once, and only if it is missing.
+        ensure_column(&conn, "browser_sessions", "last_seen", "TEXT")?;
+        ensure_column(&conn, "browser_sessions", "agent", "TEXT")?;
 
         // Projections are derived, so a schema change is not a
         // migration problem: drop them and replay the log. This is the
@@ -1987,7 +1991,7 @@ mod credential_tests {
         store
             .set_password(&ada, &ada, "correct horse battery staple")
             .unwrap();
-        let secret = store.start_session(&ada, 14).unwrap();
+        let secret = store.start_session(&ada, 14, None).unwrap();
         drop(store);
 
         // A new process, the same database.
@@ -2013,7 +2017,7 @@ mod credential_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("forge.db");
         let (mut store, ada) = human(&path);
-        let secret = store.start_session(&ada, 14).unwrap();
+        let secret = store.start_session(&ada, 14, None).unwrap();
 
         let stored: String = store
             .conn
@@ -2032,7 +2036,7 @@ mod credential_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("forge.db");
         let (mut store, ada) = human(&path);
-        let secret = store.start_session(&ada, 14).unwrap();
+        let secret = store.start_session(&ada, 14, None).unwrap();
         store
             .conn
             .execute(
@@ -2096,7 +2100,7 @@ mod credential_tests {
         store
             .set_password(&ada, &ada, "correct horse battery staple")
             .unwrap();
-        let secret = store.start_session(&ada, 14).unwrap();
+        let secret = store.start_session(&ada, 14, None).unwrap();
 
         rebuild_projections(&mut store.conn).unwrap();
 
@@ -2137,4 +2141,18 @@ mod legacy_payload_tests {
             "a credential must not be republished: {served}"
         );
     }
+}
+
+/// Add a column to an operational table if it is not there yet.
+fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> CoreResult<()> {
+    let present = conn
+        .prepare(&format!("PRAGMA table_info({table})"))?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|c| c == column);
+    if !present {
+        conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl};"))?;
+    }
+    Ok(())
 }

@@ -17,8 +17,9 @@ use crate::policy::{self, PolicyTrace};
 use crate::queries::raw;
 use crate::store::{Store, append};
 use crate::types::{
-    Capability, ChangeSpec, ChangeState, ClaimSpec, Contact, Disposition, Mirror, ObjectFormat,
-    Policy, Principal, PrincipalKind, ReviewDomain, SessionState, TaskState, Visibility,
+    BrowserSession, Capability, ChangeSpec, ChangeState, ClaimSpec, Contact, Disposition, Mirror,
+    ObjectFormat, Policy, Principal, PrincipalKind, ReviewDomain, SessionState, TaskState,
+    Visibility,
 };
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
@@ -334,7 +335,12 @@ impl Store {
     /// credentials. Sessions persist, so a deploy does not sign everyone
     /// out, and they carry an expiry so an abandoned one stops working
     /// on its own.
-    pub fn start_session(&mut self, principal: &PrincipalId, ttl_days: i64) -> CoreResult<String> {
+    pub fn start_session(
+        &mut self,
+        principal: &PrincipalId,
+        ttl_days: i64,
+        agent: Option<&str>,
+    ) -> CoreResult<String> {
         // A session secret is a credential of the same weight as a
         // token, so it is generated the same way.
         let secret = format!("s{}", random_token_secret());
@@ -349,17 +355,94 @@ impl Store {
             "DELETE FROM browser_sessions WHERE expires <= ?",
             rusqlite::params![now.to_string()],
         )?;
+        // Which browser, roughly, so the owner can tell sessions apart.
+        // Truncated: a user agent is untrusted input like any other.
+        let agent: Option<String> = agent.map(|a| a.chars().take(200).collect());
         tx.execute(
-            "INSERT INTO browser_sessions (id_hash, principal, created, expires) VALUES (?, ?, ?, ?)",
+            "INSERT INTO browser_sessions (id_hash, principal, created, expires, last_seen, agent)
+             VALUES (?, ?, ?, ?, ?, ?)",
             rusqlite::params![
                 token_hash(&secret),
                 principal.as_str(),
                 now.to_string(),
-                expires.to_string()
+                expires.to_string(),
+                now.to_string(),
+                agent
             ],
         )?;
         tx.commit()?;
         Ok(secret)
+    }
+
+    /// Note that a session was just used. Written at most every few
+    /// minutes, so an ordinary page view does not become a write.
+    pub fn touch_session(&mut self, secret: &str) -> CoreResult<()> {
+        let now = jiff::Timestamp::now();
+        let stale = (now - jiff::Span::new().minutes(5)).to_string();
+        self.conn.execute(
+            "UPDATE browser_sessions SET last_seen = ?
+              WHERE id_hash = ? AND (last_seen IS NULL OR last_seen < ?)",
+            rusqlite::params![now.to_string(), token_hash(secret), stale],
+        )?;
+        Ok(())
+    }
+
+    /// Every live session this principal holds, marking the one asking.
+    pub fn sessions_of(
+        &self,
+        principal: &PrincipalId,
+        current: Option<&str>,
+    ) -> CoreResult<Vec<BrowserSession>> {
+        let current_hash = current.map(token_hash);
+        let now = jiff::Timestamp::now().to_string();
+        Ok(self
+            .conn
+            .prepare_cached(
+                "SELECT id_hash, created, expires, last_seen, agent FROM browser_sessions
+                  WHERE principal = ? AND expires > ? ORDER BY last_seen DESC, created DESC",
+            )?
+            .query_map(rusqlite::params![principal.as_str(), now], |row| {
+                let hash: String = row.get(0)?;
+                Ok(BrowserSession {
+                    current: current_hash.as_deref() == Some(hash.as_str()),
+                    id: hash.chars().take(12).collect(),
+                    created: row.get(1)?,
+                    expires: row.get(2)?,
+                    last_seen: row.get(3)?,
+                    agent: row.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// End one of your own sessions by the id the list shows.
+    pub fn end_browser_session_by_id(
+        &mut self,
+        principal: &PrincipalId,
+        id: &str,
+    ) -> CoreResult<bool> {
+        require(
+            id.len() == 12 && id.chars().all(|c| c.is_ascii_hexdigit()),
+            || "that is not a session id".to_owned(),
+        )?;
+        let n = self.conn.execute(
+            "DELETE FROM browser_sessions WHERE principal = ? AND id_hash LIKE ?",
+            rusqlite::params![principal.as_str(), format!("{id}%")],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// End every session but the one asking.
+    pub fn end_other_sessions(
+        &mut self,
+        principal: &PrincipalId,
+        current: &str,
+    ) -> CoreResult<usize> {
+        let n = self.conn.execute(
+            "DELETE FROM browser_sessions WHERE principal = ? AND id_hash != ?",
+            rusqlite::params![principal.as_str(), token_hash(current)],
+        )?;
+        Ok(n)
     }
 
     /// Whose session this is, if it is live.

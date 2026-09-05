@@ -5,8 +5,8 @@
 use super::diff::{FileDiff, LineKind};
 use super::{Brief, LandingData, Sidebar, Viewer};
 use cairn_core::{
-    Change, ChangeState, Claim, Contact, Disposition, Envelope, Event, HitKind, Notice,
-    PolicyTrace, Repo, Revision, Task, Verdict, Verification, Visibility,
+    BrowserSession, Change, ChangeState, Claim, Contact, Disposition, Envelope, Event, HitKind,
+    Notice, PolicyTrace, Repo, Revision, Task, Verdict, Verification, Visibility,
 };
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 use std::collections::HashMap;
@@ -243,6 +243,7 @@ fn sidebar(viewer: &Viewer, current: Option<&str>) -> Markup {
                 }
             }
             a href="/you/tokens" { span { "Tokens" } span class="n" {} }
+            a href="/you/sessions" { span { "Sessions" } span class="n" {} }
             a href="/you/settings" { span { "Settings" } span class="n" {} }
         }
     }
@@ -931,6 +932,111 @@ pub struct SettingsNote<'a> {
     pub done: bool,
     pub sent: bool,
     pub first: bool,
+}
+
+/// A browser, roughly, from a user agent string. Enough to tell your
+/// laptop from your phone; nothing here is trusted for anything else.
+fn browser_family(agent: Option<&str>) -> &'static str {
+    let Some(agent) = agent else {
+        return "unknown browser";
+    };
+    let a = agent.to_ascii_lowercase();
+    let device = if a.contains("iphone") || a.contains("ipad") {
+        " on iOS"
+    } else if a.contains("android") {
+        " on Android"
+    } else if a.contains("macintosh") || a.contains("mac os") {
+        " on macOS"
+    } else if a.contains("windows") {
+        " on Windows"
+    } else if a.contains("linux") {
+        " on Linux"
+    } else {
+        ""
+    };
+    match (
+        a.contains("edg/"),
+        a.contains("chrome/") || a.contains("crios/"),
+        a.contains("firefox/") || a.contains("fxios/"),
+        a.contains("safari/"),
+        a.starts_with("curl/"),
+    ) {
+        (true, ..) => match device {
+            " on macOS" => "Edge on macOS",
+            " on Windows" => "Edge on Windows",
+            _ => "Edge",
+        },
+        (_, true, ..) => match device {
+            " on macOS" => "Chrome on macOS",
+            " on Windows" => "Chrome on Windows",
+            " on Linux" => "Chrome on Linux",
+            " on Android" => "Chrome on Android",
+            " on iOS" => "Chrome on iOS",
+            _ => "Chrome",
+        },
+        (_, _, true, ..) => match device {
+            " on macOS" => "Firefox on macOS",
+            " on Windows" => "Firefox on Windows",
+            " on Linux" => "Firefox on Linux",
+            _ => "Firefox",
+        },
+        (_, _, _, true, _) => match device {
+            " on iOS" => "Safari on iOS",
+            _ => "Safari on macOS",
+        },
+        (_, _, _, _, true) => "curl",
+        _ => "another browser",
+    }
+}
+
+pub fn sessions(theme: Theme, viewer: &Viewer, sessions: &[BrowserSession], done: bool) -> Markup {
+    let others = sessions.iter().filter(|s| !s.current).count();
+    layout(
+        theme,
+        Some(viewer),
+        None,
+        None,
+        "Sessions",
+        html! {
+            div class="sechead" {
+                b { "Where you are signed in" }
+                span { (sessions.len()) }
+                @if others > 0 {
+                    form method="post" action="/you/sessions" style="margin-left: auto;" {
+                        input type="hidden" name="others" value="1";
+                        button class="act" type="submit" { "Sign out everywhere else" }
+                    }
+                }
+            }
+            @if done { p class="done" { "Done." } }
+            @for session in sessions {
+                div class="trow" style="grid-template-columns: minmax(0,1fr) 150px 150px 90px;" {
+                    span {
+                        (browser_family(session.agent.as_deref()))
+                        @if session.current { span class="sec3" { " · this session" } }
+                    }
+                    span class="sec3" { "signed in " (day_of(&session.created)) }
+                    span class="sec3" {
+                        @match &session.last_seen {
+                            Some(seen) => { "seen " (day_of(seen)) " " (clock_of(seen)) }
+                            None => { "" }
+                        }
+                    }
+                    span {
+                        @if !session.current {
+                            form method="post" action="/you/sessions" {
+                                input type="hidden" name="id" value=(session.id);
+                                button class="quiet" type="submit" { "Sign out" }
+                            }
+                        }
+                    }
+                }
+            }
+            p class="hint" style="padding: 16px 22px;" {
+                "Changing your password ends every session, this one included. Ending one here ends only that one."
+            }
+        },
+    )
 }
 
 pub fn settings(

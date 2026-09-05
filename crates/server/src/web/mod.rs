@@ -59,6 +59,7 @@ pub fn routes() -> Router<AppState> {
         .route("/you", get(you_page))
         .route("/you/settings", get(settings_page).post(change_password))
         .route("/you/settings/email", post(change_email))
+        .route("/you/sessions", get(sessions_page).post(sessions_action))
         .route("/you/tokens", get(tokens_page).post(token_action))
         .route("/agents", get(agents_page).post(agent_action))
         .route("/people", get(people_page).post(people_action))
@@ -393,6 +394,59 @@ async fn settings_page(
         },
     )
     .into_response()
+}
+
+fn user_agent(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+}
+
+/// Every session you hold, the one you are on marked, each one endable.
+async fn sessions_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    viewer: Viewer,
+    headers: HeaderMap,
+    Query(flash): Query<Flash>,
+) -> Response {
+    let current = cookie(&headers, SESSION_COOKIE);
+    match app.with_store(|s| s.sessions_of(&viewer.0, current.as_deref())) {
+        Ok(sessions) => {
+            views::sessions(theme, &viewer, &sessions, flash.done.is_some()).into_response()
+        }
+        Err(err) => oops(err),
+    }
+}
+
+#[derive(Deserialize)]
+struct SessionsForm {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    others: Option<String>,
+}
+
+async fn sessions_action(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    headers: HeaderMap,
+    Form(form): Form<SessionsForm>,
+) -> Response {
+    let current = cookie(&headers, SESSION_COOKIE);
+    let result = match (form.others.is_some(), current) {
+        (true, Some(current)) => app
+            .with_store(|s| s.end_other_sessions(&viewer.0, &current))
+            .map(|_| ()),
+        (true, None) => Ok(()),
+        (false, _) => app
+            .with_store(|s| s.end_browser_session_by_id(&viewer.0, form.id.trim()))
+            .map(|_| ()),
+    };
+    match result {
+        Ok(()) => Redirect::to("/you/sessions?done=1").into_response(),
+        Err(err) => flash("/you/sessions", &err.to_string()),
+    }
 }
 
 #[derive(Deserialize)]
@@ -1158,7 +1212,11 @@ struct JoinQuery {
 /// Arrive from an invitation: the token becomes a browser session and is
 /// spent in the same breath, so the link works once. Then straight to
 /// setting a password, because a session expires and the link is gone.
-async fn join(State(app): State<AppState>, Query(query): Query<JoinQuery>) -> Response {
+async fn join(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<JoinQuery>,
+) -> Response {
     let expired =
         || Redirect::to("/login?error=That+invitation+has+been+used+or+revoked").into_response();
     let token = match app.with_store(|s| s.token_for_secret(query.token.trim())) {
@@ -1186,7 +1244,7 @@ async fn join(State(app): State<AppState>, Query(query): Query<JoinQuery>) -> Re
         Ok(env) => app.publish(&env),
         Err(err) => return oops(err),
     }
-    match app.start_session(&token.principal) {
+    match app.start_session(&token.principal, user_agent(&headers)) {
         Ok(session) => signed_in_to(&app, SESSION_COOKIE, &session, "/you/settings?first=1"),
         Err(err) => oops(err),
     }
@@ -1752,6 +1810,7 @@ struct LoginForm {
 async fn login_submit(
     State(app): State<AppState>,
     crate::guard::ClientIp(client): crate::guard::ClientIp,
+    headers: HeaderMap,
     Form(form): Form<LoginForm>,
 ) -> Response {
     // Guessing a token should not be worth trying.
@@ -1771,7 +1830,7 @@ async fn login_submit(
                 .into_response();
         };
         return if app.with_store(|s| s.password_matches(&principal, &password)) {
-            match app.start_session(&principal) {
+            match app.start_session(&principal, user_agent(&headers)) {
                 Ok(session) => signed_in(&app, SESSION_COOKIE, &session),
                 Err(err) => oops(err),
             }

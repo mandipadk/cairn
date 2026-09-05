@@ -434,6 +434,18 @@ pub struct Contact {
     pub pending: Option<String>,
 }
 
+/// A browser session as its owner sees it: enough to recognise it and
+/// end it, never the secret. `id` is a prefix of the secret's hash.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserSession {
+    pub id: String,
+    pub created: String,
+    pub expires: String,
+    pub last_seen: Option<String>,
+    pub agent: Option<String>,
+    pub current: bool,
+}
+
 /// A session's declared intent over paths, live while the session is.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Lease {

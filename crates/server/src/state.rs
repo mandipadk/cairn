@@ -109,12 +109,22 @@ impl AppState {
     /// are. It is stored, so a deploy does not sign everyone out, and
     /// only its hash is kept, so reading the database yields no working
     /// credential.
-    pub(crate) fn start_session(&self, principal: &PrincipalId) -> cairn_core::CoreResult<String> {
-        self.with_store(|store| store.start_session(principal, SESSION_TTL_DAYS))
+    pub(crate) fn start_session(
+        &self,
+        principal: &PrincipalId,
+        agent: Option<&str>,
+    ) -> cairn_core::CoreResult<String> {
+        self.with_store(|store| store.start_session(principal, SESSION_TTL_DAYS, agent))
     }
 
     pub(crate) fn resolve_session(&self, secret: &str) -> Option<PrincipalId> {
-        self.with_store(|store| store.session_holder(secret))
+        self.with_store(|store| {
+            let who = store.session_holder(secret);
+            if who.is_some() {
+                let _ = store.touch_session(secret);
+            }
+            who
+        })
     }
 
     pub(crate) fn end_session(&self, secret: &str) {

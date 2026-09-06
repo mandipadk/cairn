@@ -270,6 +270,18 @@ impl GitStore {
 
     async fn run(&self, current_dir: Option<&Path>, args: &[&str]) -> GitResult<Vec<u8>> {
         let mut command = Command::new("git");
+        // The forge's git is the forge's: nothing from the operator's
+        // own configuration reaches it, and anything that writes a
+        // commit - a note, a rebase - has an identity to write it as.
+        // A CI runner with no ~/.gitconfig was how this was learned.
+        command
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_AUTHOR_NAME", "cairn")
+            .env("GIT_AUTHOR_EMAIL", "forge@cairn.invalid")
+            .env("GIT_COMMITTER_NAME", "cairn")
+            .env("GIT_COMMITTER_EMAIL", "forge@cairn.invalid");
         if let Some(dir) = current_dir {
             command.current_dir(dir);
         }

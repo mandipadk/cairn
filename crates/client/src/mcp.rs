@@ -222,6 +222,10 @@ fn dispatch(client: &ApiClient, name: &str, args: &Value) -> Result<(u16, Value)
         )),
         "get_change" => client.get(&format!("/api/changes/{}", need(args, "change")?)),
         "get_repo" => client.get(&format!("/api/repos/{}", need(args, "repo")?)),
+        "record" => client.get(&with_query(
+            &format!("/api/principals/{}/record", need(args, "principal")?),
+            &[("days", arg_num(args, "days"))],
+        )),
         "get_session" => client.get(&format!("/api/sessions/{}", need(args, "session")?)),
         "list_revisions" => {
             client.get(&format!("/api/changes/{}/revisions", need(args, "change")?))
@@ -448,6 +452,19 @@ fn tool_definitions() -> Vec<Value> {
             "Fetch one change by id.",
             &["change"],
             json!({ "change": s("Change id") }),
+        ),
+        tool(
+            "record",
+            "What the log says about a principal over a window (90 days by default): claims \
+             a third-party runner judged and how many were reproduced, human verdicts on \
+             their changes and any blocks, what landed and was abandoned, gaps declared. \
+             Ask it about yourself to see how far you are from a repository's trust bar, \
+             or about an author before trusting their claim.",
+            &["principal"],
+            json!({
+                "principal": s("Principal id"),
+                "days": { "type": "integer", "description": "Window in days (default 90)" },
+            }),
         ),
         tool(
             "get_repo",

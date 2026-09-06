@@ -1580,6 +1580,7 @@ fn a_repo_chooses_the_rules_its_work_must_meet() {
                 require_concerns_resolved: true,
                 attention_budget: None,
                 agents_act_in_sessions: false,
+                trust: None,
             },
         )
         .unwrap();

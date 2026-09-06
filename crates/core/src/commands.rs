@@ -178,6 +178,8 @@ fn ensure_writable(tx: &Transaction, repo: &str) -> CoreResult<()> {
 /// that no honest use meets them.
 const MAX_TITLE: usize = 300;
 const MAX_TEXT: usize = 8_000;
+/// Paths recorded on one revision, at most.
+const MAX_PATHS: usize = 1_000;
 const MAX_ITEMS: usize = 64;
 
 fn bounded(what: &str, value: &str, limit: usize) -> CoreResult<()> {
@@ -660,6 +662,15 @@ impl Store {
             rusqlite::params![email.trim().to_lowercase()],
         )?;
         Ok(removed == 1)
+    }
+
+    /// What the log says about a principal over the last `window_days`.
+    pub fn record_of(
+        &self,
+        principal: &PrincipalId,
+        window_days: u32,
+    ) -> CoreResult<crate::Record> {
+        crate::record::record_of(&self.conn, principal.as_str(), window_days)
     }
 
     /// What this principal's write under `key` answered, if it has been
@@ -2472,6 +2483,30 @@ impl Store {
         session: Option<&SessionId>,
         message: &str,
     ) -> CoreResult<(i64, Envelope)> {
+        self.push_revision_with_paths(actor, change, commit_oid, session, message, Vec::new())
+    }
+
+    /// Push a revision and record which files its commit touched. More
+    /// than a thousand paths is history or a vendored tree, not a change
+    /// a path-scoped policy could mean; nothing is recorded for it, and
+    /// a waiver that needs paths does not apply.
+    pub fn push_revision_with_paths(
+        &mut self,
+        actor: &PrincipalId,
+        change: &ChangeId,
+        commit_oid: &str,
+        session: Option<&SessionId>,
+        message: &str,
+        paths: Vec<String>,
+    ) -> CoreResult<(i64, Envelope)> {
+        let paths = if paths.len() > MAX_PATHS {
+            Vec::new()
+        } else {
+            paths
+        };
+        for path in &paths {
+            bounded("a revision path", path, 1_024)?;
+        }
         let tx = self.conn.transaction()?;
         require(valid_commit_oid(commit_oid), || {
             format!("{commit_oid:?} is not a valid commit oid")
@@ -2513,6 +2548,7 @@ impl Store {
                 commit_oid: commit_oid.to_owned(),
                 session: session.cloned(),
                 message: message.to_owned(),
+                paths,
             },
         )?;
         tx.commit()?;

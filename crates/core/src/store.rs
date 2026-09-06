@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 21;
+const SCHEMA_VERSION: i64 = 22;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -316,6 +316,7 @@ CREATE TABLE IF NOT EXISTS revisions (
   commit_oid TEXT NOT NULL,
   session    TEXT,
   message    TEXT NOT NULL,
+  paths      TEXT NOT NULL DEFAULT '[]',
   PRIMARY KEY (change_id, number)
 ) STRICT;
 
@@ -328,9 +329,11 @@ CREATE TABLE IF NOT EXISTS claims (
   passed    INTEGER NOT NULL,
   summary   TEXT NOT NULL,
   unchecked TEXT NOT NULL,
-  by        TEXT NOT NULL
+  by        TEXT NOT NULL,
+  seq       INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_claims_change ON claims (change_id, revision);
+CREATE INDEX IF NOT EXISTS idx_claims_by ON claims (by, seq);
 
 CREATE TABLE IF NOT EXISTS merge_queue (
   change_id    TEXT PRIMARY KEY,
@@ -349,7 +352,8 @@ CREATE TABLE IF NOT EXISTS verifications (
   agrees    INTEGER NOT NULL,
   command   TEXT NOT NULL,
   observed  TEXT NOT NULL,
-  by        TEXT NOT NULL
+  by        TEXT NOT NULL,
+  seq       INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_verifications_claim ON verifications (claim_id);
 CREATE INDEX IF NOT EXISTS idx_verifications_change ON verifications (change_id, revision);
@@ -361,7 +365,8 @@ CREATE TABLE IF NOT EXISTS verdicts (
   domain    TEXT NOT NULL,
   disposition TEXT NOT NULL,
   rationale TEXT NOT NULL,
-  by        TEXT NOT NULL
+  by        TEXT NOT NULL,
+  seq       INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_verdicts_change ON verdicts (change_id, revision);
 
@@ -2013,16 +2018,18 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             commit_oid,
             session,
             message,
+            paths,
         } => {
             tx.execute(
-                "INSERT INTO revisions (change_id, number, commit_oid, session, message)
-                 VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO revisions (change_id, number, commit_oid, session, message, paths)
+                 VALUES (?, ?, ?, ?, ?, ?)",
                 params![
                     change.as_str(),
                     revision,
                     commit_oid,
                     session.as_ref().map(|s| s.as_str()),
-                    message
+                    message,
+                    serde_json::to_string(paths).expect("string vec serializes")
                 ],
             )?;
             tx.execute(
@@ -2041,8 +2048,8 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             unchecked,
         } => {
             tx.execute(
-                "INSERT INTO claims (id, change_id, revision, kind, command, passed, summary, unchecked, by)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO claims (id, change_id, revision, kind, command, passed, summary, unchecked, by, seq)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     claim.as_str(),
                     change.as_str(),
@@ -2052,7 +2059,8 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                     *passed as i64,
                     summary,
                     serde_json::to_string(unchecked).expect("string vec serializes"),
-                    actor
+                    actor,
+                    env.seq.0
                 ],
             )?;
         }
@@ -2067,8 +2075,8 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
         } => {
             tx.execute(
                 "INSERT INTO verifications
-                 (id, claim_id, change_id, revision, agrees, command, observed, by)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                 (id, claim_id, change_id, revision, agrees, command, observed, by, seq)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     verification.as_str(),
                     claim.as_str(),
@@ -2077,7 +2085,8 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                     *agrees as i64,
                     command,
                     observed,
-                    actor
+                    actor,
+                    env.seq.0
                 ],
             )?;
         }
@@ -2090,8 +2099,8 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             rationale,
         } => {
             tx.execute(
-                "INSERT INTO verdicts (id, change_id, revision, domain, disposition, rationale, by)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO verdicts (id, change_id, revision, domain, disposition, rationale, by, seq)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     verdict.as_str(),
                     change.as_str(),
@@ -2099,7 +2108,8 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                     domain.as_str(),
                     disposition.as_str(),
                     rationale,
-                    actor
+                    actor,
+                    env.seq.0
                 ],
             )?;
         }
@@ -2336,6 +2346,7 @@ mod concurrency_tests {
                     require_concerns_resolved: true,
                     attention_budget: None,
                     agents_act_in_sessions: false,
+                    trust: None,
                 },
             )
             .unwrap();
@@ -2710,8 +2721,8 @@ mod projection_shape {
         assert_eq!(
             (super::SCHEMA_VERSION, shape.as_str()),
             (
-                21,
-                r#"{"require_executed_check":true,"independence":"human_or_two_models","require_runner_verification":false,"runner_quorum":1,"required_domains":[],"require_concerns_resolved":true,"attention_budget":null,"agents_act_in_sessions":false}"#
+                22,
+                r#"{"require_executed_check":true,"independence":"human_or_two_models","require_runner_verification":false,"runner_quorum":1,"required_domains":[],"require_concerns_resolved":true,"attention_budget":null,"agents_act_in_sessions":false,"trust":null}"#
             ),
             "the policy's stored shape changed: bump SCHEMA_VERSION and pin the new shape here"
         );

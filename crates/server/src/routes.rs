@@ -149,6 +149,28 @@ pub async fn set_password(
     Ok(committed(Some(principal.0), &env))
 }
 
+#[derive(Deserialize)]
+pub struct RecordQuery {
+    /// How far back to look; 90 days when absent, ten years at most.
+    pub days: Option<u32>,
+}
+
+/// What the log says about a principal: claims judged and reproduced,
+/// audits and blocks, what landed. Computed, never stored, and open to
+/// anyone signed in - a record is what a name means here.
+pub async fn principal_record(
+    State(app): State<AppState>,
+    _actor: Actor,
+    Path(id): Path<String>,
+    Query(query): Query<RecordQuery>,
+) -> ApiResult<Json<Value>> {
+    let principal = PrincipalId(id);
+    found(app.with_store(|s| s.principal(&principal))?, "principal")?;
+    let days = query.days.unwrap_or(90).clamp(1, 3650);
+    let record = app.with_store(|s| s.record_of(&principal, days))?;
+    Ok(Json(json!(record)))
+}
+
 pub async fn get_principal(
     State(app): State<AppState>,
     _actor: Actor,
@@ -622,6 +644,9 @@ pub struct PushRevision {
     pub session: Option<SessionId>,
     #[serde(default)]
     pub message: String,
+    /// The files the commit touched, when the caller knows them.
+    #[serde(default)]
+    pub paths: Vec<String>,
 }
 
 pub async fn push_revision(
@@ -633,12 +658,13 @@ pub async fn push_revision(
     let change = ChangeId(id);
     let (revision, env) = app.with_store(|s| {
         s.acting_as(actor.1.as_ref());
-        s.push_revision(
+        s.push_revision_with_paths(
             &actor.0,
             &change,
             &body.commit_oid,
             body.session.as_ref(),
             &body.message,
+            body.paths,
         )
     })?;
     app.publish(&env);

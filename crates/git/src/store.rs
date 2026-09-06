@@ -588,6 +588,31 @@ impl GitStore {
             .collect())
     }
 
+    /// The files one commit touched against its first parent (or
+    /// everything, for a root commit).
+    pub async fn changed_paths(&self, name: &str, oid: &str) -> GitResult<Vec<String>> {
+        let repo = self.existing_repo_path(name)?;
+        let stdout = self
+            .run(
+                Some(&repo),
+                &[
+                    "diff-tree",
+                    "--no-commit-id",
+                    "--name-only",
+                    "-r",
+                    "--root",
+                    "-z",
+                    oid,
+                ],
+            )
+            .await?;
+        Ok(String::from_utf8_lossy(&stdout)
+            .split('\0')
+            .filter(|p| !p.is_empty())
+            .map(str::to_owned)
+            .collect())
+    }
+
     /// The last commit to touch `path` at `rev`: (oid, subject).
     pub async fn last_commit_for(
         &self,

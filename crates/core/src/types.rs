@@ -362,6 +362,9 @@ pub struct Revision {
     pub commit_oid: String,
     pub session: Option<SessionId>,
     pub message: String,
+    /// The files the commit touched, when the push recorded them.
+    #[serde(default)]
+    pub paths: Vec<String>,
 }
 
 /// A claim as submitted: what was checked, how, and what wasn't.
@@ -568,7 +571,47 @@ pub struct Policy {
     /// is accepted. Claiming tasks and verifying stay open to them.
     #[serde(default)]
     pub agents_act_in_sessions: bool,
+    /// Trust an owner earns from the record, and what it may stand in
+    /// for here. None spends nothing: every change meets the same bar.
+    #[serde(default)]
+    pub trust: Option<EarnedTrust>,
 }
+
+/// A bar read off a principal's record, and what clearing it buys. The
+/// numbers are the two facts anyone can recompute from the log: what
+/// share of the owner's runner-judged claims were reproduced, over how
+/// many. A rate on a handful of claims is noise wearing a number, which
+/// is what `min_claims` is for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EarnedTrust {
+    /// Of the claims a third-party runner judged in the window, at
+    /// least this share must have been reproduced.
+    pub min_reproduced_percent: u8,
+    /// Over at least this many judged claims.
+    pub min_claims: u32,
+    /// Looking back this many days.
+    #[serde(default = "ninety")]
+    pub window_days: u32,
+    /// Only changes whose every touched path matches one of these; the
+    /// small pattern language leases use, plus `*.ext`. Empty means any.
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// Which requirements the owner's own claim may stand in for.
+    pub waives: Vec<Waiver>,
+}
+
+fn ninety() -> u32 {
+    90
+}
+
+str_enum!(
+    /// A requirement earned trust may stand in for. A dispute or a block
+    /// on the change itself is never one of them.
+    Waiver {
+        RunnerVerification => "runner_verification",
+        IndependentApproval => "independent_approval",
+    }
+);
 
 fn yes() -> bool {
     true
@@ -589,6 +632,7 @@ impl Default for Policy {
             require_concerns_resolved: true,
             attention_budget: None,
             agents_act_in_sessions: false,
+            trust: None,
         }
     }
 }

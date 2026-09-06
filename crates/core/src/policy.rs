@@ -16,7 +16,8 @@
 use crate::error::CoreResult;
 use crate::queries::raw;
 use crate::types::{
-    Capability, Change, ClaimKind, Disposition, Independence, Policy, PrincipalKind, Verification,
+    Capability, Change, ClaimKind, Disposition, EarnedTrust, Independence, Policy, PrincipalKind,
+    Verification, Waiver,
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -63,6 +64,8 @@ pub(crate) fn evaluate_against(
 ) -> CoreResult<PolicyTrace> {
     let mut requirements = Vec::new();
     let revision = change.latest_revision;
+    // Where the two requirements earned trust may stand in for end up.
+    let mut runner_index: Option<usize> = None;
 
     requirements.push(Requirement {
         description: "change has at least one revision".into(),
@@ -208,6 +211,7 @@ pub(crate) fn evaluate_against(
             evidence.push_str("; ");
             evidence.push_str(&counted.not_counted.join("; "));
         }
+        runner_index = Some(requirements.len());
         requirements.push(Requirement {
             description: if quorum > 1 {
                 format!(
@@ -299,6 +303,7 @@ pub(crate) fn evaluate_against(
             !humans.is_empty() || agent_models.len() >= 2,
         ),
     };
+    let independence_index = requirements.len();
     requirements.push(Requirement {
         description,
         satisfied,
@@ -313,10 +318,162 @@ pub(crate) fn evaluate_against(
         ),
     });
 
+    if let Some(trust) = &policy.trust {
+        apply_trust(
+            conn,
+            change,
+            revision,
+            trust,
+            &mut requirements,
+            runner_index,
+            independence_index,
+            !disputed.is_empty(),
+            !blocks.is_empty(),
+        )?;
+    }
+
     Ok(PolicyTrace {
         satisfied: requirements.iter().all(|r| r.satisfied),
         requirements,
     })
+}
+
+/// Let an owner's record stand in for what the policy says it may. The
+/// trace always gets a line for it, applied or not, saying what the
+/// record showed against the bar; a merge under a waiver is as
+/// explainable afterwards as any other.
+#[allow(clippy::too_many_arguments)]
+fn apply_trust(
+    conn: &Connection,
+    change: &Change,
+    revision: i64,
+    trust: &EarnedTrust,
+    requirements: &mut Vec<Requirement>,
+    runner_index: Option<usize>,
+    independence_index: usize,
+    disputed: bool,
+    blocked: bool,
+) -> CoreResult<()> {
+    let owner = change.owner.as_str();
+    let record = crate::record::record_of(conn, owner, trust.window_days)?;
+    let active = raw::principal(conn, owner)?.is_some_and(|p| p.active);
+    let paths = raw::revision_paths(conn, change.id.as_str(), revision)?;
+    let rate = record
+        .reproduced_percent
+        .map_or("no rate yet".to_owned(), |p| format!("{p}% reproduced"));
+    let shown = format!(
+        "{owner}: {} judged claims, {rate}, {} human block(s) in {} days; bar is {}% over {}",
+        record.judged,
+        record.blocks,
+        record.window_days,
+        trust.min_reproduced_percent,
+        trust.min_claims
+    );
+
+    let mut why_not: Vec<String> = Vec::new();
+    if !active {
+        why_not.push("the owner is deactivated".into());
+    }
+    if record.judged < trust.min_claims {
+        why_not.push(format!(
+            "{} judged claims, {} needed",
+            record.judged, trust.min_claims
+        ));
+    } else if record
+        .reproduced_percent
+        .is_none_or(|p| p < trust.min_reproduced_percent)
+    {
+        why_not.push(format!("{rate}, {}% needed", trust.min_reproduced_percent));
+    }
+    if record.blocks > 0 {
+        why_not.push(format!("{} human block(s) in the window", record.blocks));
+    }
+    if disputed {
+        why_not.push("a claim on this revision is disputed".into());
+    }
+    if blocked {
+        why_not.push("this revision carries a block".into());
+    }
+    let paths_note = if trust.paths.is_empty() {
+        "any path".to_owned()
+    } else if paths.is_empty() {
+        why_not.push("this revision has no recorded paths".into());
+        String::new()
+    } else {
+        let outside: Vec<&str> = paths
+            .iter()
+            .filter(|path| {
+                !trust
+                    .paths
+                    .iter()
+                    .any(|pattern| path_matches(pattern, path))
+            })
+            .map(String::as_str)
+            .collect();
+        if outside.is_empty() {
+            format!(
+                "all {} path(s) match {}",
+                paths.len(),
+                trust.paths.join(", ")
+            )
+        } else {
+            why_not.push(format!(
+                "{} path(s) outside {}: {}",
+                outside.len(),
+                trust.paths.join(", "),
+                outside
+                    .iter()
+                    .take(3)
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            String::new()
+        }
+    };
+
+    let evidence = if why_not.is_empty() {
+        for waiver in &trust.waives {
+            let index = match waiver {
+                Waiver::RunnerVerification => runner_index,
+                Waiver::IndependentApproval => Some(independence_index),
+            };
+            if let Some(requirement) = index.and_then(|i| requirements.get_mut(i))
+                && !requirement.satisfied
+            {
+                requirement.satisfied = true;
+                requirement.evidence = format!("waived by earned trust: {shown}; {paths_note}");
+            }
+        }
+        format!(
+            "{shown}; stands in for {}; {paths_note}",
+            trust
+                .waives
+                .iter()
+                .map(|w| w.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    } else {
+        format!("{shown}; not applied: {}", why_not.join("; "))
+    };
+    requirements.push(Requirement {
+        description: "owner's earned trust".into(),
+        satisfied: true,
+        evidence,
+    });
+    Ok(())
+}
+
+/// A pattern covers a path the way a lease's does, plus `*.ext` for a
+/// suffix, so "documentation" can be said as `docs/` and `*.md`.
+pub(crate) fn path_matches(pattern: &str, path: &str) -> bool {
+    if let Some(suffix) = pattern.strip_prefix('*')
+        && suffix.starts_with('.')
+    {
+        return path.ends_with(suffix);
+    }
+    crate::leases::covers(pattern, path)
 }
 
 /// Each runner's current position on each claim. A runner's later

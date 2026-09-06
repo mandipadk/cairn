@@ -501,9 +501,30 @@ pub async fn record_push(
                 (id, number, true)
             }
         };
+        // What the commit touched is a fact about the revision worth
+        // keeping; failing to list it costs the revision its paths, not
+        // the push.
+        let paths = match app.git() {
+            Some(git) => git
+                .store
+                .changed_paths(&body.repo, &commit.commit_oid)
+                .await
+                .unwrap_or_else(|err| {
+                    tracing::warn!(error = %err, "could not list the paths a commit touched");
+                    Vec::new()
+                }),
+            None => Vec::new(),
+        };
         let (revision, pushed) = app.with_store(|s| {
             s.acting_as(actor.1.as_ref());
-            s.push_revision(&actor.0, &change, &commit.commit_oid, None, &commit.message)
+            s.push_revision_with_paths(
+                &actor.0,
+                &change,
+                &commit.commit_oid,
+                None,
+                &commit.message,
+                paths,
+            )
         })?;
         app.publish(&pushed);
         last_seq = pushed.seq.0;

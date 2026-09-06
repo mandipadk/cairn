@@ -179,6 +179,7 @@ async fn full_agent_workflow_over_mcp() {
         "awaiting_verification",
         "get_repo",
         "get_thread",
+        "record",
     ] {
         assert!(
             tools.contains(&expected),

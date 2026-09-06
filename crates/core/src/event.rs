@@ -313,6 +313,11 @@ pub enum Event {
         commit_oid: String,
         session: Option<SessionId>,
         message: String,
+        /// The files this revision's commit touched, as the push saw
+        /// them. A fact about the revision, so policy can be scoped to
+        /// what a change actually reaches. Empty when nothing recorded it.
+        #[serde(default)]
+        paths: Vec<String>,
     },
 
     ClaimAttached {

@@ -6,7 +6,7 @@ use super::diff::{FileDiff, LineKind};
 use super::{Brief, Chrome, LandingData, Sidebar, Viewer};
 use cairn_core::{
     Anchor, Independence, Resolution, ReviewDomain, Session, SessionState, Side, TaskState, Thread,
-    ThreadKind,
+    ThreadKind, Waiver,
 };
 use cairn_core::{
     BrowserSession, Change, ChangeState, Claim, Contact, Disposition, Envelope, Event, HitKind,
@@ -1273,6 +1273,23 @@ pub fn repo_settings(
                         input id="attention_budget" name="attention_budget" type="number" min="0" max="100"
                               value=(policy.attention_budget.map(|n| n.to_string()).unwrap_or_default());
                     }
+                    div {
+                        span class="hint" { "Earned trust: what an owner's record may stand in for" }
+                        @let trust = policy.trust.as_ref();
+                        label class="tick" { input type="checkbox" name="trust_waives" value="runner_verification" checked[trust.is_some_and(|t| t.waives.contains(&Waiver::RunnerVerification))]; "their own claim, in place of a runner" }
+                        label class="tick" { input type="checkbox" name="trust_waives" value="independent_approval" checked[trust.is_some_and(|t| t.waives.contains(&Waiver::IndependentApproval))]; "their own claim, in place of an independent approval" }
+                        div class="line" {
+                            label for="trust_percent" { "when at least" }
+                            input id="trust_percent" name="trust_percent" type="number" min="50" max="100" value=(trust.map(|t| t.min_reproduced_percent.to_string()).unwrap_or_else(|| "98".to_owned()));
+                            label for="trust_claims" { "% of at least" }
+                            input id="trust_claims" name="trust_claims" type="number" min="1" max="10000" value=(trust.map(|t| t.min_claims.to_string()).unwrap_or_else(|| "20".to_owned()));
+                            label for="trust_days" { "judged claims were reproduced over" }
+                            input id="trust_days" name="trust_days" type="number" min="1" max="3650" value=(trust.map(|t| t.window_days.to_string()).unwrap_or_else(|| "90".to_owned()));
+                            span class="hint" { "days" }
+                        }
+                        label for="trust_paths" { "only for changes touching nothing outside (comma-separated; docs/, *.md; empty for any)" }
+                        input id="trust_paths" name="trust_paths" type="text" autocomplete="off" value=(trust.map(|t| t.paths.join(", ")).unwrap_or_default());
+                    }
                     div class="line" {
                         button class="vbtn" type="submit" name="action" value="preview" { "Preview against open changes" }
                         button class="btn" type="submit" name="action" value="save" { "Save policy" }
@@ -1916,6 +1933,7 @@ pub fn agents(
                         span class="strong" { (row.principal.id.as_str()) }
                         span class="sec3" { (row.principal.display) }
                         span class="sec3" { (row.principal.model.as_deref().unwrap_or("")) }
+                        span class="sec3" { (record_words(&row.record)) }
                     }
                     @for grant in row.grants.iter().filter(|g| !g.revoked) {
                         div class="grant" {
@@ -3832,4 +3850,19 @@ pub fn lessons(
             }
         },
     )
+}
+
+/// A principal's record in one quiet line: what the log says a runner
+/// found of their claims, and what humans said of their changes.
+pub fn record_words(record: &cairn_core::Record) -> String {
+    let mut words = match record.reproduced_percent {
+        Some(percent) => format!("{percent}% of {} judged claims reproduced", record.judged),
+        None if record.claims > 0 => format!("{} claims, none judged yet", record.claims),
+        None => "no claims yet".to_owned(),
+    };
+    if record.blocks > 0 {
+        words.push_str(&format!(" · {} human block(s)", record.blocks));
+    }
+    words.push_str(&format!(" · {} days", record.window_days));
+    words
 }

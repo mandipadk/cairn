@@ -1371,6 +1371,8 @@ async fn join(
 pub struct AgentRow {
     pub principal: cairn_core::Principal,
     pub grants: Vec<cairn_core::Grant>,
+    /// What the log says about it over the last 90 days.
+    pub record: cairn_core::Record,
 }
 
 async fn agents_page(
@@ -1389,7 +1391,12 @@ async fn agents_page(
                 continue;
             }
             let grants = store.grants_of(&principal.id)?;
-            agents.push(AgentRow { principal, grants });
+            let record = store.record_of(&principal.id, 90)?;
+            agents.push(AgentRow {
+                principal,
+                grants,
+                record,
+            });
         }
         let repos: Vec<String> = store.repos()?.into_iter().map(|r| r.name).collect();
         Ok::<_, cairn_core::CoreError>((agents, repos))
@@ -3463,6 +3470,16 @@ struct PolicyForm {
     #[serde(default)]
     runner_quorum: String,
     #[serde(default)]
+    trust_waives: Vec<String>,
+    #[serde(default)]
+    trust_percent: String,
+    #[serde(default)]
+    trust_claims: String,
+    #[serde(default)]
+    trust_days: String,
+    #[serde(default)]
+    trust_paths: String,
+    #[serde(default)]
     independence: String,
     #[serde(default)]
     domains: Vec<String>,
@@ -3480,6 +3497,11 @@ fn parse_policy_form(body: &str) -> Option<PolicyForm> {
         require_concerns_resolved: None,
         agents_act_in_sessions: None,
         runner_quorum: String::new(),
+        trust_waives: Vec::new(),
+        trust_percent: String::new(),
+        trust_claims: String::new(),
+        trust_days: String::new(),
+        trust_paths: String::new(),
         independence: String::new(),
         domains: Vec::new(),
         attention_budget: String::new(),
@@ -3494,6 +3516,11 @@ fn parse_policy_form(body: &str) -> Option<PolicyForm> {
             "require_concerns_resolved" => form.require_concerns_resolved = Some(value),
             "agents_act_in_sessions" => form.agents_act_in_sessions = Some(value),
             "runner_quorum" => form.runner_quorum = value,
+            "trust_waives" => form.trust_waives.push(value),
+            "trust_percent" => form.trust_percent = value,
+            "trust_claims" => form.trust_claims = value,
+            "trust_days" => form.trust_days = value,
+            "trust_paths" => form.trust_paths = value,
             "independence" => form.independence = value,
             "domains" => form.domains.push(value),
             "attention_budget" => form.attention_budget = value,
@@ -3545,6 +3572,53 @@ fn policy_from(form: &PolicyForm) -> Result<cairn_core::Policy, &'static str> {
             .filter(|n| (1..=9).contains(n))
             .ok_or("Runners that must agree is a number from 1 to 9")?,
     };
+    // Trust is spent only when something is waived; the numbers alone
+    // are a bar nobody is asked to clear.
+    let trust = if form.trust_waives.is_empty() {
+        None
+    } else {
+        let mut waives = Vec::new();
+        for waiver in &form.trust_waives {
+            waives.push(cairn_core::Waiver::parse(waiver).ok_or("Unknown waiver")?);
+        }
+        let number =
+            |value: &str, low: u32, high: u32, what: &'static str| -> Result<u32, &'static str> {
+                value
+                    .trim()
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|n| (low..=high).contains(n))
+                    .ok_or(what)
+            };
+        Some(cairn_core::EarnedTrust {
+            min_reproduced_percent: number(
+                &form.trust_percent,
+                50,
+                100,
+                "The trust bar is a percentage from 50 to 100",
+            )? as u8,
+            min_claims: number(
+                &form.trust_claims,
+                1,
+                10_000,
+                "Judged claims is a number from 1 to 10000",
+            )?,
+            window_days: number(
+                &form.trust_days,
+                1,
+                3650,
+                "The trust window is a number of days up to 3650",
+            )?,
+            paths: form
+                .trust_paths
+                .split(',')
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .map(str::to_owned)
+                .collect(),
+            waives,
+        })
+    };
     Ok(cairn_core::Policy {
         require_executed_check: form.require_executed_check.is_some(),
         independence,
@@ -3554,6 +3628,7 @@ fn policy_from(form: &PolicyForm) -> Result<cairn_core::Policy, &'static str> {
         require_concerns_resolved: form.require_concerns_resolved.is_some(),
         attention_budget,
         agents_act_in_sessions: form.agents_act_in_sessions.is_some(),
+        trust,
     })
 }
 

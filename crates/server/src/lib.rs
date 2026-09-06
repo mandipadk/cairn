@@ -46,6 +46,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/principals", post(routes::register_principal))
         .route("/api/principals/{id}", get(routes::get_principal))
+        .route("/api/principals/{id}/record", get(routes::principal_record))
         .route("/api/principals/{id}/password", post(routes::set_password))
         .route(
             "/api/principals/{id}/state",

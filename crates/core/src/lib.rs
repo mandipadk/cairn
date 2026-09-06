@@ -35,6 +35,7 @@ mod id;
 mod leases;
 mod policy;
 mod queries;
+mod record;
 mod search;
 mod store;
 mod types;
@@ -49,14 +50,15 @@ pub use id::{
 };
 pub use leases::{Overlap, covers, patterns_overlap};
 pub use policy::{PolicyTrace, Requirement};
+pub use record::Record;
 pub use search::{HitKind, SearchHit, SearchQuery};
 pub use store::Store;
 pub use types::Anchor;
 pub use types::{
     BrowserSession, Capability, Change, ChangeSpec, ChangeState, Claim, ClaimKind, ClaimSpec,
-    Contact, Disposition, Grant, IdentityLink, Independence, Lease, Lesson, LineState, Mirror,
-    Notice, ObjectFormat, PasskeyRecord, Policy, Principal, PrincipalKind, Provenance, QueueEntry,
-    Replay, Reply, Repo, Resolution, Resolved, ReviewDomain, Revision, Scope, Session,
+    Contact, Disposition, EarnedTrust, Grant, IdentityLink, Independence, Lease, Lesson, LineState,
+    Mirror, Notice, ObjectFormat, PasskeyRecord, Policy, Principal, PrincipalKind, Provenance,
+    QueueEntry, Replay, Reply, Repo, Resolution, Resolved, ReviewDomain, Revision, Scope, Session,
     SessionState, Side, Task, TaskState, Thread, ThreadKind, TokenInfo, Verdict, Verification,
-    Visibility, WorkloadBinding, line_state,
+    Visibility, Waiver, WorkloadBinding, line_state,
 };

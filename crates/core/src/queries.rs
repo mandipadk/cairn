@@ -432,7 +432,7 @@ pub(crate) mod raw {
     pub fn revisions(conn: &Connection, change: &str) -> CoreResult<Vec<Revision>> {
         Ok(conn
             .prepare_cached(
-                "SELECT change_id, number, commit_oid, session, message
+                "SELECT change_id, number, commit_oid, session, message, paths
                  FROM revisions WHERE change_id = ? ORDER BY number",
             )?
             .query_map(params![change], |row| {
@@ -442,9 +442,21 @@ pub(crate) mod raw {
                     commit_oid: row.get(2)?,
                     session: row.get::<_, Option<String>>(3)?.map(SessionId),
                     message: row.get(4)?,
+                    paths: serde_json::from_str(&row.get::<_, String>(5)?).unwrap_or_default(),
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// The files one revision touched, if the push recorded them.
+    pub fn revision_paths(conn: &Connection, change: &str, number: i64) -> CoreResult<Vec<String>> {
+        let stored: Option<String> = conn
+            .prepare_cached("SELECT paths FROM revisions WHERE change_id = ? AND number = ?")?
+            .query_row(params![change, number], |row| row.get(0))
+            .optional()?;
+        Ok(stored
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default())
     }
 
     pub fn claims_on(conn: &Connection, change: &str, revision: i64) -> CoreResult<Vec<Claim>> {

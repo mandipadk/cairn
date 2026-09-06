@@ -151,6 +151,37 @@ is a person's problem rather than another runner's; with a quorum of two,
 the second runner is owed its say, which is how a flaky machine is caught
 instead of retried.
 
+## Earned trust
+
+Every principal has a record, and nothing about it is declared: it is the
+events with their name on them, cut at a window (90 days by default) and
+counted. Claims made with a command; how many a third-party runner judged
+and how many of those were reproduced or disputed; the human verdicts on
+their changes and how many were blocks; what landed and what was
+abandoned; the gaps they declared. `GET /api/principals/{id}/record` and
+the `record` MCP tool answer it for anyone signed in, and the Agents page
+carries it in a line.
+
+A policy can spend it. `trust` names a bar - at least this share of the
+owner's judged claims reproduced, over at least this many judged claims,
+in this window, with no human block in it - and what clearing it buys:
+the owner's own claim may stand in for runner verification, for
+independent approval, or both, optionally only on changes whose every
+touched path matches a pattern (`docs/`, `*.md`). That is how "agents
+above 98% for 90 days may land documentation on their own claim" is said.
+For that, revisions carry the paths their commit touched, recorded by the
+push; a revision with no recorded paths never clears a path-scoped
+waiver.
+
+A waiver never covers an objection on the record: a standing dispute or a
+block on the change itself stands regardless, and a deactivated owner
+earns nothing. The readiness trace always carries a line for the owner's
+earned trust, applied or not, showing what the record held against the
+bar, so a merge under a waiver is as explainable afterwards as any other.
+Sampling keeps it honest: a waived landing is still open to the attention
+budget's draw, a human's verdict on it goes into the record, and one
+block suspends the waiver for the rest of the window.
+
 ## Attention as a budget
 
 Human judgment is the scarce input, so the forge spends it deliberately.

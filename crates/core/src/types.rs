@@ -803,3 +803,67 @@ mod tests {
         assert_eq!(v, Disposition::Approve.as_str());
     }
 }
+
+/// One landing, made portable: the graph's own records for a change
+/// that landed, assembled so they can be signed and carried on the
+/// commit. Nothing here is restated; every field is a row or an event
+/// the log already holds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Receipt {
+    /// Where the forge lives, when it knows.
+    pub forge: Option<String>,
+    pub repo: String,
+    pub target: String,
+    pub change: Change,
+    /// The revision that landed, paths included.
+    pub revision: Revision,
+    /// The commit on the target: the revision's own, or the rebase of it.
+    pub landed_as: String,
+    pub landed_at: String,
+    /// The merge event's place in the log.
+    pub seq: i64,
+    pub merged_by: PrincipalId,
+    pub trace: crate::PolicyTrace,
+    pub claims: Vec<Claim>,
+    pub verifications: Vec<Verification>,
+    pub verdicts: Vec<Verdict>,
+}
+
+/// JSON with keys sorted, no whitespace, UTF-8: the form a receipt is
+/// signed over, chosen so a verifier in any language is thirty lines.
+/// Numbers here are integers and booleans; strings are escaped the way
+/// every JSON writer escapes them.
+pub fn canonical_json(value: &serde_json::Value) -> String {
+    fn write(out: &mut String, value: &serde_json::Value) {
+        match value {
+            serde_json::Value::Array(items) => {
+                out.push('[');
+                for (index, item) in items.iter().enumerate() {
+                    if index > 0 {
+                        out.push(',');
+                    }
+                    write(out, item);
+                }
+                out.push(']');
+            }
+            serde_json::Value::Object(fields) => {
+                let mut keys: Vec<&String> = fields.keys().collect();
+                keys.sort();
+                out.push('{');
+                for (index, key) in keys.iter().enumerate() {
+                    if index > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&serde_json::to_string(key).expect("a string serializes"));
+                    out.push(':');
+                    write(out, &fields[*key]);
+                }
+                out.push('}');
+            }
+            scalar => out.push_str(&serde_json::to_string(scalar).expect("a scalar serializes")),
+        }
+    }
+    let mut out = String::new();
+    write(&mut out, value);
+    out
+}

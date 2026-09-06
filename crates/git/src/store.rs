@@ -588,6 +588,52 @@ impl GitStore {
             .collect())
     }
 
+    /// Whether a ref exists in the repository.
+    pub async fn has_ref(&self, name: &str, refname: &str) -> GitResult<bool> {
+        let repo = self.existing_repo_path(name)?;
+        Ok(self
+            .run(Some(&repo), &["rev-parse", "--verify", "--quiet", refname])
+            .await
+            .is_ok())
+    }
+
+    /// Attach a note to a commit under `refs/notes/cairn`, replacing
+    /// any earlier one. The text goes through a file: a receipt is
+    /// larger than an argument should be.
+    pub async fn attach_note(&self, name: &str, oid: &str, text: &str) -> GitResult<()> {
+        let repo = self.existing_repo_path(name)?;
+        // Two landings in the same process at the same instant must not
+        // share a scratch file, or one commit gets the other's receipt.
+        static NOTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let scratch = std::env::temp_dir().join(format!(
+            "cairn-note-{}-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default(),
+            NOTES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        tokio::fs::write(&scratch, text).await?;
+        let file = scratch.to_string_lossy().into_owned();
+        let outcome = self
+            .run(
+                Some(&repo),
+                &[
+                    "notes",
+                    "--ref=refs/notes/cairn",
+                    "add",
+                    "-f",
+                    "-F",
+                    &file,
+                    oid,
+                ],
+            )
+            .await;
+        let _ = tokio::fs::remove_file(&scratch).await;
+        outcome.map(|_| ())
+    }
+
     /// The files one commit touched against its first parent (or
     /// everything, for a root commit).
     pub async fn changed_paths(&self, name: &str, oid: &str) -> GitResult<Vec<String>> {
@@ -749,15 +795,17 @@ impl GitStore {
             }
             _ => url.to_owned(),
         };
+        // The receipts travel with the code: the notes ref goes along
+        // whenever the repository has one.
+        let mut refspecs = vec![format!("refs/heads/{branch}:refs/heads/{branch}")];
+        if self.has_ref(name, "refs/notes/cairn").await? {
+            refspecs.push("refs/notes/cairn:refs/notes/cairn".to_owned());
+        }
         let mut command = Command::new("git");
         command
             .current_dir(&path)
-            .args([
-                "push",
-                "--porcelain",
-                &target,
-                &format!("refs/heads/{branch}:refs/heads/{branch}"),
-            ])
+            .args(["push", "--porcelain", &target])
+            .args(&refspecs)
             .env("GIT_TERMINAL_PROMPT", "0")
             .stdin(Stdio::null())
             .kill_on_drop(true);

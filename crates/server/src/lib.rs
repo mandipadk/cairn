@@ -21,6 +21,7 @@ pub mod mail;
 pub mod oidc;
 pub mod passkeys;
 mod queue;
+pub mod receipts;
 mod routes;
 mod sse;
 mod state;
@@ -121,6 +122,9 @@ pub fn router(state: AppState) -> Router {
             get(routes::list_verifications),
         )
         .route("/api/changes/{id}/readiness", get(routes::merge_readiness))
+        .route("/api/changes/{id}/receipt", get(receipts::change_receipt))
+        .route("/api/repos/{name}/receipts", get(receipts::repo_receipts))
+        .route("/api/forge/key", get(receipts::forge_key))
         .route("/api/changes/{id}/merge", post(routes::merge_change))
         .route("/api/changes/{id}/enqueue", post(routes::enqueue_change))
         .route("/api/changes/{id}/dequeue", post(routes::dequeue_change))

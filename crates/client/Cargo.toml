@@ -13,6 +13,8 @@ description = "Client side of the Cairn forge protocol: the MCP adapter for agen
 anyhow = "1.0.104"
 serde_json = "1.0.151"
 ureq = { version = "3.4.0", features = ["json"] }
+ring = "0.17"
+base64 = "0.23.1"
 
 [lints]
 workspace = true

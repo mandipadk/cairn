@@ -1566,6 +1566,73 @@ impl Store {
         }))
     }
 
+    /// The receipt for a landed change: the merge event and everything
+    /// on the revision it landed. None while the change has not landed.
+    pub fn receipt(
+        &self,
+        change: &ChangeId,
+        forge: Option<&str>,
+    ) -> CoreResult<Option<crate::Receipt>> {
+        let Some(current) = raw::change(&self.conn, change.as_str())? else {
+            return Ok(None);
+        };
+        if current.state != ChangeState::Merged {
+            return Ok(None);
+        }
+        // The merge event names the change in its payload; the kind
+        // index keeps this to the merges.
+        let merged: Option<(i64, String, String, String)> = self
+            .conn
+            .prepare_cached(
+                "SELECT seq, ts, actor, payload FROM events
+                  WHERE kind = 'change_merged' AND payload LIKE ?1
+                  ORDER BY seq DESC LIMIT 1",
+            )?
+            .query_row(
+                params![format!("%\"change\":\"{}\"%", change.as_str())],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+        let Some((seq, ts, actor, payload)) = merged else {
+            return Ok(None);
+        };
+        let event: crate::Event =
+            serde_json::from_str(&payload).map_err(|err| crate::CoreError::Corrupt {
+                at: format!("event {seq}"),
+                reason: err.to_string(),
+            })?;
+        let crate::Event::ChangeMerged {
+            revision,
+            merged_as,
+            trace,
+            ..
+        } = event
+        else {
+            return Ok(None);
+        };
+        let Some(landed) = raw::revisions(&self.conn, change.as_str())?
+            .into_iter()
+            .find(|r| r.number == revision)
+        else {
+            return Ok(None);
+        };
+        Ok(Some(crate::Receipt {
+            forge: forge.map(str::to_owned),
+            repo: current.repo.clone(),
+            target: current.target.clone(),
+            landed_as: merged_as.unwrap_or_else(|| landed.commit_oid.clone()),
+            landed_at: ts,
+            seq,
+            merged_by: PrincipalId(actor),
+            trace,
+            claims: raw::claims_on(&self.conn, change.as_str(), revision)?,
+            verifications: raw::verifications_on(&self.conn, change.as_str(), revision)?,
+            verdicts: raw::verdicts_on(&self.conn, change.as_str(), revision)?,
+            revision: landed,
+            change: current,
+        }))
+    }
+
     pub fn active_sessions(&self) -> CoreResult<Vec<Session>> {
         raw::active_sessions(&self.conn)
     }

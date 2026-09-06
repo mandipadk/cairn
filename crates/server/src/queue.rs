@@ -240,6 +240,7 @@ async fn land(
         return Ok(true);
     }
     carry_children(state, entry, &landed).await;
+    crate::receipts::attach(state, &entry.repo, &entry.change, &landed).await;
     mirror_branch(state, &entry.repo, &entry.target, &landed).await;
     Ok(true)
 }

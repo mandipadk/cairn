@@ -4,4 +4,5 @@
 //! tool can embed it; the forge these talk to is AGPL-3.0.
 
 pub mod mcp;
+pub mod receipt;
 pub mod verify;

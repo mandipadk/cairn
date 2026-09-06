@@ -184,7 +184,9 @@ async fn boot_core(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let git_store = GitStore::new(&repos, env!("CARGO_BIN_EXE_cairn"));
-    let mut state = AppState::new(store).with_git(git_store, format!("http://{addr}"));
+    let mut state = AppState::new(store)
+        .with_git(git_store, format!("http://{addr}"))
+        .with_signer(cairn_server::receipts::Signer::ephemeral());
     if !draws {
         state = state.without_automatic_draws();
     }

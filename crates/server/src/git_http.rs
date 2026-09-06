@@ -607,6 +607,7 @@ pub async fn merge_with_git(
             ),
         ));
     }
+    crate::receipts::attach(app, &change.repo, &change.id, &revision.commit_oid).await;
     Ok(committed(None, &env))
 }
 

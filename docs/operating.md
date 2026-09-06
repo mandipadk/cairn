@@ -206,6 +206,22 @@ not count toward a quorum. Then set `runner_quorum` on the repositories
 that want two machines to agree. Each runner asks `awaiting-verification`
 under its own token and is handed only what it still owes.
 
+## Merge receipts
+
+Every landing is signed. The key lives in `signing.key` beside the
+database (owner-only, generated on first start) or wherever
+`--signing-key-file` points; back it up with the database, and know that
+losing it means a new fingerprint while receipts already issued still
+verify against the key they carry. The public key is at `/api/forge/key`.
+Each receipt is also a git note on the landed commit under
+`refs/notes/cairn`, pushed to the mirror with the branch.
+
+```sh
+curl -s https://forge.example/api/changes/c-…/receipt > receipt.json
+cairn receipt verify receipt.json --key 3f9a1c…        # the fingerprint /api/forge/key shows
+git -C clone log --show-notes=cairn -1                  # the same document, on the commit
+```
+
 ## Mirroring
 
 ```sh

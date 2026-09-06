@@ -182,6 +182,29 @@ Sampling keeps it honest: a waived landing is still open to the attention
 budget's draw, a human's verdict on it goes into the record, and one
 block suspends the waiver for the rest of the window.
 
+## Merge receipts
+
+A landing is explainable from the log; a receipt is that explanation made
+portable and hard to alter. For every change that landed, the forge
+assembles one document from the graph's own records - the change, the
+revision and the commit it landed as, when and on whose authority, the
+policy trace, the claims with what they declared unchecked, every
+runner's re-run, every verdict, the paths the commit touched - and signs
+it with an Ed25519 key it generated on first start and keeps beside its
+database. The signature is over a canonical form anyone can recompute:
+JSON with keys sorted, no whitespace, UTF-8. The receipt carries the
+public key and its fingerprint, and `/api/forge/key` publishes the same,
+so a receipt can be checked against the forge or on its own.
+
+The signed receipt is written as a git note on the landed commit under
+`refs/notes/cairn`, and that ref is mirrored with the branch: clone the
+mirror and every commit that landed through the forge carries its own
+evidence (`git log --show-notes=cairn`). `GET /api/changes/{id}/receipt`
+serves one; `GET /api/repos/{name}/receipts` serves them all, newest
+first, paged; `cairn receipt verify receipt.json` checks one offline and
+says what it certifies. Failing to write the note never fails a landing:
+the merge is the decision, the note is a copy of it.
+
 ## Attention as a budget
 
 Human judgment is the scarce input, so the forge spends it deliberately.

@@ -83,6 +83,8 @@ pub struct AppState {
     oidc: Option<Arc<crate::oidc::Trust>>,
     /// Verification-debt maps, one per repository, kept while the tip stands.
     debt_cache: Arc<crate::debt::Cache>,
+    /// Signs merge receipts, when the forge has a key.
+    signer: Option<Arc<crate::receipts::Signer>>,
     /// Ephemeral secrets handed to proc-receive hooks, mapped to the
     /// authenticated pusher. In-memory only, expiring, never logged.
     push_tokens: Arc<Mutex<HashMap<String, PushToken>>>,
@@ -102,6 +104,7 @@ impl AppState {
             automatic_draws: true,
             oidc: None,
             debt_cache: Arc::new(crate::debt::Cache::default()),
+            signer: None,
             secure_cookies: false,
             proxy_trust: crate::guard::ProxyTrust::Connection,
             login_limiter: crate::guard::LoginLimiter::default(),
@@ -313,6 +316,16 @@ impl AppState {
 
     pub(crate) fn debt_cache(&self) -> &crate::debt::Cache {
         &self.debt_cache
+    }
+
+    /// Sign merge receipts with this key.
+    pub fn with_signer(mut self, signer: crate::receipts::Signer) -> Self {
+        self.signer = Some(Arc::new(signer));
+        self
+    }
+
+    pub(crate) fn signer(&self) -> Option<Arc<crate::receipts::Signer>> {
+        self.signer.clone()
     }
 
     pub(crate) fn oidc(&self) -> Option<Arc<crate::oidc::Trust>> {

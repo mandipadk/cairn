@@ -95,6 +95,15 @@ enum Command {
         /// to wait (429 with Retry-After). 0 turns the allowance off.
         #[arg(long, default_value_t = cairn_server::DEFAULT_WRITES_PER_MINUTE)]
         api_writes_per_minute: u32,
+        /// The Ed25519 key that signs merge receipts; generated there when
+        /// absent. Beside the database when unset.
+        #[arg(long)]
+        signing_key_file: Option<PathBuf>,
+    },
+    /// Merge receipts: a landing's evidence, signed by the forge.
+    Receipt {
+        #[command(subcommand)]
+        command: ReceiptCommand,
     },
     /// Offline administration against the forge database. Having file
     /// access to the database is the root authority.
@@ -142,6 +151,20 @@ enum Command {
         /// Principal to assert instead of a token (dev-mode servers only).
         #[arg(long)]
         principal: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ReceiptCommand {
+    /// Check a receipt's signature offline and say what it certifies.
+    Verify {
+        /// The receipt document, as served by /api/changes/{id}/receipt
+        /// or read from the commit's note.
+        file: PathBuf,
+        /// The key it must be signed with: a fingerprint or a base64
+        /// public key, as /api/forge/key publishes.
+        #[arg(long)]
+        key: Option<String>,
     },
 }
 
@@ -251,6 +274,7 @@ async fn main() -> anyhow::Result<()> {
             workload_issuer,
             workload_audience,
             api_writes_per_minute,
+            signing_key_file,
         } => {
             let git_version = cairn_git::preflight().context("checking the git on PATH")?;
             let store = Store::open(&db)
@@ -277,6 +301,15 @@ async fn main() -> anyhow::Result<()> {
                 state = state.trusting_proxy();
             }
             state = state.with_write_allowance(api_writes_per_minute);
+            let key_path = signing_key_file.unwrap_or_else(|| {
+                db.parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .join("signing.key")
+            });
+            let signer = cairn_server::receipts::Signer::load_or_create(&key_path)
+                .map_err(|e| anyhow::anyhow!("--signing-key-file: {e}"))?;
+            tracing::info!("receipts: signing as key {}", signer.id());
+            state = state.with_signer(signer);
             match mailer_from(smtp_url, mail_command, mail_from)? {
                 Some(mailer) => {
                     tracing::info!("mail: {}", mailer.describe());
@@ -510,6 +543,14 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::InternalProcReceive => {
             hook::run()?;
+        }
+        Command::Receipt {
+            command: ReceiptCommand::Verify { file, key },
+        } => {
+            let document = std::fs::read_to_string(&file)
+                .with_context(|| format!("reading {}", file.display()))?;
+            let summary = cairn_client::receipt::verify(&document, key.as_deref())?;
+            println!("{summary}");
         }
         Command::Mcp {
             server,

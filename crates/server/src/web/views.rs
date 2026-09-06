@@ -2451,6 +2451,10 @@ pub fn change(page: ChangePage) -> Markup {
                 }
                 div class="meta" {
                     span { (state_dot(change.state)) " " (change.state.as_str()) }
+                    @if change.state == ChangeState::Merged {
+                        span class="sep" { "·" }
+                        a href={ "/api/changes/" (change.id) "/receipt" } { "receipt" }
+                    }
                     span class="sep" { "·" }
                     span { (change.owner) }
                     @if let Some(task) = task {

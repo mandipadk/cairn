@@ -68,7 +68,11 @@ pub(crate) fn readable_repo_by(app: &AppState, who: &MaybeActor, name: &str) -> 
     }
 }
 
-fn readable_change_by(app: &AppState, who: &MaybeActor, id: &ChangeId) -> ApiResult<Change> {
+pub(crate) fn readable_change_by(
+    app: &AppState,
+    who: &MaybeActor,
+    id: &ChangeId,
+) -> ApiResult<Change> {
     let change = found(app.with_store(|s| s.change(id))?, "change")?;
     readable_repo_by(app, who, &change.repo)?;
     Ok(change)

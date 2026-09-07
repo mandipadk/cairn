@@ -1,0 +1,126 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Ibackup0087bundle",
+      "id": "c-05nfe8b4chmqj8ax3pdnhm6qct",
+      "landed_oid": "de5503b9be4d30b00efafd5574c3f22823b14bdd",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 87,
+      "opened_at": "2026-09-07T19:20:49.656185789Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Say what a backup of a forge is, and prove one restores",
+      "updated_at": "2026-09-07T19:21:07.353668274Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-05nfe8b4chmqj8ax3pdnhm6qct",
+        "command": "scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-5vqak3q4re7csftppjm5zyvjj0",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 690,
+        "summary": "First-run walk on an empty forge from the built binary, now ending with scripts/backup.sh: bundle taken while serving, integrity ok, restored beside it, fsck clean on the copy; every earlier step unchanged and green.",
+        "unchecked": [
+          "The suite was not re-run for this change; it touches no Rust source. CI runs both."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "de5503b9be4d30b00efafd5574c3f22823b14bdd",
+    "landed_at": "2026-09-07T19:21:07.353668274Z",
+    "merged_by": "mandip",
+    "repo": "cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-05nfe8b4chmqj8ax3pdnhm6qct",
+      "commit_oid": "de5503b9be4d30b00efafd5574c3f22823b14bdd",
+      "message": "Say what a backup of a forge is, and prove one restores\n\nThree things hold a forge: the database, the repositories, and the key\nthat signs receipts. The operating guide never said so, and the obvious\ncopy of a live database misses what is still in its WAL. scripts/backup.sh\ntakes all three into one bundle through sqlite's backup API, checks the\ncopy's integrity before keeping it, and prunes old bundles; the guide\nsays what it does, why, and how to restore. The first-run walk now ends\nby backing up the forge it just used, restoring the bundle beside it, and\nrunning fsck on the copy, so the claim that a backup restores is one a\nrunner reproduces.\n\nChange-Id: Ibackup0087bundle\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "docs/operating.md",
+        "scripts/backup.sh",
+        "scripts/first-run.sh"
+      ],
+      "session": null
+    },
+    "seq": 693,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-5vqak3q4re7csftppjm5zyvjj0",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-5vqak3q4re7csftppjm5zyvjj0",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 90 judged claims, 97% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 2 path(s) outside docs/, *.md: scripts/backup.sh, scripts/first-run.sh",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-05nfe8b4chmqj8ax3pdnhm6qct",
+        "claim": "cl-5vqak3q4re7csftppjm5zyvjj0",
+        "command": "scripts/first-run.sh",
+        "id": "vr-0mb4wapdrq37faqn29gjs9xb0k",
+        "observed": "exit 0: first run: every documented step did what the documents say",
+        "revision": 1,
+        "seq": 691
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "lh66R0YTJ8ry1W5g1kQitFFyXR/+F5JyOYmi/IzYrmXikqvJpaoBgCZW41jLB4bfXzME25qRzgyc+mC308CNCg=="
+  }
+}

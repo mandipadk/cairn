@@ -162,10 +162,30 @@ CAIRN_DB=/srv/cairn/cairn.db CAIRN_REPOS=/srv/cairn/repos scripts/backup.sh
 ```
 
 Run it from a timer, and keep a copy of the bundle somewhere the machine's
-disk is not. To restore, extract the bundle and point `serve` at the
-copies; `cairn admin fsck --db <copy> --repos <copy>/repos` proves the
-bundle before you need it, and the first-run walk does exactly that on
-every change to these documents.
+disk is not: `scripts/upload-s3.py` puts a file into any S3-compatible
+bucket (Cloudflare R2 included) with only python and curl, and the
+bucket's lifecycle rule is the retention. To restore, extract the bundle
+and point `serve` at the copies; `cairn admin fsck --db <copy> --repos
+<copy>/repos` proves the bundle before you need it, and the first-run walk
+does exactly that on every change to these documents.
+
+## Watching it
+
+A forge cannot report its own absence, so something else has to ask.
+`cairn admin watch` asks once and remembers the answer:
+
+```sh
+cairn admin watch --url https://cairn.example --state /var/lib/cairn/watch.json --mail-to you@example
+```
+
+It fetches `/healthz`, compares with what it saw last time, and mails only
+when that changes — down, then back — and once a day while it stays down.
+It exits non-zero while the forge is down, so the timer's own status says
+so as well. Mail uses the same settings as `serve` (`CAIRN_SMTP_URL` and
+`CAIRN_MAIL_FROM`, or `CAIRN_MAIL_COMMAND`); without `--mail-to` the
+answer is only printed. Run it every few minutes from a timer on a machine
+that is not the forge. Run on the forge's own machine, it still catches a
+hung process or a dead tunnel, but not the machine going away.
 
 ## Single sign-on and workload identity
 

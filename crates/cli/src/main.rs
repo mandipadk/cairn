@@ -1,4 +1,5 @@
 mod hook;
+mod watch;
 
 use cairn_client::{mcp, verify};
 
@@ -220,6 +221,28 @@ enum AdminCommand {
     /// reach the relay, negotiate TLS, authenticate, hang up. Reads the
     /// same flags and environment as `serve`.
     MailCheck {
+        #[arg(long)]
+        smtp_url: Option<String>,
+        #[arg(long)]
+        mail_command: Option<String>,
+        #[arg(long)]
+        mail_from: Option<String>,
+    },
+    /// Ask a forge whether it is up and say so by mail when that changes.
+    /// One invocation is one look; run it from a timer, ideally on a
+    /// machine that is not the forge. It mails on transitions and once a
+    /// day while down, and exits non-zero while the forge is down so the
+    /// timer's own status shows it too.
+    Watch {
+        /// The forge's public address, e.g. https://cairn.example
+        #[arg(long)]
+        url: String,
+        /// Where the watcher remembers what it last saw.
+        #[arg(long, default_value = "cairn-watch.json")]
+        state: PathBuf,
+        /// Who hears about it. Without this the result is only printed.
+        #[arg(long)]
+        mail_to: Option<String>,
         #[arg(long)]
         smtp_url: Option<String>,
         #[arg(long)]
@@ -497,6 +520,32 @@ async fn main() -> anyhow::Result<()> {
                     "no mail configured: set CAIRN_SMTP_URL (or CAIRN_MAIL_COMMAND) and CAIRN_MAIL_FROM"
                 ),
             },
+            AdminCommand::Watch {
+                url,
+                state,
+                mail_to,
+                smtp_url,
+                mail_command,
+                mail_from,
+            } => {
+                let mailer = mailer_from(smtp_url, mail_command, mail_from)?;
+                if mail_to.is_some() && mailer.is_none() {
+                    anyhow::bail!(
+                        "--mail-to needs mail configured: set CAIRN_SMTP_URL (or CAIRN_MAIL_COMMAND) and CAIRN_MAIL_FROM"
+                    );
+                }
+                let seen = watch::once(&url, &state, mail_to.as_deref().zip(mailer.as_ref()))?;
+                println!(
+                    "{}: {} since {} ({})",
+                    url,
+                    if seen.up { "up" } else { "down" },
+                    watch::human(seen.since),
+                    seen.detail
+                );
+                if !seen.up {
+                    std::process::exit(1);
+                }
+            }
             AdminCommand::Fsck { db, repos } => {
                 let store = Store::open(&db)
                     .with_context(|| format!("opening forge database at {}", db.display()))?;

@@ -94,7 +94,13 @@ mkdir restored && tar -xzf bundles/cairn-*.tar.gz -C restored && tar -xf restore
 [ -s restored/signing.key ] || { echo "!! the bundle carries no signing key"; exit 1; }
 "$BIN" admin fsck --db restored/cairn.db --repos restored/repos | tail -1 | grep -q '^clean' || { echo "!! the restored copy is not clean"; exit 1; }
 
-echo "operating.md: fsck"
+echo "operating.md: the watcher sees the forge up, and sees it go"
+"$BIN" admin watch --url "$URL" --state watch.json | grep -q ': up since' || { echo "!! the watcher did not see the forge up"; exit 1; }
 kill "$SERVE"; wait "$SERVE" 2>/dev/null || true; SERVE=
+if "$BIN" admin watch --url "$URL" --state watch.json >watch.out 2>&1; then echo "!! the watcher called a stopped forge up"; exit 1; fi
+grep -q ': down since' watch.out || { echo "!! the watcher did not say down: $(cat watch.out)"; exit 1; }
+python3 -c 'import json,sys; d=json.load(open("watch.json")); sys.exit(0 if d["up"] is False and d["mailed"] else 1)' || { echo "!! the watcher did not remember the outage as news"; exit 1; }
+
+echo "operating.md: fsck"
 "$BIN" admin fsck --db forge.db --repos repos | tail -1 | grep -q '^clean' || { echo "!! fsck is not clean"; exit 1; }
 echo "first run: every documented step did what the documents say"

@@ -1,0 +1,131 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Iattempts0079pages",
+      "id": "c-3xjd52m4m0m0bzjzzpd8rwnw2g",
+      "landed_oid": "b3b7b4fcb82c90bf2f2fb613d1bbef592c913bfc",
+      "latest_revision": 1,
+      "number": 79,
+      "opened_at": "2026-09-07T17:57:06.929423158Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Read the attempts side by side, and compare them from the page",
+      "updated_at": "2026-09-07T17:57:46.81755878Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-3xjd52m4m0m0bzjzzpd8rwnw2g",
+        "command": "cargo test --workspace",
+        "id": "cl-7sx84hmdgkjapnzwdrqrzemfvw",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 612,
+        "summary": "227 tests pass, exit status gated; rustfmt and clippy clean, warnings denied. The task page shows both attempts with revisions, files, claims and outcome; a comparison posted from the page is recorded, shown, delivered to the owner's inbox, and the change page reflects it.",
+        "unchecked": [
+          "Not yet looked at in a browser; checked on cairn after deploy"
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "b3b7b4fcb82c90bf2f2fb613d1bbef592c913bfc",
+    "landed_at": "2026-09-07T17:57:46.81755878Z",
+    "merged_by": "mandip",
+    "repo": "cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-3xjd52m4m0m0bzjzzpd8rwnw2g",
+      "commit_oid": "b3b7b4fcb82c90bf2f2fb613d1bbef592c913bfc",
+      "message": "Read the attempts side by side, and compare them from the page\n\nThe task page is where attempts at a task are read now: each author\nwith their sessions, their revisions of the task's change and the\nclaims on them, and the outcome they wrote on the way out, side by side,\nthe preferred one marked. The comparison is made from the page, on the\ntask or on the change, and its rationale is shown under the attempts and\ndelivered to the change's owner. The change page says whether revisions\ncompete and which was preferred. Readiness of the task's change is on\nthe task, so the whole review of a task happens where the task is.\n\nChange-Id: Iattempts0079pages\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "crates/cli/tests/suite/attempts_page_flow.rs",
+        "crates/cli/tests/suite/main.rs",
+        "crates/core/src/lib.rs",
+        "crates/core/src/queries.rs",
+        "crates/core/src/store.rs",
+        "crates/core/src/types.rs",
+        "crates/server/src/web/mod.rs",
+        "crates/server/src/web/style.css",
+        "crates/server/src/web/views.rs",
+        "crates/server/tests/api.rs"
+      ],
+      "session": null
+    },
+    "seq": 615,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "latest revision is 1",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-7sx84hmdgkjapnzwdrqrzemfvw",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-7sx84hmdgkjapnzwdrqrzemfvw",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 84 judged claims, 97% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 10 path(s) outside docs/, *.md: crates/cli/tests/suite/attempts_page_flow.rs, crates/cli/tests/suite/main.rs, crates/core/src/lib.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-3xjd52m4m0m0bzjzzpd8rwnw2g",
+        "claim": "cl-7sx84hmdgkjapnzwdrqrzemfvw",
+        "command": "cargo test --workspace",
+        "id": "vr-5be5w5b0b1zy7h1at0rcjb5tg7",
+        "observed": "exit 0: Doc-tests cairn_server",
+        "revision": 1,
+        "seq": 613
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "lNMHyAMSwEg2BDn+9zoHA8mcK2qI6a+6SOHOdMqJ6TDJOUzszujApnSbCb6Woz+DOuG9+Onn/QT5HquOtF8uCw=="
+  }
+}

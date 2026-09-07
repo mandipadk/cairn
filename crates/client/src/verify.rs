@@ -333,3 +333,58 @@ fn post(agent: &ureq::Agent, url: &str, token: &str, body: &Value) -> anyhow::Re
         .send_json(body)?;
     Ok((response.status().as_u16(), response.body_mut().read_json()?))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::summarize;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{ExitStatus, Output};
+
+    fn output(code: i32, stdout: &str, stderr: &str) -> Output {
+        Output {
+            status: ExitStatus::from_raw(code << 8),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.as_bytes().to_vec(),
+        }
+    }
+
+    /// The one line a person reads is the last thing the command said,
+    /// from stderr when it said anything there, and never a wall of it.
+    #[test]
+    fn the_summary_is_the_last_line_said_preferring_stderr() {
+        assert_eq!(
+            summarize(&output(0, "building\nall 12 tests passed\n\n", ""), true),
+            "exit 0: all 12 tests passed"
+        );
+        assert_eq!(
+            summarize(
+                &output(101, "some stdout\n", "error: test failed\n  --> lib.rs\n"),
+                false
+            ),
+            "exit 101: --> lib.rs",
+            "stderr wins, and the tail is trimmed"
+        );
+        let long = format!("{}\n", "x".repeat(500));
+        let said = summarize(&output(1, &long, ""), false);
+        assert_eq!(
+            said.len(),
+            "exit 1: ".len() + 200,
+            "capped so a log cannot become the claim"
+        );
+    }
+
+    #[test]
+    fn silence_is_reported_as_the_outcome() {
+        assert_eq!(summarize(&output(0, "", ""), true), "exit 0: passed");
+        assert_eq!(
+            summarize(&output(3, "   \n\n", ""), false),
+            "exit 3: failed"
+        );
+        let killed = Output {
+            status: ExitStatus::from_raw(9),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        assert_eq!(summarize(&killed, false), "exit signal: failed");
+    }
+}

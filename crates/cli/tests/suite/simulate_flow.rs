@@ -175,6 +175,25 @@ async fn a_policy_is_judged_against_landings_as_of_their_merge() {
     .await;
     assert_eq!(unchanged["held"], 0, "{unchanged}");
 
+    // A stranger is not answered, even on a public repository: the
+    // simulator does real work per call.
+    ok(
+        app,
+        "POST",
+        "/api/repos/demo/visibility",
+        "ada",
+        Some(json!({ "visibility": "public" })),
+    )
+    .await;
+    let (status, refused) = api_anonymous(
+        app,
+        "POST",
+        "/api/repos/demo/policy/simulate?since=2020-01-01",
+        Some(requiring_a_runner()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{refused}");
+
     // A window with nothing in it is an honest zero, and a bad date is refused.
     let (_, none) = api(
         app,

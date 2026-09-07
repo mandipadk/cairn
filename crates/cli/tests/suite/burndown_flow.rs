@@ -143,6 +143,19 @@ async fn imported_code_is_paid_down_by_reproduced_covering_claims() {
     assert_eq!(points[0]["imported"], 15);
     assert_eq!(points[points.len() - 1]["imported"], 5);
 
+    // A cover cannot name the whole tree.
+    for bare in ["*", "/", "**/", "."] {
+        let (status, refused) = api(
+            app,
+            "POST",
+            &format!("/api/changes/{change}/claims"),
+            "scout",
+            Some(json!({ "kind": "test", "passed": true, "summary": "all of it", "command": "exit 0", "covers": [bare] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bare:?}: {refused}");
+    }
+
     // A cover nobody re-ran is shown and moves nothing.
     commit_file(
         &wc,

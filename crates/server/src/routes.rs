@@ -1809,20 +1809,21 @@ pub struct SimulateQuery {
 }
 
 /// What a proposed policy would have held among the landings since a
-/// date, each judged as of its merge. Reading, not writing: anyone who
-/// may read the repository may ask.
+/// date, each judged as of its merge. Reading, not writing, but real
+/// work per call: it re-judges up to five hundred landings, so it asks
+/// who is asking, and a stranger on a public repository is not answered.
 pub async fn simulate_policy(
     State(app): State<AppState>,
-    who: MaybeActor,
+    actor: Actor,
     Path(repo): Path<String>,
     Query(query): Query<SimulateQuery>,
     Json(policy): Json<cairn_core::Policy>,
 ) -> ApiResult<Json<Value>> {
-    readable_repo_by(&app, &who, &repo)?;
+    readable_repo(&app, &actor, &repo)?;
     let since = since_moment(query.since.as_deref())?;
     let limit = query.limit.unwrap_or(200).clamp(1, 500);
     let simulation = app.with_store(|s| {
-        s.acting_as(who.scope())
+        s.acting_as(actor.1.as_ref())
             .simulate_policy(&repo, &policy, &since, limit)
     })?;
     Ok(Json(json!(simulation)))

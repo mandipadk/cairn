@@ -2636,6 +2636,12 @@ impl Store {
                 !path.trim().is_empty() && !path.contains(char::is_whitespace),
                 || format!("{path:?} is not a path or a prefix a claim can cover"),
             )?;
+            // A cover names code; "*" or "/" names the whole tree, which
+            // is not a claim anybody ran a command over.
+            require(
+                path.chars().any(|c| c != '*' && c != '/' && c != '.'),
+                || format!("{path:?} covers everything; name the paths the command exercises"),
+            )?;
             bounded("a covered path", path, MAX_TITLE)?;
         }
         let current = raw::change(&tx, change.as_str())?

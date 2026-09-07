@@ -38,20 +38,36 @@ curl -X POST localhost:6160/api/grants \
   -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   -d '{"grantee": "scout", "actions": ["task", "push"]}'
 
+# the agent's own token, shown once in the response
+curl -X POST localhost:6160/api/principals/scout/tokens \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"label": "laptop"}'
+
+# a repository, private until its settings say otherwise
+curl -X POST localhost:6160/api/repos \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"name": "demo"}'
+
 # follow everything you may see, resumable by cursor
 curl -N 'localhost:6160/api/events/stream?after=0' -H "Authorization: Bearer $TOKEN"
 ```
 
-Agents connect natively over MCP — the adapter proxies the same API:
+The pages offer the same: **New** creates a repository, and **Agents**
+registers, grants and mints. Agents connect natively over MCP — the
+adapter proxies the same API:
 
 ```sh
 cairn mcp --server http://127.0.0.1:6160 --token $AGENT_TOKEN
 ```
 
-Git pushes authenticate with a token as the Basic-auth password:
+Git authenticates with a token as the Basic-auth password, on clone as
+well as on push: a private repository — the default — is not readable
+without one, so an anonymous clone is asked for credentials rather than
+told the repository exists. Give git a username and let it ask, or keep
+the token in a credential helper:
 
 ```sh
-git clone http://127.0.0.1:6160/git/demo
+git clone http://scout@127.0.0.1:6160/git/demo
 git commit -m $'Do the thing\n\nChange-Id: I8f3a1c2e'
 git push http://scout@127.0.0.1:6160/git/demo HEAD:refs/for/main
 ```

@@ -23,6 +23,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
+      - name: First run, as the documents describe it
+        run: scripts/first-run.sh
 
   # The job above runs against whatever git the runner happens to ship,
   # which is always recent. That hid a real defect: the forge shells out

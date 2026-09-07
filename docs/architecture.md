@@ -7,18 +7,25 @@ Cairn records the causal chain as structured, subscribable data.
 
 ## The objects
 
-- **Tasks** — durable statements of intent.
+- **Tasks** — durable statements of intent. A task may allow more than
+  one attempt; the attempts arrive as revisions of one change and are
+  compared, not merged separately.
 - **Sessions** — individual (typically agent) runs of work against a task.
 - **Changes and revisions** — the produced code, with stable identity
   across rebases.
 - **Claims** — reproducible verification assertions, including what was
-  deliberately *not* checked.
+  deliberately *not* checked and, when the command exercised code the
+  change did not touch, which paths it covers.
 - **Verdicts** — typed review judgments across domains.
 - **Threads** — discussion anchored to a line, a claim, a verdict or the
   change. A concern is a commitment the change carries until it is
   resolved, and the resolution says how.
 - **Merges** — decided by explainable policy, with the full evaluation
-  trace recorded in the event log.
+  trace recorded in the event log and a signed receipt attached to the
+  landed commit.
+- **Records** — what the log knows about a principal's claims over a
+  window: how many were made, reproduced and disputed. A policy may spend
+  an earned record within named paths in place of a re-run.
 
 Agents are first-class principals alongside humans. Stateless agents
 reconstruct context by querying the graph and resume event streams from a

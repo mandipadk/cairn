@@ -85,20 +85,34 @@ who it is for: a repository's events go to the people who can read that
 repository, your account's events to you, and nothing leaks through a gap
 in the sequence numbers.
 
+**A landing has a receipt.** Each merge is signed by the forge — what
+landed, which revision was judged, the evidence it was judged on — and
+the receipt travels with the commit as a git note, mirrored with it and
+checkable offline against the forge's public key.
+
+**Trust is earned, and spent narrowly.** Every principal has a record —
+claims made, reproduced, disputed — computed from the log, never
+asserted. A policy can let a good record within named paths stand in for
+a re-run, and that waiver never covers a dispute or a block.
+
 **Imported history says so.** History that predates the forge is recorded
 as imported, never dressed up as reviewed. The log would rather admit a
-gap than invent a decision.
+gap than invent a decision. Imported code is counted as debt, a claim
+whose command exercised it can cover it, and the repository's debt page
+draws it coming down.
 
 ## It speaks git
 
 ```sh
-git clone https://forge.example/git/demo
+git clone https://you@forge.example/git/demo   # the password is a token
 git commit -m $'Do the thing\n\nChange-Id: I8f3a1c2e'
 git push origin HEAD:refs/for/main
 #  * [new reference]   HEAD -> refs/changes/1/1
 ```
 
-Pushing to `refs/for/<branch>` opens a change. Push again with the same
+Repositories are private until made public, so git asks for a password
+on clone; a token of yours is the answer, typed once or kept by your git
+credential helper. Pushing to `refs/for/<branch>` opens a change. Push again with the same
 `Change-Id` and it becomes revision 2 of the same change; every revision
 stays fetchable at `refs/changes/<number>/<revision>`. A multi-commit push
 becomes a stack, landed bottom-up, with children carried onto each new
@@ -112,15 +126,22 @@ cargo run -- admin bootstrap --db forge.db you --display "You"
 cargo run -- serve --db forge.db --listen 127.0.0.1:6160
 ```
 
-Open `http://127.0.0.1:6160` and sign in with the token it printed;
-people you invite sign in with a password, an emailed link, or a
-passkey. Push
-a change as above, attach a claim, and watch the readiness view fill in.
-To let an agent work alongside you:
+Open `http://127.0.0.1:6160`, sign in with the token it printed, and
+create a repository from **New**; repositories live under `repos/` beside
+where `serve` runs. Push a change to it as above — the password git asks
+for is that same token — attach a claim, and watch the readiness view
+fill in. People you invite sign in with a password, an emailed link, or a
+passkey. To let an agent work alongside you, register it on **Agents**,
+grant it what it may do and mint it a token there (shown once), then hand
+the token to the agent:
 
 ```sh
 cairn mcp --server http://127.0.0.1:6160 --token $AGENT_TOKEN
 ```
+
+The path above is walked by `scripts/first-run.sh` against an empty forge,
+in CI and by the runner whenever these documents change, so what they say
+stays what happens.
 
 Needs git 2.39 or newer on the server. [Operating](docs/operating.md)
 covers exposure, CI, mirroring and the admin commands;
@@ -130,14 +151,18 @@ covers exposure, CI, mirroring and the admin commands;
 
 Early, self-hosted, and hosting itself: since the day it could, every
 change to this repository has been pushed to Cairn, independently re-run
-by a runner, and landed under its own policy. A hosted instance is on the way
-— there is a waitlist at [cairn.mandip.dev](https://cairn.mandip.dev).
+by a runner, and landed under its own policy, and each landing leaves a
+signed receipt on its commit. This is an alpha: the model is settled
+enough to document and to run a forge on, while the API and the pages may
+still change between versions without a compatibility promise. A hosted
+instance is planned; the waitlist at
+[cairn.mandip.dev](https://cairn.mandip.dev) is where to say you want one.
 
 What is not here yet, so nobody has to find out the hard way:
-organisations as a level above teams, and quotas on repository size. What is here is tested at
-the boundaries where a forge is usually wrong — authority, concurrency,
-crash recovery, hostile input, resource limits — and `fsck` runs clean on
-the instance serving this page.
+organisations as a level above teams, quotas on repository size, and rate
+limiting on reads. What is here is tested at the boundaries where a forge
+is usually wrong — authority, concurrency, crash recovery, hostile input,
+resource limits — and `fsck` runs clean on the instance serving this page.
 
 ## License
 

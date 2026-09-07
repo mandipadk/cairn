@@ -86,7 +86,7 @@ pub(crate) fn evaluate_at(
     requirements.push(Requirement {
         description: "change has at least one revision".into(),
         satisfied: revision >= 1,
-        evidence: format!("latest revision is {revision}"),
+        evidence: format!("revision {revision} is the one judged"),
     });
 
     // Revisions by more than one author are alternatives, and "latest"

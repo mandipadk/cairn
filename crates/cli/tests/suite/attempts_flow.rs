@@ -276,6 +276,82 @@ async fn two_attempts_are_revisions_of_one_change_and_a_reviewer_compares() {
         Some(json!({ "revision": 3, "kind": "test", "passed": true, "summary": "green", "command": "exit 0" })),
     )
     .await;
+    // The runner re-runs the preferred revision's claims, not the latest's.
+    ok(
+        app,
+        "POST",
+        "/api/principals",
+        "ada",
+        Some(json!({ "id": "runner", "kind": "agent", "display": "Runner", "model": "sandbox", "harness": "ci" })),
+    )
+    .await;
+    ok(
+        app,
+        "POST",
+        "/api/grants",
+        "ada",
+        Some(json!({ "grantee": "runner", "actions": ["verify"] })),
+    )
+    .await;
+    let runner_token = ok(
+        app,
+        "POST",
+        "/api/principals/runner/tokens",
+        "ada",
+        Some(json!({ "label": "ci" })),
+    )
+    .await["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let workspace = forge.work.join("runner");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_cairn"))
+        .args([
+            "verify",
+            "--server",
+            &format!("http://{addr}"),
+            "--token",
+            &runner_token,
+            "--repo",
+            "demo",
+            "--workdir",
+            workspace.to_str().unwrap(),
+            "--checkout",
+            "1",
+        ])
+        .output()
+        .expect("run the runner");
+    let said = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        output.status.success(),
+        "{said}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        said.contains("re-run on revision 3"),
+        "the preferred revision, not the latest: {said}"
+    );
+    let verifications = ok(
+        app,
+        "GET",
+        &format!("/api/changes/{change}/verifications?revision=3"),
+        "ada",
+        None,
+    )
+    .await;
+    assert_eq!(
+        verifications.as_array().unwrap().len(),
+        1,
+        "{verifications}"
+    );
+    assert_eq!(verifications[0]["by"], "runner");
+    // The page opens on the judged revision: r3 carries the claim, r4 none.
+    let (status, page) = page_with_cookie(app, "/demo/changes/1", "cairn_dev=ada").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        page.contains("green"),
+        "the page should open on r3, the preferred revision: {page}"
+    );
     ok(
         app,
         "POST",

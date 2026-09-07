@@ -140,7 +140,7 @@ fn checkout_revision(base: &str, runner: Runner, number: i64, into: &Path) -> an
         &format!("{base}/api/repos/{}/changes/{number}", runner.repo),
         runner.token,
     )?;
-    let revision = change["latest_revision"].as_i64().unwrap_or(1);
+    let revision = judged_revision(&change).max(1);
     let git_url = format!("{base}/git/{}", runner.repo);
     // The token authenticates the fetch the same way it does the API.
     // The username is decoration — the forge reads identity from the
@@ -207,11 +207,11 @@ pub fn run(runner: Runner) -> anyhow::Result<bool> {
     let change_id = change["id"]
         .as_str()
         .context("the forge returned a change without an id")?;
-    let revision = change["latest_revision"].as_i64().unwrap_or(0);
+    let revision = judged_revision(&change);
 
     let (_, claims) = get(
         &agent,
-        &format!("{base}/api/changes/{change_id}/claims"),
+        &format!("{base}/api/changes/{change_id}/claims?revision={revision}"),
         runner.token,
     )?;
     let claims = claims.as_array().cloned().unwrap_or_default();
@@ -288,6 +288,18 @@ pub fn run(runner: Runner) -> anyhow::Result<bool> {
         println!("the change cannot land until the dispute is resolved");
     }
     Ok(disputed > 0)
+}
+
+/// The revision under judgment: the preferred one when revisions
+/// compete, else the latest. Re-running the latest revision of a change
+/// whose reviewer preferred another would verify the wrong attempt.
+fn judged_revision(change: &Value) -> i64 {
+    let latest = change["latest_revision"].as_i64().unwrap_or(0);
+    if change["competing"] == Value::Bool(true) {
+        change["preferred_revision"].as_i64().unwrap_or(latest)
+    } else {
+        latest
+    }
 }
 
 /// What the runner saw, in one line: the outcome plus the tail of

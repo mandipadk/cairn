@@ -3970,7 +3970,7 @@ pub fn debt(
             @if !map.paid_down.is_empty() {
                 div class="sechead later" { b { "Paid down" } span { "by reproduced covering claims" } }
                 @for paid in &map.paid_down {
-                    div class="trow" {
+                    div class="trow paid" {
                         span class="strong" { (paid.by) }
                         span class="sec3" { (paid.claims) " covering claim(s), reproduced · " (paid.files) " file(s)" }
                         span class="n" { (thousands(paid.lines)) " lines" }

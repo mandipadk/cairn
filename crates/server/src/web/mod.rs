@@ -2668,7 +2668,7 @@ async fn change_page(
     let shown = query
         .r
         .filter(|r| (1..=change.latest_revision).contains(r))
-        .unwrap_or(change.latest_revision);
+        .unwrap_or_else(|| change.judged_revision());
     let (claims, verifications, verdicts, trace) = match app.with_store(|s| {
         Ok::<_, cairn_core::CoreError>((
             s.claims_on(&change.id, shown)?,

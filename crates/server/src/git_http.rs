@@ -395,6 +395,9 @@ pub struct PushedCommit {
     pub message: String,
     /// Change-Id trailer, when the commit carries one.
     pub change_id: Option<String>,
+    /// Task trailer, when the commit carries one: the attempt this is.
+    #[serde(default)]
+    pub task: Option<String>,
 }
 
 /// What the proc-receive hook reports about one push: every new commit
@@ -457,6 +460,29 @@ pub async fn record_push(
             }
             None => None,
         };
+        // An attempt at a task that already has an open change is a
+        // revision of that change, whoever pushed it.
+        let task = commit
+            .task
+            .as_deref()
+            .map(|t| cairn_core::TaskId(t.to_owned()));
+        let existing = match (existing, &task) {
+            (Some(change), _) => Some(change),
+            (None, Some(task)) => app
+                .with_store(|s| s.acting_as(actor.1.as_ref()).open_change_for_task(task))?
+                .filter(|c| c.repo == body.repo && c.target == body.target),
+            (None, None) => None,
+        };
+        // The pusher's live session on that task, so the revision says
+        // which attempt it came from.
+        let session = match &task {
+            Some(task) => app
+                .with_store(|s| s.acting_as(actor.1.as_ref()).sessions_for_task(task))?
+                .into_iter()
+                .find(|s| s.agent == actor.0 && s.state == cairn_core::SessionState::Active)
+                .map(|s| s.id),
+            None => None,
+        };
         let (change, number, created) = match existing {
             Some(change) if change.state == ChangeState::Open && change.target == body.target => {
                 let unchanged = app
@@ -493,6 +519,7 @@ pub async fn record_push(
                 let spec = cairn_core::ChangeSpec {
                     external_key: commit.change_id.clone(),
                     parent_change: parent.clone(),
+                    task: task.clone(),
                     ..cairn_core::ChangeSpec::new(&body.repo, &body.target, &commit.title)
                 };
                 let (id, number, env) =
@@ -521,7 +548,7 @@ pub async fn record_push(
                 &actor.0,
                 &change,
                 &commit.commit_oid,
-                None,
+                session.as_ref(),
                 &commit.message,
                 paths,
             )
@@ -558,7 +585,8 @@ pub async fn merge_with_git(
         .with_store(|s| s.change(change_id))?
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not_found", "change not found"))?;
     let revisions = app.with_store(|s| s.revisions(change_id))?;
-    let Some(revision) = revisions.last() else {
+    let judged = change.judged_revision();
+    let Some(revision) = revisions.iter().find(|r| r.number == judged) else {
         // No revisions: let core merge produce its policy refusal.
         let env = crate::routes::merge_core(app, actor, change_id)?;
         app.publish(&env);

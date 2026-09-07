@@ -388,6 +388,8 @@ pub struct CreateTask {
     pub title: String,
     pub spec: String,
     pub parent: Option<TaskId>,
+    /// How many agents may hold it at once; one when absent.
+    pub attempts: Option<u32>,
 }
 
 pub async fn create_task(
@@ -397,12 +399,13 @@ pub async fn create_task(
 ) -> ApiResult<Json<Value>> {
     let (task, env) = app.with_store(|s| {
         s.acting_as(actor.1.as_ref());
-        s.create_task(
+        s.create_task_with_attempts(
             &actor.0,
             body.repo.as_deref(),
             &body.title,
             &body.spec,
             body.parent.as_ref(),
+            body.attempts.unwrap_or(1),
         )
     })?;
     app.publish(&env);
@@ -769,6 +772,31 @@ pub async fn give_verdict(
     })?;
     app.publish(&env);
     Ok(committed(Some(verdict.0), &env))
+}
+
+#[derive(Deserialize)]
+pub struct PreferRevision {
+    pub revision: i64,
+    pub rationale: String,
+}
+
+/// Compare competing revisions: this one should land, and why.
+pub async fn prefer_revision(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Json(body): Json<PreferRevision>,
+) -> ApiResult<Json<Value>> {
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref()).prefer_revision(
+            &actor.0,
+            &ChangeId(id),
+            body.revision,
+            &body.rationale,
+        )
+    })?;
+    app.publish(&env);
+    Ok(committed(None, &env))
 }
 
 pub async fn list_verdicts(

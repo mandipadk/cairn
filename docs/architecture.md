@@ -279,6 +279,31 @@ Where reviewers reach opposite conclusions, both positions are put side
 by side on the change — that is the one place a human's judgment is worth
 more than another review.
 
+## The task as the unit of review
+
+A task is the intent, a session is one attempt at it, and a change is
+what came out; the rule that ties them is one task, one open change.
+The first change that names a task is the task's change. Another attempt
+does not open a second: a push whose commit carries a `Task:` trailer,
+or a change opened naming the task, becomes a revision of the task's
+change instead, tagged with the attempt's session and author, and a
+change opened against a task that already has an open one is refused
+with a pointer to it. Two agents' attempts are two revisions of one
+change, with one number, one page and one place in the queue. Duplicate
+agent pull requests have nowhere to exist.
+
+A task invites as many attempts as it says (`attempts`, one by default,
+which is the exclusivity tasks always had). Revisions of one change by
+more than one author compete: "latest" means nothing among alternatives,
+so readiness carries an unmet requirement, *competing revisions have a
+comparison*, until a reviewer prefers one, on the record, with a rationale
+that says why it and not the others. The reviewer needs the review
+capability and may not have written any of the revisions. The preferred
+revision is the one the policy judges and the queue lands; the rest stay
+on the record as what was not chosen. A later push by the preferred
+revision's author carries the preference forward; anyone else's push
+reopens the comparison. When the task's change lands, the task is landed.
+
 ## Sessions, leases and outcomes
 
 A session can declare which paths it expects to touch, and is told who

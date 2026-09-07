@@ -180,6 +180,8 @@ const MAX_TITLE: usize = 300;
 const MAX_TEXT: usize = 8_000;
 /// Paths recorded on one revision, at most.
 const MAX_PATHS: usize = 1_000;
+/// Agents one task may invite at once, at most.
+const MAX_ATTEMPTS: u32 = 8;
 const MAX_ITEMS: usize = 64;
 
 fn bounded(what: &str, value: &str, limit: usize) -> CoreResult<()> {
@@ -2084,8 +2086,26 @@ impl Store {
         spec: &str,
         parent: Option<&TaskId>,
     ) -> CoreResult<(TaskId, Envelope)> {
+        self.create_task_with_attempts(actor, repo, title, spec, parent, 1)
+    }
+
+    /// Create a task that `attempts` agents may hold at once. More than
+    /// one invites competing attempts: each becomes a revision of the
+    /// task's one change, and a reviewer compares them.
+    pub fn create_task_with_attempts(
+        &mut self,
+        actor: &PrincipalId,
+        repo: Option<&str>,
+        title: &str,
+        spec: &str,
+        parent: Option<&TaskId>,
+        attempts: u32,
+    ) -> CoreResult<(TaskId, Envelope)> {
         let tx = self.conn.transaction()?;
         authorize(&tx, self.acting.as_ref(), actor, Capability::Task, repo)?;
+        require((1..=MAX_ATTEMPTS).contains(&attempts), || {
+            format!("a task invites between 1 and {MAX_ATTEMPTS} attempts, not {attempts}")
+        })?;
         if let Some(repo) = repo {
             ensure_writable(&tx, repo)?;
         }
@@ -2115,6 +2135,7 @@ impl Store {
                 title: title.to_owned(),
                 spec: spec.to_owned(),
                 parent: parent.cloned(),
+                attempts,
             },
         )?;
         tx.commit()?;
@@ -2132,11 +2153,34 @@ impl Store {
             Capability::Task,
             current.repo.as_deref(),
         )?;
-        if current.state != TaskState::Open {
-            return Err(CoreError::Conflict(format!(
-                "task {task} is {}, not open",
-                current.state.as_str()
-            )));
+        match current.state {
+            TaskState::Open => {}
+            TaskState::Claimed if current.claimants.contains(actor) => {
+                return Err(CoreError::Conflict(format!(
+                    "{actor} already holds task {task}"
+                )));
+            }
+            // A task that invites several attempts stays open to claim
+            // until it has that many holders.
+            TaskState::Claimed if (current.claimants.len() as u32) < current.attempts => {}
+            TaskState::Claimed => {
+                return Err(CoreError::Conflict(format!(
+                    "task {task} is held by {}; it invites {} attempt(s)",
+                    current
+                        .claimants
+                        .iter()
+                        .map(|p| p.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    current.attempts
+                )));
+            }
+            other => {
+                return Err(CoreError::Conflict(format!(
+                    "task {task} is {}, not open",
+                    other.as_str()
+                )));
+            }
         }
         let env = append(
             &tx,
@@ -2198,7 +2242,7 @@ impl Store {
             Capability::Task,
             current.repo.as_deref(),
         )?;
-        if current.state != TaskState::Claimed || current.claimed_by.as_ref() != Some(actor) {
+        if current.state != TaskState::Claimed || !current.claimants.contains(actor) {
             return Err(CoreError::Conflict(format!(
                 "task {task} must be claimed by {actor} before opening a session"
             )));
@@ -2428,6 +2472,14 @@ impl Store {
         if let Some(task) = &spec.task {
             raw::task(&tx, task.as_str())?
                 .ok_or_else(|| CoreError::NotFound(format!("task {task}")))?;
+            // One task, one open change: another attempt is a revision of
+            // it, not a change beside it.
+            if let Some(open) = raw::open_change_for_task(&tx, task.as_str())? {
+                return Err(CoreError::Conflict(format!(
+                    "task {task} already has an open change, #{} ({}); push a revision to it instead",
+                    open.number, open.id
+                )));
+            }
         }
         if let Some(key) = &spec.external_key {
             require(
@@ -3110,6 +3162,70 @@ impl Store {
         Ok((verification, env))
     }
 
+    /// Compare a change's competing revisions and say which should land.
+    /// Review authority, and independence: nobody who wrote one of the
+    /// revisions may choose between them.
+    pub fn prefer_revision(
+        &mut self,
+        actor: &PrincipalId,
+        change: &ChangeId,
+        revision: i64,
+        rationale: &str,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        let current = raw::change(&tx, change.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Review,
+            Some(&current.repo),
+        )?;
+        if current.state != ChangeState::Open {
+            return Err(CoreError::Conflict(format!(
+                "change {change} is {}, not open",
+                current.state.as_str()
+            )));
+        }
+        require(!rationale.trim().is_empty(), || {
+            "a comparison must say why this revision and not the others".into()
+        })?;
+        bounded("comparison rationale", rationale, MAX_TEXT)?;
+        let revisions = raw::revisions(&tx, change.as_str())?;
+        require(revisions.iter().any(|r| r.number == revision), || {
+            format!("change {change} has no revision {revision}")
+        })?;
+        if !current.competing {
+            return Err(CoreError::Conflict(format!(
+                "change {change} has revisions by one author; there is nothing to compare"
+            )));
+        }
+        if revisions.iter().any(|r| r.by == *actor) {
+            return Err(CoreError::Forbidden(format!(
+                "{actor} wrote a revision of {change}; the comparison must come from somebody else"
+            )));
+        }
+        let over: Vec<i64> = revisions
+            .iter()
+            .map(|r| r.number)
+            .filter(|n| *n != revision)
+            .collect();
+        let env = append(
+            &tx,
+            actor,
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
+            Event::RevisionPreferred {
+                change: change.clone(),
+                revision,
+                over,
+                rationale: rationale.to_owned(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
     /// Dry-run the merge policy: what would block a merge right now?
     /// Agents subscribe to events and consult this to decide their next
     /// move — fix a failing requirement, or stop, satisfied.
@@ -3165,7 +3281,7 @@ impl Store {
             self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::ChangeMerged {
                 change: change.clone(),
-                revision: current.latest_revision,
+                revision: current.judged_revision(),
                 merged_as: merged_as.map(str::to_owned),
                 trace,
             },

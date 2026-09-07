@@ -212,22 +212,38 @@ pub(crate) mod raw {
                 claimed_by: row.get::<_, Option<String>>(6)?.map(PrincipalId),
                 created_by: PrincipalId(row.get(7)?),
                 seq: row.get(8)?,
+                attempts: row.get::<_, i64>(9)? as u32,
+                claimants: Vec::new(),
             },
             state,
         ))
     }
 
     const TASK_COLS: &str =
-        "id, repo, title, spec, state, parent, claimed_by, created_by, created_seq";
+        "id, repo, title, spec, state, parent, claimed_by, created_by, created_seq, attempts";
+
+    /// Everyone holding a task, in the order they claimed it.
+    pub fn claimants(conn: &Connection, task: &str) -> CoreResult<Vec<PrincipalId>> {
+        Ok(conn
+            .prepare_cached("SELECT principal FROM task_claimants WHERE task = ? ORDER BY seq")?
+            .query_map(params![task], |row| {
+                row.get::<_, String>(0).map(PrincipalId)
+            })?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// A task row made whole: its state parsed and its claimants loaded.
+    fn finish_task(conn: &Connection, (mut task, state): (Task, String)) -> CoreResult<Task> {
+        task.state = parsed(&format!("task {}", task.id), &state, TaskState::parse)?;
+        task.claimants = claimants(conn, task.id.as_str())?;
+        Ok(task)
+    }
 
     pub fn task(conn: &Connection, id: &str) -> CoreResult<Option<Task>> {
         conn.prepare_cached(&format!("SELECT {TASK_COLS} FROM tasks WHERE id = ?"))?
             .query_row(params![id], task_from_row)
             .optional()?
-            .map(|(mut task, state)| {
-                task.state = parsed(&format!("task {id}"), &state, TaskState::parse)?;
-                Ok(task)
-            })
+            .map(|row| finish_task(conn, row))
             .transpose()
     }
 
@@ -248,12 +264,7 @@ pub(crate) mod raw {
             None => stmt.query_map([], task_from_row)?,
         }
         .collect::<Result<Vec<_>, _>>()?;
-        rows.into_iter()
-            .map(|(mut task, state)| {
-                task.state = parsed(&format!("task {}", task.id), &state, TaskState::parse)?;
-                Ok(task)
-            })
-            .collect()
+        rows.into_iter().map(|row| finish_task(conn, row)).collect()
     }
 
     /// One page of tasks, newest first: those created before `before`
@@ -274,12 +285,7 @@ pub(crate) mod raw {
             ))?
             .query_map(params![state, repo, before, limit], task_from_row)?
             .collect::<Result<Vec<_>, _>>()?;
-        rows.into_iter()
-            .map(|(mut task, state)| {
-                task.state = parsed(&format!("task {}", task.id), &state, TaskState::parse)?;
-                Ok(task)
-            })
-            .collect()
+        rows.into_iter().map(|row| finish_task(conn, row)).collect()
     }
 
     pub fn session(conn: &Connection, id: &str) -> CoreResult<Option<Session>> {
@@ -306,7 +312,9 @@ pub(crate) mod raw {
 
     const CHANGE_COLS: &str = "id, repo, number, target, title, task, parent_change, state, \
                                owner, latest_revision, external_key, landed_oid, opened_at, \
-                               updated_at";
+                               updated_at, preferred_revision, \
+                               (SELECT COUNT(DISTINCT by) FROM revisions r \
+                                 WHERE r.change_id = changes.id AND r.by != '')";
 
     fn change_from_row(row: &Row) -> rusqlite::Result<(Change, String)> {
         Ok((
@@ -325,6 +333,8 @@ pub(crate) mod raw {
                 landed_oid: row.get(11)?,
                 opened_at: row.get(12)?,
                 updated_at: row.get(13)?,
+                preferred_revision: row.get(14)?,
+                competing: row.get::<_, i64>(15)? > 1,
             },
             row.get::<_, String>(7)?,
         ))
@@ -432,7 +442,7 @@ pub(crate) mod raw {
     pub fn revisions(conn: &Connection, change: &str) -> CoreResult<Vec<Revision>> {
         Ok(conn
             .prepare_cached(
-                "SELECT change_id, number, commit_oid, session, message, paths
+                "SELECT change_id, number, commit_oid, session, message, paths, by
                  FROM revisions WHERE change_id = ? ORDER BY number",
             )?
             .query_map(params![change], |row| {
@@ -443,6 +453,7 @@ pub(crate) mod raw {
                     session: row.get::<_, Option<String>>(3)?.map(SessionId),
                     message: row.get(4)?,
                     paths: serde_json::from_str(&row.get::<_, String>(5)?).unwrap_or_default(),
+                    by: PrincipalId(row.get(6)?),
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?)
@@ -728,6 +739,18 @@ pub(crate) mod raw {
         ids.into_iter()
             .filter_map(|id| session(conn, &id).transpose())
             .collect()
+    }
+
+    /// The one open change a task has, if it has one: every attempt at
+    /// the task is a revision of it.
+    pub fn open_change_for_task(conn: &Connection, task: &str) -> CoreResult<Option<Change>> {
+        conn.prepare_cached(&format!(
+            "SELECT {CHANGE_COLS} FROM changes WHERE task = ? AND state = 'open' ORDER BY number LIMIT 1"
+        ))?
+        .query_row(params![task], change_from_row)
+        .optional()?
+        .map(finish_change)
+        .transpose()
     }
 
     pub fn changes_for_task(conn: &Connection, task: &str) -> CoreResult<Vec<Change>> {
@@ -1548,7 +1571,7 @@ impl Store {
             if change.state != ChangeState::Open || change.latest_revision == 0 {
                 continue;
             }
-            let revision = change.latest_revision;
+            let revision = change.judged_revision();
             let claims = raw::claims_on(&self.conn, change.id.as_str(), revision)?;
             let verifications = raw::verifications_on(&self.conn, change.id.as_str(), revision)?;
             let standing = crate::policy::standing_positions(&verifications);
@@ -1809,6 +1832,10 @@ impl Store {
 
     pub fn sessions_for_task(&self, task: &TaskId) -> CoreResult<Vec<Session>> {
         raw::sessions_for_task(&self.conn, task.as_str())
+    }
+
+    pub fn open_change_for_task(&self, task: &TaskId) -> CoreResult<Option<Change>> {
+        raw::open_change_for_task(&self.conn, task.as_str())
     }
 
     pub fn changes_for_task(&self, task: &TaskId) -> CoreResult<Vec<Change>> {

@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 22;
+const SCHEMA_VERSION: i64 = 23;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -266,10 +266,18 @@ CREATE TABLE IF NOT EXISTS tasks (
   state       TEXT NOT NULL,
   claimed_by  TEXT,
   created_by  TEXT NOT NULL,
-  created_seq INTEGER NOT NULL DEFAULT 0
+  created_seq INTEGER NOT NULL DEFAULT 0,
+  attempts    INTEGER NOT NULL DEFAULT 1
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks (state);
 CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks (created_seq);
+
+CREATE TABLE IF NOT EXISTS task_claimants (
+  task      TEXT NOT NULL,
+  principal TEXT NOT NULL,
+  seq       INTEGER NOT NULL,
+  PRIMARY KEY (task, principal)
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS sessions (
   id      TEXT PRIMARY KEY,
@@ -303,6 +311,7 @@ CREATE TABLE IF NOT EXISTS changes (
   landed_oid      TEXT,
   opened_at       TEXT NOT NULL DEFAULT '',
   updated_at      TEXT NOT NULL DEFAULT '',
+  preferred_revision INTEGER,
   UNIQUE (repo, number)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_changes_repo_state ON changes (repo, state);
@@ -317,6 +326,7 @@ CREATE TABLE IF NOT EXISTS revisions (
   session    TEXT,
   message    TEXT NOT NULL,
   paths      TEXT NOT NULL DEFAULT '[]',
+  by         TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (change_id, number)
 ) STRICT;
 
@@ -441,6 +451,7 @@ const PROJECTION_TABLES: &[&str] = &[
     "repos",
     "imports",
     "tasks",
+    "task_claimants",
     "sessions",
     "leases",
     "changes",
@@ -890,6 +901,7 @@ fn record_scope(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
         | ClaimAttached { change, .. }
         | ClaimVerified { change, .. }
         | VerdictGiven { change, .. }
+        | RevisionPreferred { change, .. }
         | ThreadOpened { change, .. }
         | ThreadReplied { change, .. }
         | ThreadResolved { change, .. }
@@ -1554,6 +1566,7 @@ fn change_named(event: &Event) -> Option<&crate::id::ChangeId> {
         | ThreadOpened { change, .. }
         | ThreadReplied { change, .. }
         | ThreadResolved { change, .. }
+        | RevisionPreferred { change, .. }
         | AttentionDrawn { change, .. }
         | ChangeEnqueued { change }
         | ChangeDequeued { change, .. }
@@ -1919,10 +1932,11 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             title,
             spec,
             parent,
+            attempts,
         } => {
             tx.execute(
-                "INSERT INTO tasks (id, repo, title, spec, parent, state, created_by, created_seq)
-                 VALUES (?, ?, ?, ?, ?, 'open', ?, ?)",
+                "INSERT INTO tasks (id, repo, title, spec, parent, state, created_by, created_seq, attempts)
+                 VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?)",
                 params![
                     task.as_str(),
                     repo,
@@ -1930,14 +1944,21 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                     spec,
                     parent.as_ref().map(|p| p.as_str()),
                     actor,
-                    env.seq.0
+                    env.seq.0,
+                    i64::from(*attempts)
                 ],
             )?;
         }
         Event::TaskClaimed { task } => {
+            // The first claimant is `claimed_by`, for everything that
+            // already reads it; every claimant is in the roster.
             tx.execute(
-                "UPDATE tasks SET state = 'claimed', claimed_by = ? WHERE id = ?",
+                "UPDATE tasks SET state = 'claimed', claimed_by = COALESCE(claimed_by, ?) WHERE id = ?",
                 params![actor, task.as_str()],
+            )?;
+            tx.execute(
+                "INSERT OR IGNORE INTO task_claimants (task, principal, seq) VALUES (?, ?, ?)",
+                params![task.as_str(), actor, env.seq.0],
             )?;
         }
         Event::TaskStateChanged { task, state } => {
@@ -2021,16 +2042,28 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             paths,
         } => {
             tx.execute(
-                "INSERT INTO revisions (change_id, number, commit_oid, session, message, paths)
-                 VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO revisions (change_id, number, commit_oid, session, message, paths, by)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
                 params![
                     change.as_str(),
                     revision,
                     commit_oid,
                     session.as_ref().map(|s| s.as_str()),
                     message,
-                    serde_json::to_string(paths).expect("string vec serializes")
+                    serde_json::to_string(paths).expect("string vec serializes"),
+                    actor
                 ],
+            )?;
+            // A preference follows its own author's newer revision and is
+            // reopened by anybody else's: the comparison was between
+            // authors' work, and one of them just changed theirs.
+            tx.execute(
+                "UPDATE changes SET preferred_revision = CASE
+                     WHEN preferred_revision IS NULL THEN NULL
+                     WHEN (SELECT by FROM revisions WHERE change_id = ?1 AND number = preferred_revision) = ?2 THEN ?3
+                     ELSE NULL END
+                 WHERE id = ?1",
+                params![change.as_str(), actor, revision],
             )?;
             tx.execute(
                 "UPDATE changes SET latest_revision = ? WHERE id = ?",
@@ -2203,10 +2236,26 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                  ) WHERE id = ?",
                 params![merged_as, change.as_str(), revision, change.as_str()],
             )?;
+            // The task's work merged: the task is landed, with nobody
+            // having to say so.
+            tx.execute(
+                "UPDATE tasks SET state = 'landed'
+                  WHERE id = (SELECT task FROM changes WHERE id = ?)
+                    AND state IN ('open', 'claimed')",
+                params![change.as_str()],
+            )?;
             // A merged change leaves the queue however it landed.
             tx.execute(
                 "DELETE FROM merge_queue WHERE change_id = ?",
                 params![change.as_str()],
+            )?;
+        }
+        Event::RevisionPreferred {
+            change, revision, ..
+        } => {
+            tx.execute(
+                "UPDATE changes SET preferred_revision = ? WHERE id = ?",
+                params![revision, change.as_str()],
             )?;
         }
         // A failed rebase changes nothing about the graph's state; it
@@ -2721,7 +2770,7 @@ mod projection_shape {
         assert_eq!(
             (super::SCHEMA_VERSION, shape.as_str()),
             (
-                22,
+                23,
                 r#"{"require_executed_check":true,"independence":"human_or_two_models","require_runner_verification":false,"runner_quorum":1,"required_domains":[],"require_concerns_resolved":true,"attention_budget":null,"agents_act_in_sessions":false,"trust":null}"#
             ),
             "the policy's stored shape changed: bump SCHEMA_VERSION and pin the new shape here"

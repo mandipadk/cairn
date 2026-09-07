@@ -10,6 +10,10 @@ pub struct CommitInfo {
     /// The `Change-Id:` trailer, if present — the stable key that lets
     /// an amended commit address the same change.
     pub change_id: Option<String>,
+    /// The `Task:` trailer, if present - the task this commit is an
+    /// attempt at, which is what makes it a revision of that task's
+    /// change rather than a change of its own.
+    pub task: Option<String>,
     /// `(name, email, raw date)` from the author header, preserved when
     /// the queue re-commits a rebased change.
     pub author: Option<(String, String, String)>,
@@ -37,10 +41,17 @@ pub fn parse_commit_object(raw: &str) -> CommitInfo {
         .find_map(|line| line.strip_prefix("Change-Id:"))
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
+    let task = message
+        .lines()
+        .rev()
+        .find_map(|line| line.strip_prefix("Task:"))
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
     CommitInfo {
         title,
         message,
         change_id,
+        task,
         author,
     }
 }

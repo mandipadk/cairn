@@ -62,7 +62,7 @@ pub(crate) fn evaluate_against(
     change: &Change,
     policy: &Policy,
 ) -> CoreResult<PolicyTrace> {
-    evaluate_at(conn, change, policy, change.latest_revision, None)
+    evaluate_at(conn, change, policy, change.judged_revision(), None)
 }
 
 /// Evaluate as of a moment: `revision` is the one under judgment and
@@ -88,6 +88,21 @@ pub(crate) fn evaluate_at(
         satisfied: revision >= 1,
         evidence: format!("latest revision is {revision}"),
     });
+
+    // Revisions by more than one author are alternatives, and "latest"
+    // means nothing among them: somebody has to compare and say which.
+    if change.competing {
+        requirements.push(Requirement {
+            description: "competing revisions have a comparison".into(),
+            satisfied: change.preferred_revision.is_some(),
+            evidence: match change.preferred_revision {
+                Some(preferred) => {
+                    format!("revision {preferred} preferred; it is the one judged here")
+                }
+                None => "revisions by more than one author, and nobody has preferred one".into(),
+            },
+        });
+    }
 
     if policy.attention_budget.is_some()
         && let Some(draw) = raw::draw_of(conn, change.id.as_str())?

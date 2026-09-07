@@ -179,7 +179,11 @@ async fn land(
         return Ok(true);
     }
     let revisions = state.with_store(|s| s.revisions(&entry.change))?;
-    let Some(revision) = revisions.last() else {
+    let judged = state
+        .with_store(|s| s.change(&entry.change))?
+        .map(|c| c.judged_revision())
+        .unwrap_or_default();
+    let Some(revision) = revisions.iter().find(|r| r.number == judged) else {
         dequeue(state, entry, "change has no revisions").await;
         return Ok(true);
     };

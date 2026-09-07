@@ -3178,6 +3178,20 @@ fn anchor_words(anchor: &Anchor) -> String {
 fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
     let actor = envelope.actor.as_str();
     match &envelope.event {
+        Event::RevisionPreferred {
+            change,
+            revision,
+            over,
+            ..
+        } => (
+            "dot ok",
+            html! {
+                b { (actor) } " preferred r" (revision) " of " (change_num(numbers, change.as_str()))
+                @if !over.is_empty() {
+                    " over " @for (index, other) in over.iter().enumerate() { @if index > 0 { ", " } "r" (other) }
+                }
+            },
+        ),
         Event::ChangeMerged {
             change, merged_as, ..
         } => (

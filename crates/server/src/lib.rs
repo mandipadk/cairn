@@ -122,6 +122,7 @@ pub fn router(state: AppState) -> Router {
             get(routes::list_verifications),
         )
         .route("/api/changes/{id}/readiness", get(routes::merge_readiness))
+        .route("/api/changes/{id}/prefer", post(routes::prefer_revision))
         .route("/api/changes/{id}/receipt", get(receipts::change_receipt))
         .route("/api/repos/{name}/receipts", get(receipts::repo_receipts))
         .route("/api/forge/key", get(receipts::forge_key))

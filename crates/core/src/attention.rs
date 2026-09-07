@@ -150,7 +150,7 @@ pub(crate) fn evaluate(conn: &Connection, repo: &str) -> CoreResult<Vec<Attentio
         if change.state != ChangeState::Open || change.latest_revision == 0 {
             continue;
         }
-        let revision = change.latest_revision;
+        let revision = change.judged_revision();
         let claims = raw::claims_on(conn, change.id.as_str(), revision)?;
         let verdicts = raw::verdicts_on(conn, change.id.as_str(), revision)?;
         let verifications = raw::verifications_on(conn, change.id.as_str(), revision)?;

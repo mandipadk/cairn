@@ -303,6 +303,10 @@ fn dispatch(client: &ApiClient, name: &str, args: &Value) -> Result<(u16, Value)
         "merge_readiness" => {
             client.get(&format!("/api/changes/{}/readiness", need(args, "change")?))
         }
+        "prefer_revision" => client.post(
+            &format!("/api/changes/{}/prefer", need(args, "change")?),
+            args,
+        ),
         "enqueue_change" => client.post(
             &format!("/api/changes/{}/enqueue", need(args, "change")?),
             args,
@@ -396,6 +400,7 @@ fn tool_definitions() -> Vec<Value> {
                 "spec": s("The full intent: what, why, constraints, acceptance criteria"),
                 "repo": s("Repo this task concerns (optional)"),
                 "parent": s("Parent task id, for decomposed work (optional)"),
+                "attempts": { "type": "integer", "description": "How many agents may hold it at once (default 1). More invites competing attempts: each becomes a revision of the task's one change, and a reviewer compares them." },
             }),
         ),
         tool(
@@ -584,7 +589,9 @@ fn tool_definitions() -> Vec<Value> {
         tool(
             "open_change",
             "Open a change: a unit of code with stable identity across revisions. Link it \
-             to the task it serves; use parent_change to stack on an open change.",
+             to the task it serves; use parent_change to stack on an open change. A task \
+             has one open change: if yours already has one, this is refused and names it - \
+             push your attempt as a revision of that change instead.",
             &["repo", "target", "title"],
             json!({
                 "repo": s("Repo name"),
@@ -691,6 +698,19 @@ fn tool_definitions() -> Vec<Value> {
                 "how": { "type": "string", "enum": ["answered", "fixed", "withdrawn", "overruled"] },
                 "revision": { "type": "integer", "description": "The revision that fixed it (required for `fixed`)" },
                 "note": s("A word on why (optional)"),
+            }),
+        ),
+        tool(
+            "prefer_revision",
+            "Compare a change's competing revisions - attempts by different authors at one \
+             task - and say which should land and why. Needs the review capability and \
+             independence: you may not have written any of them. Until a comparison exists, \
+             a competing change cannot land.",
+            &["change", "revision", "rationale"],
+            json!({
+                "change": s("Change id"),
+                "revision": { "type": "integer", "description": "The revision that should land" },
+                "rationale": s("Why this one and not the others; the other attempts' authors read this"),
             }),
         ),
         tool(

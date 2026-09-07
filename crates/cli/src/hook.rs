@@ -118,6 +118,7 @@ fn handle_push(
             "title": info.title,
             "message": info.message,
             "change_id": info.change_id,
+            "task": info.task,
         }));
     }
     // Fail the stack-needs-trailers case here, where the message can

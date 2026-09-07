@@ -215,6 +215,11 @@ pub enum Event {
         /// The durable intent: the instruction or spec the work serves.
         spec: String,
         parent: Option<TaskId>,
+        /// How many agents may hold this at once. One is exclusive, as
+        /// tasks always were; more invites competing attempts, each a
+        /// revision of the task's one change.
+        #[serde(default = "one_attempt")]
+        attempts: u32,
     },
     TaskClaimed {
         task: TaskId,
@@ -355,6 +360,15 @@ pub enum Event {
         disposition: Disposition,
         rationale: String,
     },
+    /// A comparison: of a change's competing revisions, this one should
+    /// land, and here is why it and not the others. The others stay on
+    /// the record as what was not chosen.
+    RevisionPreferred {
+        change: ChangeId,
+        revision: i64,
+        over: Vec<i64>,
+        rationale: String,
+    },
 
     /// Somebody started a discussion on a change, anchored to a line, a
     /// claim, a verdict or the change itself. A concern is a commitment:
@@ -471,6 +485,7 @@ impl Event {
             Event::ClaimAttached { .. } => "claim_attached",
             Event::ClaimVerified { .. } => "claim_verified",
             Event::VerdictGiven { .. } => "verdict_given",
+            Event::RevisionPreferred { .. } => "revision_preferred",
             Event::ThreadOpened { .. } => "thread_opened",
             Event::ThreadReplied { .. } => "thread_replied",
             Event::AttentionDrawn { .. } => "attention_drawn",
@@ -489,6 +504,10 @@ impl Event {
             Event::ChangeAbandoned { .. } => "change_abandoned",
         }
     }
+}
+
+fn one_attempt() -> u32 {
+    1
 }
 
 #[cfg(test)]

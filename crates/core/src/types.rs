@@ -274,6 +274,14 @@ pub struct Task {
     /// The event that created it, which is what a page of tasks is
     /// cut at: newest first, `before` this.
     pub seq: i64,
+    /// How many agents may hold it at once; one unless the task invites
+    /// competing attempts.
+    #[serde(default = "one")]
+    pub attempts: u32,
+    /// Everyone holding it, in the order they claimed. `claimed_by` is
+    /// the first of them, kept for what already reads it.
+    #[serde(default)]
+    pub claimants: Vec<PrincipalId>,
 }
 
 /// What an API write answered, kept under the key its caller chose so
@@ -353,6 +361,22 @@ pub struct Change {
     pub opened_at: String,
     #[serde(default)]
     pub updated_at: String,
+    /// Of competing revisions, the one a reviewer said should land.
+    #[serde(default)]
+    pub preferred_revision: Option<i64>,
+    /// Revisions by more than one author: alternatives, not history.
+    #[serde(default)]
+    pub competing: bool,
+}
+
+impl Change {
+    /// The revision under judgment: the preferred one when revisions
+    /// compete and somebody has chosen, else the latest, as it always was.
+    pub fn judged_revision(&self) -> i64 {
+        self.preferred_revision
+            .filter(|_| self.competing)
+            .unwrap_or(self.latest_revision)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -365,6 +389,9 @@ pub struct Revision {
     /// The files the commit touched, when the push recorded them.
     #[serde(default)]
     pub paths: Vec<String>,
+    /// Who pushed it. Empty on revisions from before this was recorded.
+    #[serde(default)]
+    pub by: PrincipalId,
 }
 
 /// A claim as submitted: what was checked, how, and what wasn't.

@@ -1,0 +1,129 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "external_key": "Isimulate0077history",
+      "id": "c-7y23egv2a5tvem7kv1ztn33rbp",
+      "landed_oid": "0d7f11f8573bda4371689fca67d3e89a0d47daf4",
+      "latest_revision": 1,
+      "number": 77,
+      "opened_at": "2026-09-07T16:45:03.499203164Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "repo": "cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Try a policy against what already landed, and let it travel as a pack",
+      "updated_at": "2026-09-07T16:46:07.688405814Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-7y23egv2a5tvem7kv1ztn33rbp",
+        "command": "cargo test --workspace",
+        "id": "cl-1cva4hzgtk99d8ptjmgg3wxmq8",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "summary": "222 tests pass, exit status gated; rustfmt and clippy clean, warnings denied. Three landings judged as of their merges: a runner requirement holds the two without one, a re-run made after landing does not count, the current policy holds none; packs list, export and apply from the page.",
+        "unchecked": [
+          "Discussion threads and attention draws are read as they stand now, not as of the merge",
+          "Not yet looked at in a browser; checked on cairn after deploy"
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "0d7f11f8573bda4371689fca67d3e89a0d47daf4",
+    "landed_at": "2026-09-07T16:46:07.688405814Z",
+    "merged_by": "mandip",
+    "repo": "cairn",
+    "revision": {
+      "change": "c-7y23egv2a5tvem7kv1ztn33rbp",
+      "commit_oid": "0d7f11f8573bda4371689fca67d3e89a0d47daf4",
+      "message": "Try a policy against what already landed, and let it travel as a pack\n\nTightening a policy was a bet about the future made with no evidence\nabout the past. The evaluation can now be asked as of a moment: a\nposition in the log past which claims, re-runs and verdicts do not\nexist to it, and before which the owner's record ends. Judging each\nlanding as of its own merge answers \"had we required a runner since\nMarch, what would have waited?\" exactly, naming every landing and the\nrequirement that would have held it; the settings page asks it beside\nthe preview, with a date. A policy also travels now as a pack, with a\nname, a description and where it came from: the forge ships three, any\nrepository exports its own, and a settings page can start from one.\n\nChange-Id: Isimulate0077history\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "crates/cli/tests/suite/main.rs",
+        "crates/cli/tests/suite/simulate_flow.rs",
+        "crates/core/src/lib.rs",
+        "crates/core/src/policy.rs",
+        "crates/core/src/queries.rs",
+        "crates/core/src/record.rs",
+        "crates/core/src/types.rs",
+        "crates/server/src/lib.rs",
+        "crates/server/src/routes.rs",
+        "crates/server/src/web/mod.rs",
+        "crates/server/src/web/views.rs",
+        "docs/architecture.md"
+      ],
+      "session": null
+    },
+    "seq": 601,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "latest revision is 1",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-1cva4hzgtk99d8ptjmgg3wxmq8",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-1cva4hzgtk99d8ptjmgg3wxmq8",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 82 judged claims, 97% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 11 path(s) outside docs/, *.md: crates/cli/tests/suite/main.rs, crates/cli/tests/suite/simulate_flow.rs, crates/core/src/lib.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-7y23egv2a5tvem7kv1ztn33rbp",
+        "claim": "cl-1cva4hzgtk99d8ptjmgg3wxmq8",
+        "command": "cargo test --workspace",
+        "id": "vr-1bjdmj6ra6gexvegsrf15b7sf2",
+        "observed": "exit 0: Doc-tests cairn_server",
+        "revision": 1
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "OwMPNuikIxnwjPVL3YMe4fqy5yToUEexZ32ECstm7cN1rVEmvb8M5Xcu/4WsqjnxJfxC2jZ+KdQ+Q+SM1wIEAA=="
+  }
+}

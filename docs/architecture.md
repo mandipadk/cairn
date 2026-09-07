@@ -93,6 +93,18 @@ policy behaves as it always did. A proposed policy can be previewed
 first — it reports which open changes it would stop from landing, and
 why, without changing anything.
 
+A policy can be tried before it is set. The preview evaluates it against
+the open changes; the simulator evaluates it against what already landed,
+each landing judged as of its merge: claims, re-runs and verdicts made
+after that moment do not exist to it, and the owner's record is read with
+its window ending there. "Had we required a runner since March, what
+would have waited?" is `POST /api/repos/{name}/policy/simulate?since=`,
+or the Simulate button beside the preview, and the answer names each
+landing and the requirement that would have held it. A policy travels as
+a pack - the policy with a name, a description and where it came from -
+which any repository exports and any settings page can start from; the
+forge ships three (`floor`, `reproduced`, `agents-supervised`).
+
 ## The landing queue
 
 Ready changes land through a merge queue: enqueue a change (policy must

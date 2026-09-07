@@ -62,8 +62,24 @@ pub(crate) fn evaluate_against(
     change: &Change,
     policy: &Policy,
 ) -> CoreResult<PolicyTrace> {
+    evaluate_at(conn, change, policy, change.latest_revision, None)
+}
+
+/// Evaluate as of a moment: `revision` is the one under judgment and
+/// `cut`, a position in the log, is where the evaluation's knowledge
+/// ends. Claims, re-runs and verdicts made after it do not exist to it,
+/// and the owner's record is read with its window ending there. That is
+/// what lets a landing be re-judged as it was, not as it is. Discussion
+/// threads and attention draws are read as they stand now.
+pub(crate) fn evaluate_at(
+    conn: &Connection,
+    change: &Change,
+    policy: &Policy,
+    revision: i64,
+    cut: Option<i64>,
+) -> CoreResult<PolicyTrace> {
     let mut requirements = Vec::new();
-    let revision = change.latest_revision;
+    let known = |seq: i64| cut.is_none_or(|cut| seq <= cut);
     // Where the two requirements earned trust may stand in for end up.
     let mut runner_index: Option<usize> = None;
 
@@ -121,7 +137,8 @@ pub(crate) fn evaluate_against(
         });
     }
 
-    let claims = raw::claims_on(conn, change.id.as_str(), revision)?;
+    let mut claims = raw::claims_on(conn, change.id.as_str(), revision)?;
+    claims.retain(|c| known(c.seq));
     if policy.require_executed_check {
         let executed: Vec<_> = claims
             .iter()
@@ -147,7 +164,8 @@ pub(crate) fn evaluate_against(
 
     // A claim someone re-ran and could not reproduce is worse than no
     // claim: it is a contradiction on the record.
-    let verifications = raw::verifications_on(conn, change.id.as_str(), revision)?;
+    let mut verifications = raw::verifications_on(conn, change.id.as_str(), revision)?;
+    verifications.retain(|v| known(v.seq));
     // A runner's verdict on a claim is its current position, not a
     // permanent artefact. When the same runner re-runs the same claim it
     // is saying what it now observes, and its earlier attempt becomes
@@ -225,7 +243,8 @@ pub(crate) fn evaluate_against(
         });
     }
 
-    let verdicts = raw::verdicts_on(conn, change.id.as_str(), revision)?;
+    let mut verdicts = raw::verdicts_on(conn, change.id.as_str(), revision)?;
+    verdicts.retain(|v| known(v.seq));
     let blocks: Vec<_> = verdicts
         .iter()
         .filter(|v| v.disposition == Disposition::Block)
@@ -329,6 +348,7 @@ pub(crate) fn evaluate_against(
             independence_index,
             !disputed.is_empty(),
             !blocks.is_empty(),
+            cut,
         )?;
     }
 
@@ -353,9 +373,10 @@ fn apply_trust(
     independence_index: usize,
     disputed: bool,
     blocked: bool,
+    cut: Option<i64>,
 ) -> CoreResult<()> {
     let owner = change.owner.as_str();
-    let record = crate::record::record_of(conn, owner, trust.window_days)?;
+    let record = crate::record::record_of_until(conn, owner, trust.window_days, cut)?;
     let active = raw::principal(conn, owner)?.is_some_and(|p| p.active);
     let paths = raw::revision_paths(conn, change.id.as_str(), revision)?;
     let rate = record
@@ -595,4 +616,41 @@ pub(crate) fn reproductions(
         runners.insert(who.provenance.clone(), by.to_owned());
     }
     Ok(out)
+}
+
+/// The packs the forge ships: policies a repository can start from.
+pub fn packs() -> Vec<crate::PolicyPack> {
+    let pack = |name: &str, description: &str, policy: Policy| crate::PolicyPack {
+        pack: 1,
+        name: name.to_owned(),
+        description: description.to_owned(),
+        policy,
+        from: None,
+    };
+    vec![
+        pack(
+            "floor",
+            "What the forge ships with: a passing executed check, one human or two agents of distinct models approving, no concern left unresolved.",
+            Policy::default(),
+        ),
+        pack(
+            "reproduced",
+            "The floor, and a runner must have reproduced a claim before anything lands.",
+            Policy {
+                require_runner_verification: true,
+                ..Policy::default()
+            },
+        ),
+        pack(
+            "agents-supervised",
+            "For repositories where agents write most of the code: a runner reproduces, only a human approves, agents act inside sessions, and two changes a day are drawn for a human look regardless.",
+            Policy {
+                require_runner_verification: true,
+                independence: Independence::HumanOnly,
+                agents_act_in_sessions: true,
+                attention_budget: Some(2),
+                ..Policy::default()
+            },
+        ),
+    ]
 }

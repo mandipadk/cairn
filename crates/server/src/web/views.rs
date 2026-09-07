@@ -1192,8 +1192,12 @@ pub fn repo_settings(
     error: Option<&str>,
     done: bool,
     preview: Option<&[(Change, PolicyTrace)]>,
+    simulation: Option<&cairn_core::Simulation>,
 ) -> Markup {
     let policy = &repo.policy;
+    let ninety_days_ago = (jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24 * 90))
+        .strftime("%Y-%m-%d")
+        .to_string();
     layout(
         theme,
         Some(viewer),
@@ -1290,9 +1294,41 @@ pub fn repo_settings(
                         label for="trust_paths" { "only for changes touching nothing outside (comma-separated; docs/, *.md; empty for any)" }
                         input id="trust_paths" name="trust_paths" type="text" autocomplete="off" value=(trust.map(|t| t.paths.join(", ")).unwrap_or_default());
                     }
+                    div {
+                        span class="hint" { "Start from a pack instead of the fields above" }
+                        select name="pack" {
+                            option value="" { "the fields above" }
+                            @for pack in cairn_core::packs() { option value=(pack.name) { (pack.name) " · " (pack.description) } }
+                        }
+                        label for="pack_json" { "or paste a pack exported by another repository" }
+                        textarea id="pack_json" name="pack_json" rows="3" placeholder="{ \"pack\": 1, \"name\": … }" {}
+                        a class="link" href={ "/api/repos/" (repo.name) "/policy/pack" } { "Export this policy as a pack" }
+                    }
                     div class="line" {
                         button class="vbtn" type="submit" name="action" value="preview" { "Preview against open changes" }
+                        label for="since" { "or against landings since" }
+                        input id="since" name="since" type="date" value=(ninety_days_ago);
+                        button class="vbtn" type="submit" name="action" value="simulate" { "Simulate" }
                         button class="btn" type="submit" name="action" value="save" { "Save policy" }
+                    }
+                }
+                @if let Some(simulation) = simulation {
+                    div class="preview" {
+                        p class="note" {
+                            "Against " (simulation.landings) " landing(s) since " (short_day(&simulation.since)) ", this policy would have held " (simulation.held) "."
+                            @if simulation.landings > 0 && simulation.held == 0 { " A requirement nothing failed is one that was being met, which is the reason to keep it." }
+                        }
+                        @for (description, n) in &simulation.by_requirement {
+                            div class="trow" {
+                                span class="sec3" { (n) " held by: " (description) }
+                            }
+                        }
+                        @for entry in simulation.entries.iter().filter(|e| e.held) {
+                            div class="trow" {
+                                a class="link" href={ "/" (repo.name) "/changes/" (entry.number) } { "#" (entry.number) " " (entry.title) }
+                                span class="sec3" { (entry.unmet.join("; ")) }
+                            }
+                        }
                     }
                 }
                 @if let Some(previewed) = preview {

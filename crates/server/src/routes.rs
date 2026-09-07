@@ -1771,6 +1771,77 @@ pub async fn set_policy(
     Ok(committed(Some(repo), &env))
 }
 
+#[derive(Deserialize)]
+pub struct SimulateQuery {
+    /// Landings at or after this moment, `YYYY-MM-DD` or RFC 3339; the
+    /// last 90 days when absent.
+    pub since: Option<String>,
+    /// At most this many landings, newest first; 200 when absent, 500 at most.
+    pub limit: Option<i64>,
+}
+
+/// What a proposed policy would have held among the landings since a
+/// date, each judged as of its merge. Reading, not writing: anyone who
+/// may read the repository may ask.
+pub async fn simulate_policy(
+    State(app): State<AppState>,
+    who: MaybeActor,
+    Path(repo): Path<String>,
+    Query(query): Query<SimulateQuery>,
+    Json(policy): Json<cairn_core::Policy>,
+) -> ApiResult<Json<Value>> {
+    readable_repo_by(&app, &who, &repo)?;
+    let since = since_moment(query.since.as_deref())?;
+    let limit = query.limit.unwrap_or(200).clamp(1, 500);
+    let simulation = app.with_store(|s| {
+        s.acting_as(who.scope())
+            .simulate_policy(&repo, &policy, &since, limit)
+    })?;
+    Ok(Json(json!(simulation)))
+}
+
+/// A date or a timestamp, as the log writes timestamps; 90 days back
+/// when nothing is said.
+pub(crate) fn since_moment(given: Option<&str>) -> ApiResult<String> {
+    match given.map(str::trim).filter(|s| !s.is_empty()) {
+        None => {
+            Ok((jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24 * 90)).to_string())
+        }
+        Some(text) if text.parse::<jiff::Timestamp>().is_ok() => Ok(text.to_owned()),
+        Some(text) => text
+            .parse::<jiff::civil::Date>()
+            .ok()
+            .and_then(|d| d.to_zoned(jiff::tz::TimeZone::UTC).ok())
+            .map(|z| z.timestamp().to_string())
+            .ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid",
+                    "since must be a date (YYYY-MM-DD) or an RFC 3339 timestamp",
+                )
+            }),
+    }
+}
+
+/// The packs the forge ships: policies to start from.
+pub async fn policy_packs() -> Json<Value> {
+    Json(json!(cairn_core::packs()))
+}
+
+/// A repository's policy as a pack another could start from.
+pub async fn policy_pack(
+    State(app): State<AppState>,
+    who: MaybeActor,
+    Path(repo): Path<String>,
+) -> ApiResult<Json<Value>> {
+    readable_repo_by(&app, &who, &repo)?;
+    let pack = found(
+        app.with_store(|s| s.policy_pack(&repo, app.public_url()))?,
+        "repo",
+    )?;
+    Ok(Json(json!(pack)))
+}
+
 // ---- mirror ----
 
 #[derive(Deserialize)]

@@ -448,6 +448,40 @@ pub(crate) mod raw {
             .collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// The merges in a repository since a moment, newest first: each
+    /// merge event's position and time, the change and the revision it
+    /// landed. The scope table keeps it to one repository.
+    pub fn landings_since(
+        conn: &Connection,
+        repo: &str,
+        since: &str,
+        limit: i64,
+    ) -> CoreResult<Vec<(i64, String, ChangeId, i64)>> {
+        let rows: Vec<(i64, String, String)> = conn
+            .prepare_cached(
+                "SELECT e.seq, e.ts, e.payload FROM events e
+                   JOIN event_scope s ON s.seq = e.seq
+                  WHERE e.kind = 'change_merged' AND s.repo = ?1 AND e.ts >= ?2
+                  ORDER BY e.seq DESC LIMIT ?3",
+            )?
+            .query_map(params![repo, since, limit], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut landings = Vec::with_capacity(rows.len());
+        for (seq, ts, payload) in rows {
+            let event: crate::Event =
+                serde_json::from_str(&payload).map_err(|e| corrupt(&format!("event {seq}"), e))?;
+            if let crate::Event::ChangeMerged {
+                change, revision, ..
+            } = event
+            {
+                landings.push((seq, ts, change, revision));
+            }
+        }
+        Ok(landings)
+    }
+
     /// The files one revision touched, if the push recorded them.
     pub fn revision_paths(conn: &Connection, change: &str, number: i64) -> CoreResult<Vec<String>> {
         let stored: Option<String> = conn
@@ -462,7 +496,7 @@ pub(crate) mod raw {
     pub fn claims_on(conn: &Connection, change: &str, revision: i64) -> CoreResult<Vec<Claim>> {
         let rows = conn
             .prepare_cached(
-                "SELECT id, change_id, revision, kind, command, passed, summary, unchecked, by
+                "SELECT id, change_id, revision, kind, command, passed, summary, unchecked, by, seq
                  FROM claims WHERE change_id = ? AND revision = ? ORDER BY rowid",
             )?
             .query_map(params![change, revision], |row| {
@@ -476,12 +510,13 @@ pub(crate) mod raw {
                     row.get::<_, String>(6)?,
                     row.get::<_, String>(7)?,
                     row.get::<_, String>(8)?,
+                    row.get::<_, i64>(9)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
             .map(
-                |(id, change_id, revision, kind, command, passed, summary, unchecked, by)| {
+                |(id, change_id, revision, kind, command, passed, summary, unchecked, by, seq)| {
                     let at = format!("claim {id}");
                     Ok(Claim {
                         kind: parsed(&at, &kind, ClaimKind::parse)?,
@@ -493,6 +528,7 @@ pub(crate) mod raw {
                         passed: passed != 0,
                         summary,
                         by: PrincipalId(by),
+                        seq,
                     })
                 },
             )
@@ -502,7 +538,7 @@ pub(crate) mod raw {
     pub fn claim(conn: &Connection, id: &str) -> CoreResult<Option<Claim>> {
         let row = conn
             .prepare_cached(
-                "SELECT id, change_id, revision, kind, command, passed, summary, unchecked, by
+                "SELECT id, change_id, revision, kind, command, passed, summary, unchecked, by, seq
                  FROM claims WHERE id = ?",
             )?
             .query_row(params![id], |row| {
@@ -516,11 +552,12 @@ pub(crate) mod raw {
                     row.get::<_, String>(6)?,
                     row.get::<_, String>(7)?,
                     row.get::<_, String>(8)?,
+                    row.get::<_, i64>(9)?,
                 ))
             })
             .optional()?;
         row.map(
-            |(id, change_id, revision, kind, command, passed, summary, unchecked, by)| {
+            |(id, change_id, revision, kind, command, passed, summary, unchecked, by, seq)| {
                 let at = format!("claim {id}");
                 Ok(Claim {
                     kind: parsed(&at, &kind, ClaimKind::parse)?,
@@ -532,6 +569,7 @@ pub(crate) mod raw {
                     passed: passed != 0,
                     summary,
                     by: PrincipalId(by),
+                    seq,
                 })
             },
         )
@@ -545,7 +583,7 @@ pub(crate) mod raw {
     ) -> CoreResult<Vec<Verification>> {
         Ok(conn
             .prepare_cached(
-                "SELECT id, claim_id, change_id, revision, agrees, command, observed, by
+                "SELECT id, claim_id, change_id, revision, agrees, command, observed, by, seq
                  FROM verifications WHERE change_id = ? AND revision = ? ORDER BY rowid",
             )?
             .query_map(params![change, revision], |row| {
@@ -558,6 +596,7 @@ pub(crate) mod raw {
                     command: row.get(5)?,
                     observed: row.get(6)?,
                     by: PrincipalId(row.get(7)?),
+                    seq: row.get(8)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?)
@@ -820,7 +859,7 @@ pub(crate) mod raw {
     pub fn verdicts_on(conn: &Connection, change: &str, revision: i64) -> CoreResult<Vec<Verdict>> {
         let rows = conn
             .prepare_cached(
-                "SELECT id, change_id, revision, domain, disposition, rationale, by
+                "SELECT id, change_id, revision, domain, disposition, rationale, by, seq
                  FROM verdicts WHERE change_id = ? AND revision = ? ORDER BY rowid",
             )?
             .query_map(params![change, revision], |row| {
@@ -832,14 +871,16 @@ pub(crate) mod raw {
                     row.get::<_, String>(4)?,
                     row.get::<_, String>(5)?,
                     row.get::<_, String>(6)?,
+                    row.get::<_, i64>(7)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
             .map(
-                |(id, change_id, revision, domain, disposition, rationale, by)| {
+                |(id, change_id, revision, domain, disposition, rationale, by, seq)| {
                     let at = format!("verdict {id}");
                     Ok(Verdict {
+                        seq,
                         domain: parsed(&at, &domain, ReviewDomain::parse)?,
                         disposition: parsed(&at, &disposition, Disposition::parse)?,
                         id: crate::id::VerdictId(id),
@@ -1563,6 +1604,85 @@ impl Store {
             verdicts: raw::verdicts_on(&self.conn, change.id.as_str(), revision)?,
             verifications: raw::verifications_on(&self.conn, change.id.as_str(), revision)?,
             change,
+        }))
+    }
+
+    /// Dry-run a policy against what landed since `since`: each landing
+    /// re-evaluated as of its merge, so later claims, re-runs and
+    /// verdicts do not exist to it and the owner's record is what it was.
+    pub fn simulate_policy(
+        &self,
+        repo: &str,
+        policy: &Policy,
+        since: &str,
+        limit: i64,
+    ) -> CoreResult<crate::Simulation> {
+        let mut entries = Vec::new();
+        let mut by_requirement: Vec<(String, usize)> = Vec::new();
+        for (seq, landed_at, change, revision) in
+            raw::landings_since(&self.conn, repo, since, limit.clamp(1, 500))?
+        {
+            let Some(current) = raw::change(&self.conn, change.as_str())? else {
+                continue;
+            };
+            let trace =
+                crate::policy::evaluate_at(&self.conn, &current, policy, revision, Some(seq))?;
+            let unmet: Vec<String> = trace
+                .requirements
+                .iter()
+                .filter(|r| !r.satisfied)
+                .map(|r| r.description.clone())
+                .collect();
+            for description in &unmet {
+                match by_requirement.iter_mut().find(|(d, _)| d == description) {
+                    Some((_, n)) => *n += 1,
+                    None => by_requirement.push((description.clone(), 1)),
+                }
+            }
+            entries.push(crate::Simulated {
+                change,
+                number: current.number,
+                title: current.title,
+                owner: current.owner,
+                landed_at,
+                seq,
+                held: !unmet.is_empty(),
+                unmet,
+            });
+        }
+        by_requirement.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        Ok(crate::Simulation {
+            since: since.to_owned(),
+            landings: entries.len(),
+            held: entries.iter().filter(|e| e.held).count(),
+            by_requirement,
+            entries,
+        })
+    }
+
+    /// A repository's policy as a pack somebody else could start from.
+    pub fn policy_pack(
+        &self,
+        repo: &str,
+        forge: Option<&str>,
+    ) -> CoreResult<Option<crate::PolicyPack>> {
+        let Some(record) = raw::repo(&self.conn, repo)? else {
+            return Ok(None);
+        };
+        Ok(Some(crate::PolicyPack {
+            pack: 1,
+            name: record.name.clone(),
+            description: if record.description.is_empty() {
+                format!("the landing policy of {}", record.name)
+            } else {
+                record.description.clone()
+            },
+            policy: record.policy,
+            from: Some(crate::PackOrigin {
+                forge: forge.map(str::to_owned),
+                repo: record.name,
+                at: jiff::Timestamp::now().to_string(),
+            }),
         }))
     }
 

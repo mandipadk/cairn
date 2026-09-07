@@ -391,6 +391,9 @@ pub struct Claim {
     pub summary: String,
     pub unchecked: Vec<String>,
     pub by: PrincipalId,
+    /// Where in the log it was made; what a dry run as of a moment reads.
+    #[serde(default)]
+    pub seq: i64,
 }
 
 /// A capability delegation: grantor gives grantee the right to act,
@@ -434,6 +437,8 @@ pub struct Verification {
     /// What the runner observed, in its own words.
     pub observed: String,
     pub by: PrincipalId,
+    #[serde(default)]
+    pub seq: i64,
 }
 
 /// What the graph knows about a change that landed: the judgment
@@ -740,6 +745,8 @@ pub struct Verdict {
     pub disposition: Disposition,
     pub rationale: String,
     pub by: PrincipalId,
+    #[serde(default)]
+    pub seq: i64,
 }
 
 /// A discussion thread on a change, with everything said in it and how
@@ -866,4 +873,49 @@ pub fn canonical_json(value: &serde_json::Value) -> String {
     let mut out = String::new();
     write(&mut out, value);
     out
+}
+
+/// A policy dry-run against what landed: each landing re-evaluated as
+/// of its merge, with what would have held it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Simulation {
+    pub since: String,
+    pub landings: usize,
+    pub held: usize,
+    /// How many landings each unmet requirement would have held.
+    pub by_requirement: Vec<(String, usize)>,
+    pub entries: Vec<Simulated>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Simulated {
+    pub change: ChangeId,
+    pub number: i64,
+    pub title: String,
+    pub owner: PrincipalId,
+    pub landed_at: String,
+    /// The merge event: the moment the evaluation is as of.
+    pub seq: i64,
+    pub held: bool,
+    pub unmet: Vec<String>,
+}
+
+/// A policy with a name and a provenance: one document a repository can
+/// hand another. A proposal, not evidence, so nothing about it is signed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyPack {
+    /// The pack format, 1.
+    pub pack: u32,
+    pub name: String,
+    pub description: String,
+    pub policy: Policy,
+    #[serde(default)]
+    pub from: Option<PackOrigin>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackOrigin {
+    pub forge: Option<String>,
+    pub repo: String,
+    pub at: String,
 }

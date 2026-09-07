@@ -45,6 +45,7 @@ mod reset_flow;
 mod search_flow;
 mod security_flow;
 mod sessions_flow;
+mod simulate_flow;
 mod teams_flow;
 mod threads_flow;
 mod threads_page_flow;

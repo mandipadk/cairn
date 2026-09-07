@@ -143,6 +143,12 @@ pub fn router(state: AppState) -> Router {
             get(routes::get_policy).post(routes::set_policy),
         )
         .route(
+            "/api/repos/{name}/policy/simulate",
+            post(routes::simulate_policy),
+        )
+        .route("/api/repos/{name}/policy/pack", get(routes::policy_pack))
+        .route("/api/policy/packs", get(routes::policy_packs))
+        .route(
             "/api/repos/{name}/mirror",
             get(routes::get_mirror).post(routes::set_mirror),
         )

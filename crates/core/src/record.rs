@@ -11,7 +11,7 @@
 use crate::error::CoreResult;
 use crate::id::PrincipalId;
 use crate::queries::raw;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -47,10 +47,32 @@ pub(crate) fn record_of(
     principal: &str,
     window_days: u32,
 ) -> CoreResult<Record> {
+    record_of_until(conn, principal, window_days, None)
+}
+
+/// The record as it stood at a position in the log: the window ends at
+/// that event, and nothing after it counts. None is now.
+pub(crate) fn record_of_until(
+    conn: &Connection,
+    principal: &str,
+    window_days: u32,
+    until_seq: Option<i64>,
+) -> CoreResult<Record> {
     let window_days = window_days.max(1);
-    let since = (jiff::Timestamp::now()
-        - jiff::SignedDuration::from_hours(24 * i64::from(window_days)))
-    .to_string();
+    let now: jiff::Timestamp = match until_seq {
+        Some(seq) => conn
+            .query_row(
+                "SELECT ts FROM events WHERE seq = ?1",
+                params![seq],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .and_then(|ts| ts.parse().ok())
+            .unwrap_or_else(jiff::Timestamp::now),
+        None => jiff::Timestamp::now(),
+    };
+    let now_ts = now.to_string();
+    let since = (now - jiff::SignedDuration::from_hours(24 * i64::from(window_days))).to_string();
     // The window is a cut in the log: the first event at or after its
     // start. With nothing since, the cut is past the end and nothing counts.
     let since_seq: i64 = conn.query_row(
@@ -63,9 +85,10 @@ pub(crate) fn record_of(
     let claims: Vec<(String, String, i64, String)> = conn
         .prepare_cached(
             "SELECT id, change_id, revision, unchecked FROM claims
-              WHERE by = ?1 AND command IS NOT NULL AND seq >= ?2",
+              WHERE by = ?1 AND command IS NOT NULL AND seq >= ?2
+                AND (?3 IS NULL OR seq <= ?3)",
         )?
-        .query_map(params![principal, since_seq], |row| {
+        .query_map(params![principal, since_seq, until_seq], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -89,7 +112,8 @@ pub(crate) fn record_of(
                 repo
             }
         };
-        let verifications = raw::verifications_on(conn, change, *revision)?;
+        let mut verifications = raw::verifications_on(conn, change, *revision)?;
+        verifications.retain(|v| until_seq.is_none_or(|until| v.seq <= until));
         let positions = crate::policy::standing_positions(&verifications);
         let mut any = false;
         let mut against = false;
@@ -127,9 +151,12 @@ pub(crate) fn record_of(
             "SELECT v.disposition FROM verdicts v
                JOIN changes c ON c.id = v.change_id
                JOIN principals p ON p.id = v.by
-              WHERE c.owner = ?1 AND v.by != ?1 AND p.kind = 'human' AND v.seq >= ?2",
+              WHERE c.owner = ?1 AND v.by != ?1 AND p.kind = 'human' AND v.seq >= ?2
+                AND (?3 IS NULL OR v.seq <= ?3)",
         )?
-        .query_map(params![principal, since_seq], |row| row.get::<_, String>(0))?
+        .query_map(params![principal, since_seq, until_seq], |row| {
+            row.get::<_, String>(0)
+        })?
     {
         audits += 1;
         match disposition?.as_str() {
@@ -143,10 +170,11 @@ pub(crate) fn record_of(
     for (state, n) in conn
         .prepare_cached(
             "SELECT state, COUNT(*) FROM changes
-              WHERE owner = ?1 AND updated_at >= ?2 AND state IN ('merged', 'abandoned')
+              WHERE owner = ?1 AND updated_at >= ?2 AND updated_at <= ?3
+                AND state IN ('merged', 'abandoned')
               GROUP BY state",
         )?
-        .query_map(params![principal, since], |row| {
+        .query_map(params![principal, since, now_ts], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })?
         .collect::<Result<Vec<_>, _>>()?

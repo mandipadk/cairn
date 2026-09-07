@@ -3316,6 +3316,7 @@ async fn repo_settings_page(
         flash.error.as_deref(),
         flash.done.is_some(),
         None,
+        None,
     )
     .into_response()
 }
@@ -3479,6 +3480,13 @@ struct PolicyForm {
     trust_days: String,
     #[serde(default)]
     trust_paths: String,
+    /// A dry run's start date, and a pack to start from instead of the fields.
+    #[serde(default)]
+    since: String,
+    #[serde(default)]
+    pack: String,
+    #[serde(default)]
+    pack_json: String,
     #[serde(default)]
     independence: String,
     #[serde(default)]
@@ -3502,6 +3510,9 @@ fn parse_policy_form(body: &str) -> Option<PolicyForm> {
         trust_claims: String::new(),
         trust_days: String::new(),
         trust_paths: String::new(),
+        since: String::new(),
+        pack: String::new(),
+        pack_json: String::new(),
         independence: String::new(),
         domains: Vec::new(),
         attention_budget: String::new(),
@@ -3521,6 +3532,9 @@ fn parse_policy_form(body: &str) -> Option<PolicyForm> {
             "trust_claims" => form.trust_claims = value,
             "trust_days" => form.trust_days = value,
             "trust_paths" => form.trust_paths = value,
+            "since" => form.since = value,
+            "pack" => form.pack = value,
+            "pack_json" => form.pack_json = value,
             "independence" => form.independence = value,
             "domains" => form.domains.push(value),
             "attention_budget" => form.attention_budget = value,
@@ -3550,6 +3564,20 @@ fn urldecode(value: &str) -> Option<String> {
 }
 
 fn policy_from(form: &PolicyForm) -> Result<cairn_core::Policy, &'static str> {
+    // A pack, pasted or picked, stands in for the fields entirely; it is
+    // still only a proposal until it is saved.
+    if !form.pack_json.trim().is_empty() {
+        let pack: cairn_core::PolicyPack =
+            serde_json::from_str(&form.pack_json).map_err(|_| "That is not a policy pack")?;
+        return Ok(pack.policy);
+    }
+    if !form.pack.trim().is_empty() {
+        return cairn_core::packs()
+            .into_iter()
+            .find(|p| p.name == form.pack.trim())
+            .map(|p| p.policy)
+            .ok_or("No pack by that name");
+    }
     let independence =
         cairn_core::Independence::parse(&form.independence).ok_or("Pick an approval rule")?;
     let mut required_domains = Vec::new();
@@ -3658,9 +3686,28 @@ async fn repo_policy(
     if form.action == "preview" {
         return match app.with_store(|s| s.policy_preview(&repo, &policy)) {
             Ok(previewed) => {
-                views::repo_settings(theme, &viewer, &record, None, false, Some(&previewed))
+                views::repo_settings(theme, &viewer, &record, None, false, Some(&previewed), None)
                     .into_response()
             }
+            Err(err) => flash(&back, &humane(&err)),
+        };
+    }
+    if form.action == "simulate" {
+        let since = match crate::routes::since_moment(Some(&form.since)) {
+            Ok(since) => since,
+            Err(_) => return flash(&back, "The date to simulate from must be YYYY-MM-DD"),
+        };
+        return match app.with_store(|s| s.simulate_policy(&repo, &policy, &since, 200)) {
+            Ok(simulation) => views::repo_settings(
+                theme,
+                &viewer,
+                &record,
+                None,
+                false,
+                None,
+                Some(&simulation),
+            )
+            .into_response(),
             Err(err) => flash(&back, &humane(&err)),
         };
     }

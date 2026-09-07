@@ -1,0 +1,128 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Idocs0086firstrun",
+      "id": "c-0hefwkv0qaswa5hzg85f6famrv",
+      "landed_oid": "2ee6a56dbdf57e75536b1529d2c8ec17d19bfd71",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 86,
+      "opened_at": "2026-09-07T19:10:59.744508992Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Walk the first run the documents describe, and make them say the whole of it",
+      "updated_at": "2026-09-07T19:11:24.226836601Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-0hefwkv0qaswa5hzg85f6famrv",
+        "command": "scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-7adazj58yjmbh00yq9k7t6bh1e",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 683,
+        "summary": "Walked the documented first run on an empty forge with the built binary: bootstrap, serve, repo, agent and token, anonymous clone refused, clone and push with the token, claim, readiness, verdict, merge, receipt verified offline, debt map, MCP, fsck clean.",
+        "unchecked": [
+          "The suite was not re-run for this change; it touches no Rust source. CI runs both."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "2ee6a56dbdf57e75536b1529d2c8ec17d19bfd71",
+    "landed_at": "2026-09-07T19:11:24.226836601Z",
+    "merged_by": "mandip",
+    "repo": "cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-0hefwkv0qaswa5hzg85f6famrv",
+      "commit_oid": "2ee6a56dbdf57e75536b1529d2c8ec17d19bfd71",
+      "message": "Walk the first run the documents describe, and make them say the whole of it\n\nFollowing README and docs/operating.md on an empty forge from the built\nbinary found the path true but not whole. Neither said that a private\nrepository asks for a token on clone, so the first git command a\nnewcomer types stops at a password prompt the documents never mention.\nThe agent's token appears as a variable nobody was told how to mint, and\nthe repository the examples push to was never created. Both documents\nnow say those steps, in the order a newcomer meets them, and point at\nthe pages that do the same. The README's status is brought up to what\nis here and what is not, and the architecture's object list gains\nrecords, receipts, covers and attempts.\n\nThe walk itself becomes scripts/first-run.sh: bootstrap, serve, a\nrepository, an agent and its token, an anonymous clone refused, a clone\nand push with the token, a claim, the readiness that waits for an\nindependent approval, a verdict, a merge, a receipt verified offline\nagainst the forge's key, the debt map, the pages for a stranger, MCP\nand fsck. CI runs it, and it is the command behind this change's claim,\nso a runner re-runs it whenever the documents change.\n\nChange-Id: Idocs0086firstrun\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        ".github/workflows/ci.yml",
+        "README.md",
+        "docs/architecture.md",
+        "docs/operating.md",
+        "scripts/first-run.sh"
+      ],
+      "session": null
+    },
+    "seq": 686,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-7adazj58yjmbh00yq9k7t6bh1e",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-7adazj58yjmbh00yq9k7t6bh1e",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 89 judged claims, 97% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 2 path(s) outside docs/, *.md: .github/workflows/ci.yml, scripts/first-run.sh",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-0hefwkv0qaswa5hzg85f6famrv",
+        "claim": "cl-7adazj58yjmbh00yq9k7t6bh1e",
+        "command": "scripts/first-run.sh",
+        "id": "vr-3z8cwjmbfab588541kg1pc8jbs",
+        "observed": "exit 0: first run: every documented step did what the documents say",
+        "revision": 1,
+        "seq": 684
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "gbDf5mGui/3i4MOCIC7vbJREU1pH17zLidNUmK4lLNGPnefQiJzEWCPqikfEdjCF5kTDV4WtOpkOriH0fMUWBg=="
+  }
+}

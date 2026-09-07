@@ -93,6 +93,7 @@ pub fn routes() -> Router<AppState> {
         .route("/{repo}/changes", get(changes_page))
         .route("/{repo}/changes/{number}", get(change_page))
         .route("/{repo}/changes/{number}/verdict", post(submit_verdict))
+        .route("/{repo}/changes/{number}/prefer", post(submit_prefer))
         .route("/{repo}/changes/{number}/threads", post(submit_thread))
         .route(
             "/{repo}/changes/{number}/threads/{thread}/reply",
@@ -2860,6 +2861,45 @@ async fn submit_verdict(
 }
 
 #[derive(Deserialize)]
+struct PreferForm {
+    revision: i64,
+    #[serde(default)]
+    rationale: String,
+}
+
+/// Compare competing revisions from the page: this one should land.
+async fn submit_prefer(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Path((repo, number)): Path<(String, i64)>,
+    Form(form): Form<PreferForm>,
+) -> Response {
+    let back = format!("/{repo}/changes/{number}");
+    if let Err(response) = readable(&app, &viewer, &repo) {
+        return *response;
+    }
+    let change = match app.with_store(|s| s.change_by_number(&repo, number)) {
+        Ok(Some(change)) => change,
+        Ok(None) => return not_found(),
+        Err(err) => return oops(err),
+    };
+    // A comparison made from the task page goes back to the task.
+    let back = match &change.task {
+        Some(task) => format!("/tasks/{}", task.as_str()),
+        None => back,
+    };
+    match app.with_store(|s| {
+        s.prefer_revision(&viewer.0, &change.id, form.revision, form.rationale.trim())
+    }) {
+        Ok(env) => {
+            app.publish(&env);
+            Redirect::to(&back).into_response()
+        }
+        Err(err) => flash(&back, &humane(&err)),
+    }
+}
+
+#[derive(Deserialize)]
 struct ThreadForm {
     revision: i64,
     kind: String,
@@ -3381,10 +3421,54 @@ async fn task_page(
         Ok(found) => found,
         Err(err) => return oops(err),
     };
-    let can_close = task.created_by == viewer.0
-        || task.claimed_by.as_ref() == Some(&viewer.0)
-        || viewer.1.admin;
-    views::task(theme, &viewer, &task, &sessions, &changes, can_close).into_response()
+    // The task's change - the open one, else the last - with everything
+    // the attempts put on it, so the task page can be where they are read.
+    let focus = changes
+        .iter()
+        .find(|c| c.state == cairn_core::ChangeState::Open)
+        .or(changes.last())
+        .cloned();
+    let focus = match focus {
+        Some(change) => match app.with_store(|s| {
+            let revisions = s.revisions(&change.id)?;
+            let mut claims = Vec::new();
+            let mut verifications = Vec::new();
+            for revision in &revisions {
+                claims.extend(s.claims_on(&change.id, revision.number)?);
+                verifications.extend(s.verifications_on(&change.id, revision.number)?);
+            }
+            let trace = if change.state == cairn_core::ChangeState::Open {
+                Some(s.merge_readiness(&change.id)?)
+            } else {
+                None
+            };
+            let preference = s.preference(&change.id)?;
+            Ok::<_, cairn_core::CoreError>(views::TaskFocus {
+                change,
+                revisions,
+                claims,
+                verifications,
+                trace,
+                preference,
+            })
+        }) {
+            Ok(focus) => Some(focus),
+            Err(err) => return oops(err),
+        },
+        None => None,
+    };
+    let can_close =
+        task.created_by == viewer.0 || task.claimants.contains(&viewer.0) || viewer.1.admin;
+    views::task(views::TaskPage {
+        theme,
+        viewer: &viewer,
+        task: &task,
+        sessions: &sessions,
+        changes: &changes,
+        focus: focus.as_ref(),
+        can_close,
+    })
+    .into_response()
 }
 
 #[derive(Deserialize)]

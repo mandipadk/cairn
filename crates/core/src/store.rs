@@ -1269,6 +1269,29 @@ fn record_notices(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             )
         }),
 
+        RevisionPreferred {
+            change,
+            revision,
+            over,
+            ..
+        } => change_ref(change.as_str())?.map(|c| {
+            (
+                c.owner,
+                "compared",
+                Some(c.repo.clone()),
+                Some(change.as_str().to_owned()),
+                Some(c.number),
+                format!(
+                    "{actor} preferred r{revision} of #{} over {}",
+                    c.number,
+                    over.iter()
+                        .map(|n| format!("r{n}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )
+        }),
+
         ClaimVerified {
             claim,
             change,

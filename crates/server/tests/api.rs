@@ -344,7 +344,13 @@ async fn full_protocol_over_http() {
 fn parse_sse(buffer: &str) -> (Vec<i64>, Vec<String>) {
     let mut ids = Vec::new();
     let mut names = Vec::new();
-    for line in buffer.lines() {
+    // A read can end mid-line; a line without its newline is not a
+    // line yet, and counting it once cost this test its whole assertion.
+    let complete = match buffer.rfind('\n') {
+        Some(end) => &buffer[..=end],
+        None => "",
+    };
+    for line in complete.lines() {
         if let Some(id) = line.strip_prefix("id: ") {
             if let Ok(id) = id.trim().parse() {
                 ids.push(id);

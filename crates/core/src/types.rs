@@ -946,3 +946,15 @@ pub struct PackOrigin {
     pub repo: String,
     pub at: String,
 }
+
+/// The standing comparison on a change: who preferred which revision
+/// over which, and why. The change's `preferred_revision` says whether
+/// it still stands; this says what was said.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Preference {
+    pub by: PrincipalId,
+    pub revision: i64,
+    pub over: Vec<i64>,
+    pub rationale: String,
+    pub at: String,
+}

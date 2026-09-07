@@ -1709,6 +1709,42 @@ impl Store {
         }))
     }
 
+    /// The latest comparison made on a change, if any was.
+    pub fn preference(&self, change: &ChangeId) -> CoreResult<Option<crate::Preference>> {
+        let found: Option<(String, String, String)> = self
+            .conn
+            .prepare_cached(
+                "SELECT ts, actor, payload FROM events
+                  WHERE kind = 'revision_preferred' AND payload LIKE ?1
+                  ORDER BY seq DESC LIMIT 1",
+            )?
+            .query_row(
+                params![format!("%\"change\":\"{}\"%", change.as_str())],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((at, by, payload)) = found else {
+            return Ok(None);
+        };
+        let event: crate::Event = serde_json::from_str(&payload)
+            .map_err(|e| corrupt(&format!("preference on {change}"), e))?;
+        Ok(match event {
+            crate::Event::RevisionPreferred {
+                revision,
+                over,
+                rationale,
+                ..
+            } => Some(crate::Preference {
+                by: PrincipalId(by),
+                revision,
+                over,
+                rationale,
+                at,
+            }),
+            _ => None,
+        })
+    }
+
     /// The receipt for a landed change: the merge event and everything
     /// on the revision it landed. None while the change has not landed.
     pub fn receipt(

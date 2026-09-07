@@ -10,7 +10,8 @@ use cairn_core::{
 };
 use cairn_core::{
     BrowserSession, Change, ChangeState, Claim, Contact, Disposition, Envelope, Event, HitKind,
-    Notice, PasskeyRecord, PolicyTrace, Repo, Revision, Task, Verdict, Verification, Visibility,
+    Notice, PasskeyRecord, PolicyTrace, PrincipalId, Repo, Revision, Task, Verdict, Verification,
+    Visibility,
 };
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 use std::collections::HashMap;
@@ -1081,14 +1082,64 @@ fn task_dot(state: TaskState) -> &'static str {
 
 /// One task: its intent, who holds it, the runs against it and what they
 /// learned, and the changes that came of it.
-pub fn task(
-    theme: Theme,
-    viewer: &Viewer,
-    task: &Task,
-    sessions: &[Session],
-    changes: &[Change],
-    can_close: bool,
-) -> Markup {
+/// The task's change and everything the attempts put on it.
+pub struct TaskFocus {
+    pub change: Change,
+    pub revisions: Vec<Revision>,
+    pub claims: Vec<Claim>,
+    pub verifications: Vec<Verification>,
+    /// Readiness of the change while it is open.
+    pub trace: Option<PolicyTrace>,
+    pub preference: Option<cairn_core::Preference>,
+}
+
+pub struct TaskPage<'a> {
+    pub theme: Theme,
+    pub viewer: &'a Viewer,
+    pub task: &'a Task,
+    pub sessions: &'a [Session],
+    pub changes: &'a [Change],
+    pub focus: Option<&'a TaskFocus>,
+    pub can_close: bool,
+}
+
+/// One attempt at a task, as the page reads it: an author, their
+/// sessions, and their revisions of the task's change.
+struct Attempt<'a> {
+    by: &'a PrincipalId,
+    sessions: Vec<&'a Session>,
+    revisions: Vec<&'a Revision>,
+}
+
+fn attempts<'a>(sessions: &'a [Session], revisions: &'a [Revision]) -> Vec<Attempt<'a>> {
+    let mut out: Vec<Attempt<'a>> = Vec::new();
+    for revision in revisions.iter().filter(|r| !r.by.as_str().is_empty()) {
+        match out.iter_mut().find(|a| a.by == &revision.by) {
+            Some(attempt) => attempt.revisions.push(revision),
+            None => out.push(Attempt {
+                by: &revision.by,
+                sessions: sessions.iter().filter(|s| s.agent == revision.by).collect(),
+                revisions: vec![revision],
+            }),
+        }
+    }
+    out
+}
+
+pub fn task(page: TaskPage<'_>) -> Markup {
+    let TaskPage {
+        theme,
+        viewer,
+        task,
+        sessions,
+        changes,
+        focus,
+        can_close,
+    } = page;
+    let attempts: Vec<Attempt<'_>> = focus
+        .map(|f| attempts(sessions, &f.revisions))
+        .unwrap_or_default();
+    let competing = focus.is_some_and(|f| f.change.competing);
     layout_section(
         theme,
         viewer,
@@ -1104,12 +1155,91 @@ pub fn task(
                     span { (task.state.as_str()) }
                     span class="sep" { "·" }
                     span { "by " (task.created_by.as_str()) }
-                    @if let Some(who) = &task.claimed_by { span class="sep" { "·" } span { "held by " (who.as_str()) } }
+                    @if task.attempts > 1 {
+                        span class="sep" { "·" }
+                        span { "claimed by " (task.claimants.len()) " of " (task.attempts) }
+                    } @else if let Some(who) = &task.claimed_by {
+                        span class="sep" { "·" } span { "held by " (who.as_str()) }
+                    }
                     @if let Some(repo) = &task.repo { span class="sep" { "·" } a class="link" href={ "/" (repo) } { (repo) } }
+                    @if let Some(f) = focus {
+                        span class="sep" { "·" }
+                        a class="link" href={ "/" (f.change.repo) "/changes/" (f.change.number) } { "change #" (f.change.number) ", " (f.change.state.as_str()) }
+                    }
                     @if let Some(parent) = &task.parent { span class="sep" { "·" } a class="link" href={ "/tasks/" (parent.as_str()) } { "part of a larger task" } }
                 }
                 pre class="msg" { (task.spec) }
             }
+
+            @if let Some(f) = focus {
+                @if !attempts.is_empty() && (competing || task.attempts > 1) {
+                    div class="sechead later" { b { "Attempts" } span { (attempts.len()) " · revisions of #" (f.change.number) } }
+                    div class="attempts" {
+                        @for attempt in &attempts {
+                            @let latest = attempt.revisions.last().expect("an attempt has a revision");
+                            @let chosen = f.change.preferred_revision == Some(latest.number);
+                            div class={ "attempt" @if chosen { " chosen" } } {
+                                div class="who-line" {
+                                    span class="nm" { (attempt.by) }
+                                    @for session in &attempt.sessions {
+                                        span class="sec3" { "session " (short(session.id.as_str())) " · " (session.state.as_str()) }
+                                    }
+                                }
+                                div class="cmd" {
+                                    @for (index, revision) in attempt.revisions.iter().enumerate() {
+                                        @if index > 0 { " · " }
+                                        "r" (revision.number) " " (short(&revision.commit_oid))
+                                        @if !revision.paths.is_empty() { " (" (revision.paths.len()) " files)" }
+                                    }
+                                }
+                                @let claims: Vec<&Claim> = f.claims.iter().filter(|c| c.revision == latest.number).collect();
+                                @if claims.is_empty() { div class="vrow" { span class="s un" { "○" } span { "no claims on r" (latest.number) } } }
+                                @for claim in claims { (claim_row(claim, &f.verifications)) }
+                                @for session in attempt.sessions.iter().filter(|s| s.outcome.is_some()) {
+                                    q { (session.outcome.as_deref().unwrap_or("")) }
+                                }
+                            }
+                        }
+                    }
+                    @if let Some(preference) = &f.preference {
+                        @if f.change.preferred_revision.is_some() {
+                            div class="vrow" {
+                                span class="s ok" { "●" }
+                                div {
+                                    div class="who-line" {
+                                        span class="nm" { (preference.by) }
+                                        span class="sec3" { "preferred r" (preference.revision) " over " @for (i, n) in preference.over.iter().enumerate() { @if i > 0 { ", " } "r" (n) } " · " (short_day(&preference.at)) }
+                                    }
+                                    q { (preference.rationale) }
+                                }
+                            }
+                        }
+                    }
+                    @if competing && f.change.preferred_revision.is_none() && f.change.state == ChangeState::Open {
+                        form class="composer" method="post" action={ "/" (f.change.repo) "/changes/" (f.change.number) "/prefer" } {
+                            span class="hint" { "Compare" }
+                            select name="revision" aria-label="Revision" {
+                                @for attempt in &attempts {
+                                    @let latest = attempt.revisions.last().expect("an attempt has a revision");
+                                    option value=(latest.number) { "r" (latest.number) " by " (attempt.by) }
+                                }
+                            }
+                            input type="text" name="rationale" placeholder="Why this one and not the others" required;
+                            button class="vbtn" type="submit" { "Prefer" }
+                        }
+                    }
+                }
+                @if let Some(trace) = &f.trace {
+                    div class="sechead later" { b { "Readiness of #" (f.change.number) } span { "r" (f.change.judged_revision()) } }
+                    @for requirement in &trace.requirements {
+                        div class="vrow" {
+                            span class={ "s" @if requirement.satisfied { " ok" } @else { " bad" } } { "●" }
+                            div { (requirement.description) div class="run" { (requirement.evidence) } }
+                        }
+                    }
+                }
+            }
+
             div class="sechead later" { b { "Sessions" } span { (sessions.len()) } }
             @if sessions.is_empty() { p class="empty" { "Nobody has run against this yet." } }
             @for session in sessions {
@@ -2487,6 +2617,13 @@ pub fn change(page: ChangePage) -> Markup {
                 }
                 div class="meta" {
                     span { (state_dot(change.state)) " " (change.state.as_str()) }
+                    @if change.competing {
+                        span class="sep" { "·" }
+                        @match change.preferred_revision {
+                            Some(preferred) => { span { "r" (preferred) " preferred" } }
+                            None => { span { "competing revisions, no comparison yet" } }
+                        }
+                    }
                     @if change.state == ChangeState::Merged {
                         span class="sep" { "·" }
                         a href={ "/api/changes/" (change.id) "/receipt" } { "receipt" }
@@ -2593,6 +2730,18 @@ pub fn change(page: ChangePage) -> Markup {
                                     (thread_composer(repo, change, shown, at))
                                 }
                             }
+                        }
+                    }
+                    @if change.state == ChangeState::Open && signed && change.competing && change.preferred_revision.is_none() {
+                        form class="composer" method="post" action={ "/" (repo) "/changes/" (change.number) "/prefer" } {
+                            span class="hint" { "Compare" }
+                            select name="revision" aria-label="Revision" {
+                                @for revision in revisions.iter().filter(|r| !r.by.as_str().is_empty()) {
+                                    option value=(revision.number) { "r" (revision.number) " by " (revision.by) }
+                                }
+                            }
+                            input type="text" name="rationale" placeholder="Why this one and not the others" required;
+                            button class="vbtn" type="submit" { "Prefer" }
                         }
                     }
                     @if change.state == ChangeState::Open && signed {

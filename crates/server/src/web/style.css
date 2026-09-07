@@ -803,3 +803,8 @@ details.thread[open] > summary .closed-inline { visibility: hidden; }
 .repohead .desc, .repo-top .desc, p.desc { color: var(--ink2); font-size: 12.5px; margin: 4px 0 0; }
 @media (max-width: 760px) { .trow.changes { grid-template-columns: 14px 40px minmax(0, 1fr) 40px; } .trow.changes .sec2, .trow.changes span[title] { display: none; } }
 
+/* Attempts at a task: alternatives read side by side. */
+.attempts { display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:12px; margin:0 0 12px; }
+.attempt { border:1px solid var(--hair); padding:12px 14px; min-width:0; }
+.attempt.chosen { box-shadow:inset 2px 0 0 var(--ink); }
+.attempt q { display:block; margin-top:8px; color:var(--ink2); font-size:12.5px; }

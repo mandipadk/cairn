@@ -147,6 +147,26 @@ offline against it.
   exactly the log applied; exits non-zero on any divergence, so it can
   run from cron or a health check.
 
+## Backups
+
+Three things hold a forge: the database, which is the log and everything
+derived from it; the repositories under `--repos`; and `signing.key`,
+without which the next landing's receipt is signed by a new key. Copy the
+database through sqlite's backup API rather than `cp` — a live database
+keeps recent writes in its WAL file, and a plain copy can miss them.
+`scripts/backup.sh` does all three into one bundle, integrity-checks the
+copy before keeping it, and prunes old bundles:
+
+```sh
+CAIRN_DB=/srv/cairn/cairn.db CAIRN_REPOS=/srv/cairn/repos scripts/backup.sh
+```
+
+Run it from a timer, and keep a copy of the bundle somewhere the machine's
+disk is not. To restore, extract the bundle and point `serve` at the
+copies; `cairn admin fsck --db <copy> --repos <copy>/repos` proves the
+bundle before you need it, and the first-run walk does exactly that on
+every change to these documents.
+
 ## Single sign-on and workload identity
 
 People can sign in with an OpenID Connect provider:

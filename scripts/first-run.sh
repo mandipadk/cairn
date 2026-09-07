@@ -6,6 +6,7 @@
 # documents are true, so a runner can re-run it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+REPO=$(pwd)
 
 BIN=$(cargo build --quiet --bin cairn --message-format=json | python3 -c '
 import json, sys
@@ -86,6 +87,12 @@ for line in sys.stdin:
     if d["id"] == 2: n = len(d["result"]["tools"])
 print(n)')
 [ "$TOOLS" -gt 0 ] || { echo "!! MCP listed no tools"; exit 1; }
+
+echo "operating.md: a backup taken while serving restores to a forge fsck calls clean"
+CAIRN_DB=forge.db CAIRN_REPOS=repos CAIRN_BACKUPS=bundles "$REPO/scripts/backup.sh" | tail -1
+mkdir restored && tar -xzf bundles/cairn-*.tar.gz -C restored && tar -xf restored/repos.tar -C restored
+[ -s restored/signing.key ] || { echo "!! the bundle carries no signing key"; exit 1; }
+"$BIN" admin fsck --db restored/cairn.db --repos restored/repos | tail -1 | grep -q '^clean' || { echo "!! the restored copy is not clean"; exit 1; }
 
 echo "operating.md: fsck"
 kill "$SERVE"; wait "$SERVE" 2>/dev/null || true; SERVE=

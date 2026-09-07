@@ -1,0 +1,140 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Irelease0089version",
+      "id": "c-3233vdz25b4qkrdnc0sc25d89e",
+      "landed_oid": "eb32ef1a27e15b8c103e2f20ac84ebbd7e96ea27",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 89,
+      "opened_at": "2026-09-07T21:38:38.468834363Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Say which build is answering, and package a release the way one arrives",
+      "updated_at": "2026-09-07T21:39:52.775036002Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-3233vdz25b4qkrdnc0sc25d89e",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-0xb1yqjw3dnw34hmb9dnvh0bzx",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 704,
+        "summary": "Suite green, exit status gated; rustfmt and clippy clean, warnings denied. First-run walk green, now checking that --version names a version and a build first; release.sh packaged a build locally with a SHA256SUMS.",
+        "unchecked": [
+          "release.sh's upload path was not exercised; upload-s3.py itself was, by the nightly backup."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "eb32ef1a27e15b8c103e2f20ac84ebbd7e96ea27",
+    "landed_at": "2026-09-07T21:39:52.775036002Z",
+    "merged_by": "mandip",
+    "repo": "cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-3233vdz25b4qkrdnc0sc25d89e",
+      "commit_oid": "eb32ef1a27e15b8c103e2f20ac84ebbd7e96ea27",
+      "message": "Say which build is answering, and package a release the way one arrives\n\n`cairn --version` said 0.1.0 and nothing else, on every build since the\nfirst. It now names the version and the commit and date it was built\nfrom, stamped by core's build script from the checkout (CAIRN_BUILD\noverrides it for whoever packages from an archive); /healthz carries the\nsame string, `serve` logs it at start, and the watcher's record of an\nanswer includes it, so the question \"which build is that\" has an answer\nwherever it is asked. The workspace version becomes 0.1.0-alpha.1, since\nthat is what this is.\n\nscripts/release.sh builds for the machine it runs on and packages one\narchive with the binary, the licence and the README beside a SHA256SUMS,\nuploading both when a bucket is configured. The operating guide gains\nInstalling (from source, through this forge) and Upgrading (what a schema\nrebuild does and does not touch), and the README's try-it installs the\nbinary before it runs it. The first-run walk checks the version string\nfirst.\n\nChange-Id: Irelease0089version\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        ".gitignore",
+        "Cargo.lock",
+        "Cargo.toml",
+        "README.md",
+        "crates/cli/Cargo.toml",
+        "crates/cli/src/main.rs",
+        "crates/cli/src/watch.rs",
+        "crates/client/Cargo.toml",
+        "crates/core/Cargo.toml",
+        "crates/core/build.rs",
+        "crates/core/src/lib.rs",
+        "crates/git/Cargo.toml",
+        "crates/server/Cargo.toml",
+        "crates/server/src/routes.rs",
+        "docs/operating.md",
+        "scripts/first-run.sh",
+        "scripts/release.sh"
+      ],
+      "session": null
+    },
+    "seq": 707,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-0xb1yqjw3dnw34hmb9dnvh0bzx",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-0xb1yqjw3dnw34hmb9dnvh0bzx",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 92 judged claims, 97% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 15 path(s) outside docs/, *.md: .gitignore, Cargo.lock, Cargo.toml",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-3233vdz25b4qkrdnc0sc25d89e",
+        "claim": "cl-0xb1yqjw3dnw34hmb9dnvh0bzx",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "id": "vr-5j2xrc6bc73n090hm2z8ewn9y5",
+        "observed": "exit 0: Doc-tests cairn_server",
+        "revision": 1,
+        "seq": 705
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "QNz79fyrc1GEQ4mVkAZkepE0PK2StniY47w8LUPVaUMyHh0m3UHlRWnDT4LEyQAB6H/GZRmeW3ywTneKi7zrDQ=="
+  }
+}

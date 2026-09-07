@@ -305,6 +305,8 @@ name = "cairn-client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.23.1",
+ "ring",
  "serde_json",
  "ureq",
 ]
@@ -348,6 +350,7 @@ dependencies = [
  "maud",
  "pulldown-cmark",
  "rand 0.10.2",
+ "ring",
  "serde",
  "serde_json",
  "sha2",

@@ -503,7 +503,7 @@ fn apply_trust(
 
 /// A pattern covers a path the way a lease's does, plus `*.ext` for a
 /// suffix, so "documentation" can be said as `docs/` and `*.md`.
-pub(crate) fn path_matches(pattern: &str, path: &str) -> bool {
+pub fn path_matches(pattern: &str, path: &str) -> bool {
     if let Some(suffix) = pattern.strip_prefix('*')
         && suffix.starts_with('.')
     {

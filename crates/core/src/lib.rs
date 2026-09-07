@@ -49,18 +49,18 @@ pub use id::{
     VerificationId,
 };
 pub use leases::{Overlap, covers, patterns_overlap};
-pub use policy::packs;
 pub use policy::{PolicyTrace, Requirement};
+pub use policy::{packs, path_matches};
 pub use record::Record;
 pub use search::{HitKind, SearchHit, SearchQuery};
 pub use store::Store;
 pub use types::Anchor;
 pub use types::{
     BrowserSession, Capability, Change, ChangeSpec, ChangeState, Claim, ClaimKind, ClaimSpec,
-    Contact, Disposition, EarnedTrust, Grant, IdentityLink, Independence, Lease, Lesson, LineState,
-    Mirror, Notice, ObjectFormat, PackOrigin, PasskeyRecord, Policy, PolicyPack, Preference,
-    Principal, PrincipalKind, Provenance, QueueEntry, Receipt, Replay, Reply, Repo, Resolution,
-    Resolved, ReviewDomain, Revision, Scope, Session, SessionState, Side, Simulated, Simulation,
-    Task, TaskState, Thread, ThreadKind, TokenInfo, Verdict, Verification, Visibility, Waiver,
-    WorkloadBinding, canonical_json, line_state,
+    Contact, Cover, DebtSnapshot, Disposition, EarnedTrust, Grant, IdentityLink, Independence,
+    Lease, Lesson, LineState, Mirror, Notice, ObjectFormat, PackOrigin, PasskeyRecord, Policy,
+    PolicyPack, Preference, Principal, PrincipalKind, Provenance, QueueEntry, Receipt, Replay,
+    Reply, Repo, Resolution, Resolved, ReviewDomain, Revision, Scope, Session, SessionState, Side,
+    Simulated, Simulation, Task, TaskState, Thread, ThreadKind, TokenInfo, Verdict, Verification,
+    Visibility, Waiver, WorkloadBinding, canonical_json, line_state,
 };

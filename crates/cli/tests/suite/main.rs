@@ -13,6 +13,7 @@ mod attempts_flow;
 mod attempts_page_flow;
 mod attention_budget_flow;
 mod auth_flow;
+mod burndown_flow;
 mod claim_form_flow;
 mod common;
 mod concurrency_flow;

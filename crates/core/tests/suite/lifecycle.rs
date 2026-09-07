@@ -15,6 +15,7 @@ fn passing_tests() -> ClaimSpec {
         passed: true,
         summary: "tests pass".into(),
         unchecked: vec![],
+        covers: Vec::new(),
     }
 }
 
@@ -132,6 +133,7 @@ fn full_lifecycle_intent_to_merge() {
                 passed: true,
                 summary: "42 tests passed".into(),
                 unchecked: vec!["fuzzing beyond 10k property-test cases".into()],
+                covers: Vec::new(),
             },
         )
         .unwrap();
@@ -797,6 +799,7 @@ fn provenance_follows_a_landed_commit_to_its_judgment() {
                 passed: true,
                 summary: "18 tests passed".into(),
                 unchecked: vec!["inputs larger than 1 MiB".into(), "invalid utf-8".into()],
+                covers: Vec::new(),
             },
         )
         .unwrap();
@@ -860,6 +863,7 @@ fn reasoning_only_claims_are_not_an_executed_check() {
                 passed: true,
                 summary: "the change is obviously safe".into(),
                 unchecked: vec!["everything an execution would have covered".into()],
+                covers: Vec::new(),
             },
         )
         .unwrap();
@@ -912,6 +916,7 @@ fn a_disputed_claim_blocks_the_merge() {
                 passed: true,
                 summary: "all green".into(),
                 unchecked: vec![],
+                covers: Vec::new(),
             },
         )
         .unwrap();
@@ -1000,6 +1005,7 @@ fn a_disputed_claim_blocks_the_merge() {
                 passed: true,
                 summary: "all green".into(),
                 unchecked: vec![],
+                covers: Vec::new(),
             },
         )
         .unwrap();
@@ -1061,6 +1067,7 @@ fn passing_with_command() -> ClaimSpec {
         passed: true,
         summary: "green".into(),
         unchecked: vec![],
+        covers: Vec::new(),
     }
 }
 
@@ -1099,6 +1106,7 @@ fn attention_ranks_by_what_judgment_is_worth() {
             passed: true,
             summary: "obviously safe".into(),
             unchecked: vec!["everything an execution would cover".into()],
+            covers: Vec::new(),
         },
     );
 
@@ -1729,6 +1737,7 @@ fn a_runner_that_re_runs_replaces_its_own_earlier_verdict() {
                 passed: true,
                 summary: "all green".into(),
                 unchecked: vec![],
+                covers: Vec::new(),
             },
         )
         .unwrap();
@@ -1829,6 +1838,7 @@ fn notices_go_to_whose_work_it_is_and_never_to_the_actor() {
                 passed: true,
                 summary: "green".into(),
                 unchecked: vec![],
+                covers: Vec::new(),
             },
         )
         .unwrap();

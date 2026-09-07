@@ -364,6 +364,9 @@ pub struct Change {
     /// Of competing revisions, the one a reviewer said should land.
     #[serde(default)]
     pub preferred_revision: Option<i64>,
+    /// The revision that landed, once merged.
+    #[serde(default)]
+    pub landed_revision: Option<i64>,
     /// Revisions by more than one author: alternatives, not history.
     #[serde(default)]
     pub competing: bool,
@@ -405,6 +408,12 @@ pub struct ClaimSpec {
     /// What this claim deliberately does not cover.
     #[serde(default)]
     pub unchecked: Vec<String>,
+    /// Existing code this claim's command exercises: paths or prefixes,
+    /// in the pattern language leases use. When the change lands and a
+    /// third-party runner has reproduced the claim, every line under
+    /// them is backed by it, whatever landed the line.
+    #[serde(default)]
+    pub covers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -421,6 +430,9 @@ pub struct Claim {
     /// Where in the log it was made; what a dry run as of a moment reads.
     #[serde(default)]
     pub seq: i64,
+    /// Existing code this claim covers; see [`ClaimSpec::covers`].
+    #[serde(default)]
+    pub covers: Vec<String>,
 }
 
 /// A capability delegation: grantor gives grantee the right to act,
@@ -957,4 +969,31 @@ pub struct Preference {
     pub over: Vec<i64>,
     pub rationale: String,
     pub at: String,
+}
+
+/// A covering claim on a landed change: what it covers, who made it,
+/// and whether a third-party runner reproduced it. Only a reproduced
+/// cover moves a line.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Cover {
+    pub pattern: String,
+    pub claim: ClaimId,
+    pub change: ChangeId,
+    pub number: i64,
+    pub by: PrincipalId,
+    pub reproduced: bool,
+}
+
+/// The debt map's counts at one tip of a branch, kept so the burndown
+/// can be drawn. Derived, so operational rather than logged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DebtSnapshot {
+    pub tip: String,
+    pub seq: i64,
+    pub at: String,
+    pub reproduced: i64,
+    pub claimed: i64,
+    pub gap: i64,
+    pub argued: i64,
+    pub imported: i64,
 }

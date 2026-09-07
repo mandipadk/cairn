@@ -338,6 +338,10 @@ pub enum Event {
         /// What this claim deliberately does not cover. Structured honesty
         /// is what makes reviewing high-volume agent work tractable.
         unchecked: Vec<String>,
+        /// Existing code the claim's command exercises, so a reproduced
+        /// claim can back lines the change did not touch.
+        #[serde(default)]
+        covers: Vec<String>,
     },
 
     /// A runner re-executed a claim and reported what it saw. The

@@ -109,6 +109,7 @@ pub fn routes() -> Router<AppState> {
         .route("/{repo}/changes/{number}/abandon", post(submit_abandon))
         .route("/{repo}/landing", get(landing_page))
         .route("/{repo}/debt", get(debt_page))
+        .route("/{repo}/debt/tasks", post(debt_tasks_action))
         .route("/{repo}/log", get(log_page))
         .route("/{repo}/settings", get(repo_settings_page))
         .route("/{repo}/settings/visibility", post(repo_visibility))
@@ -2803,6 +2804,7 @@ async fn submit_claim(
             .filter(|gap| !gap.is_empty())
             .map(str::to_owned)
             .collect(),
+        covers: Vec::new(),
     };
     match app.with_store(|s| s.attach_claim(&viewer.0, &change, form.revision, spec)) {
         Ok((_, env)) => {
@@ -3172,8 +3174,11 @@ async fn debt_page(
         Ok(found) => found,
         Err(response) => return *response,
     };
+    let history = app
+        .with_store(|s| s.debt_history(&repo, 60))
+        .unwrap_or_default();
     match crate::debt::map(&app, &repo, &record.default_branch).await {
-        Ok(map) => views::debt(theme, who.reading(), &repo, &map).into_response(),
+        Ok(map) => views::debt(theme, who.reading(), &repo, &map, &history).into_response(),
         Err(err) => (
             StatusCode::OK,
             views::plain_note(
@@ -3182,6 +3187,28 @@ async fn debt_page(
             ),
         )
             .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct PayDownForm {
+    #[serde(default)]
+    count: String,
+}
+
+/// Turn the most indebted files into tasks, from the Verification tab.
+async fn debt_tasks_action(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Path(repo): Path<String>,
+    Form(form): Form<PayDownForm>,
+) -> Response {
+    let back = format!("/{repo}/debt");
+    let count = form.count.trim().parse::<usize>().unwrap_or(5);
+    match crate::debt::create_pay_down_tasks(&app, &viewer.0, &repo, count).await {
+        Ok(created) if created.is_empty() => flash(&back, "Every indebted file already has a task"),
+        Ok(_) => Redirect::to(&format!("{back}?done=1")).into_response(),
+        Err(err) => flash(&back, &err.message),
     }
 }
 

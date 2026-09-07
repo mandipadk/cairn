@@ -808,3 +808,11 @@ details.thread[open] > summary .closed-inline { visibility: hidden; }
 .attempt { border:1px solid var(--hair); padding:12px 14px; min-width:0; }
 .attempt.chosen { box-shadow:inset 2px 0 0 var(--ink); }
 .attempt q { display:block; margin-top:8px; color:var(--ink2); font-size:12.5px; }
+
+/* The burndown: two lines, no axes; the legend carries the numbers. */
+.burndown { display:block; width:100%; height:120px; margin:6px 0 4px; }
+.burndown .axis { stroke:var(--hair); stroke-width:1; }
+.burndown polyline { fill:none; stroke-width:1.5; vector-effect:non-scaling-stroke; }
+.burndown .imported { stroke:var(--ink3); }
+.burndown .debt { stroke:var(--ink); }
+.trow.debt small { display:block; font-size:11.5px; }

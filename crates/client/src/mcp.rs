@@ -628,6 +628,8 @@ fn tool_definitions() -> Vec<Value> {
                 "summary": s("What the check showed"),
                 "unchecked": { "type": "array", "items": { "type": "string" },
                                "description": "What this claim does not cover" },
+                "covers": { "type": "array", "items": { "type": "string" },
+                            "description": "Existing paths or prefixes this command exercises (e.g. src/lib.rs, docs/). Once the change lands and a runner reproduces the claim, every line under them counts as reproduced - how migration debt is paid down." },
             }),
         ),
         tool(

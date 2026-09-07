@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 23;
+const SCHEMA_VERSION: i64 = 24;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -164,6 +164,21 @@ CREATE TABLE IF NOT EXISTS idempotency (
   PRIMARY KEY (principal, key)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_idempotency_created ON idempotency (created);
+
+-- The debt map's counts at each tip a branch has stood at, so the
+-- burndown can be drawn. Derived from the tree and the log; recomputable.
+CREATE TABLE IF NOT EXISTS debt_snapshots (
+  repo       TEXT NOT NULL,
+  tip        TEXT NOT NULL,
+  seq        INTEGER NOT NULL,
+  at         TEXT NOT NULL,
+  reproduced INTEGER NOT NULL,
+  claimed    INTEGER NOT NULL,
+  gap        INTEGER NOT NULL,
+  argued     INTEGER NOT NULL,
+  imported   INTEGER NOT NULL,
+  PRIMARY KEY (repo, tip)
+) STRICT;
 ";
 
 /// Everything derived. Dropping and replaying these is always safe:
@@ -312,6 +327,7 @@ CREATE TABLE IF NOT EXISTS changes (
   opened_at       TEXT NOT NULL DEFAULT '',
   updated_at      TEXT NOT NULL DEFAULT '',
   preferred_revision INTEGER,
+  landed_revision INTEGER,
   UNIQUE (repo, number)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_changes_repo_state ON changes (repo, state);
@@ -340,7 +356,8 @@ CREATE TABLE IF NOT EXISTS claims (
   summary   TEXT NOT NULL,
   unchecked TEXT NOT NULL,
   by        TEXT NOT NULL,
-  seq       INTEGER NOT NULL DEFAULT 0
+  seq       INTEGER NOT NULL DEFAULT 0,
+  covers    TEXT NOT NULL DEFAULT '[]'
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_claims_change ON claims (change_id, revision);
 CREATE INDEX IF NOT EXISTS idx_claims_by ON claims (by, seq);
@@ -2102,10 +2119,11 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             passed,
             summary,
             unchecked,
+            covers,
         } => {
             tx.execute(
-                "INSERT INTO claims (id, change_id, revision, kind, command, passed, summary, unchecked, by, seq)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO claims (id, change_id, revision, kind, command, passed, summary, unchecked, by, seq, covers)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     claim.as_str(),
                     change.as_str(),
@@ -2116,7 +2134,8 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                     summary,
                     serde_json::to_string(unchecked).expect("string vec serializes"),
                     actor,
-                    env.seq.0
+                    env.seq.0,
+                    serde_json::to_string(covers).expect("string vec serializes")
                 ],
             )?;
         }
@@ -2253,11 +2272,17 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             // The landed commit is what the branch now carries: the
             // rebased oid when the queue rewrote it, else the revision's.
             tx.execute(
-                "UPDATE changes SET state = 'merged', landed_oid = COALESCE(
+                "UPDATE changes SET state = 'merged', landed_revision = ?, landed_oid = COALESCE(
                      ?,
                      (SELECT commit_oid FROM revisions WHERE change_id = ? AND number = ?)
                  ) WHERE id = ?",
-                params![merged_as, change.as_str(), revision, change.as_str()],
+                params![
+                    revision,
+                    merged_as,
+                    change.as_str(),
+                    revision,
+                    change.as_str()
+                ],
             )?;
             // The task's work merged: the task is landed, with nobody
             // having to say so.
@@ -2449,6 +2474,7 @@ mod concurrency_tests {
                     passed: true,
                     summary: "ok".into(),
                     unchecked: Vec::new(),
+                    covers: Vec::new(),
                 },
             )
             .unwrap();
@@ -2793,7 +2819,7 @@ mod projection_shape {
         assert_eq!(
             (super::SCHEMA_VERSION, shape.as_str()),
             (
-                23,
+                24,
                 r#"{"require_executed_check":true,"independence":"human_or_two_models","require_runner_verification":false,"runner_quorum":1,"required_domains":[],"require_concerns_resolved":true,"attention_budget":null,"agents_act_in_sessions":false,"trust":null}"#
             ),
             "the policy's stored shape changed: bump SCHEMA_VERSION and pin the new shape here"

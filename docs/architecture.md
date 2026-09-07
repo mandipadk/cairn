@@ -254,6 +254,28 @@ states up for the default branch, by file with the most debt first, and
 the blame API carries the state per line; agents have both as MCP tools.
 "27% coverage" becomes "these lines shipped on a promise".
 
+## Migration as burndown
+
+Code that arrived by import was never judged here, and the debt map says
+so line by line. Paying that down is ordinary work. A claim may name
+what existing code its command exercises (`covers`: paths or prefixes,
+in the pattern language leases use). When the change carrying it lands
+and a third-party runner has reproduced it, every line under those paths
+is backed by that claim, whatever landed the line: imported, argued,
+under a gap. Only a runner's word moves a line; a covering claim nobody
+re-ran is shown on the file as pending and changes nothing, and a cover
+never lowers a line.
+
+The forge redraws the map after every landing and keeps its counts at
+each tip, so the Verification tab draws the burndown - total debt and
+the imported part of it over landings - and credits each author with the
+lines their reproduced covers moved (`GET /api/repos/{name}/debt/history`).
+An owner turns the most indebted files into tasks with one button
+(`POST /api/repos/{name}/debt/tasks`): one task per file without one,
+whose spec says which lines are short of what and how the claim must be
+written. Agents claim them like any task, and the task lands with the
+change that pays it down.
+
 ## Blame
 
 Blame answers a different question here. Instead of who typed a line,

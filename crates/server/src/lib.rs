@@ -185,6 +185,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/git/pushes", post(git_http::record_push))
         .route("/api/repos/{name}/blame", get(git_http::blame))
         .route("/api/repos/{name}/debt", get(debt::debt))
+        .route("/api/repos/{name}/debt/history", get(debt::history))
+        .route("/api/repos/{name}/debt/tasks", post(debt::pay_down))
         .route("/git/{repo}/info/refs", get(git_http::info_refs))
         .route(
             "/git/{repo}/git-upload-pack",

@@ -3848,6 +3848,39 @@ fn state_words(state: cairn_core::LineState) -> &'static str {
 /// One stacked bar of the five states, widths in percent of the total.
 /// Drawn as SVG rectangles: their widths are attributes, which the
 /// stylesheet policy allows where an inline style would be refused.
+/// Two lines over the tips the map was drawn at: total debt, and the
+/// imported part of it. No axes: the legend under it carries the numbers.
+fn burndown(history: &[cairn_core::DebtSnapshot]) -> Markup {
+    let (w, h) = (700.0_f64, 120.0_f64);
+    let debt = |p: &cairn_core::DebtSnapshot| (p.claimed + p.gap + p.argued + p.imported) as f64;
+    let top = history.iter().map(debt).fold(1.0_f64, f64::max);
+    let x = |i: usize| {
+        if history.len() < 2 {
+            0.0
+        } else {
+            i as f64 / (history.len() - 1) as f64 * w
+        }
+    };
+    let y = |v: f64| h - 6.0 - (v / top) * (h - 14.0);
+    let points = |f: &dyn Fn(&cairn_core::DebtSnapshot) -> f64| -> String {
+        history
+            .iter()
+            .enumerate()
+            .map(|(i, p)| format!("{:.1},{:.1}", x(i), y(f(p))))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let debt_points = points(&debt);
+    let imported_points = points(&|p| p.imported as f64);
+    html! {
+        svg class="burndown" viewBox={ "0 0 " (w) " " (h) } preserveAspectRatio="none" role="img" aria-label="debt and imported lines over landings" {
+            line class="axis" x1="0" y1=(h - 1.0) x2=(w) y2=(h - 1.0) {}
+            polyline class="imported" points=(imported_points) {}
+            polyline class="debt" points=(debt_points) {}
+        }
+    }
+}
+
 fn stack(counts: &crate::debt::Counts) -> Markup {
     let total = counts.total().max(1) as f64;
     let parts = [
@@ -3889,8 +3922,15 @@ fn thousands(n: usize) -> String {
 
 /// The verification-debt map: what backs every line of the default
 /// branch, for the whole and by file, most debt first.
-pub fn debt(theme: Theme, who: Reading<'_>, repo: &str, map: &crate::debt::DebtMap) -> Markup {
+pub fn debt(
+    theme: Theme,
+    who: Reading<'_>,
+    repo: &str,
+    map: &crate::debt::DebtMap,
+    history: &[cairn_core::DebtSnapshot],
+) -> Markup {
     let c = &map.counts;
+    let signed = who.viewer().is_some();
     layout_reading(
         theme,
         who,
@@ -3916,13 +3956,51 @@ pub fn debt(theme: Theme, who: Reading<'_>, repo: &str, map: &crate::debt::DebtM
             p class="word" {
                 "Every line, by what the log knows about the change that landed it. Reproduced means a runner re-ran the claim. A gap means the claim said what it did not check, and the gap follows every line that landed under it. Imported lines predate this forge."
             }
+            @if history.len() >= 2 {
+                div class="sechead later" { b { "Burndown" } span { (map.branch) " · last " (history.len()) " tips" } }
+                (burndown(history))
+                @let first = &history[0];
+                @let last = &history[history.len() - 1];
+                div class="legend" {
+                    span { b { (thousands((last.claimed + last.gap + last.argued + last.imported) as usize)) } " debt · was " (thousands((first.claimed + first.gap + first.argued + first.imported) as usize)) }
+                    span { b { (thousands(last.imported as usize)) } " imported · was " (thousands(first.imported as usize)) }
+                }
+                p class="word" { "Debt is every line short of a reproduced claim. It falls when a runner reproduces a claim that covers existing code, or when a file is rewritten under one." }
+            }
+            @if !map.paid_down.is_empty() {
+                div class="sechead later" { b { "Paid down" } span { "by reproduced covering claims" } }
+                @for paid in &map.paid_down {
+                    div class="trow" {
+                        span class="strong" { (paid.by) }
+                        span class="sec3" { (paid.claims) " covering claim(s), reproduced · " (paid.files) " file(s)" }
+                        span class="n" { (thousands(paid.lines)) " lines" }
+                    }
+                }
+            }
+            @if signed && map.files.iter().any(|f| f.counts.debt() > 0 && f.task.is_none()) {
+                div class="sechead later" { b { "Pay down" } span { "owner" } }
+                form class="line" method="post" action={ "/" (repo) "/debt/tasks" } {
+                    label for="count" { "Create tasks for the" }
+                    input id="count" name="count" type="number" min="1" max="50" value="5";
+                    span class="hint" { "most indebted files without one" }
+                    button class="vbtn" type="submit" { "Create tasks" }
+                }
+                p class="word" { "Each task names the file and the lines nobody here has judged, and asks for a claim whose command exercises it and that a runner can re-run." }
+            }
             @if map.files.is_empty() {
                 p class="word" { "Nothing on " (map.branch) " yet." }
             } @else {
                 div class="thead debt" { span { "File" } span {} span class="r" { "lines" } span class="r" { "debt" } }
                 @for file in &map.files {
                     a class="trow debt" href={ "/" (repo) "/blame/" (file.path) } {
-                        code { (file.path) }
+                        span {
+                            code { (file.path) }
+                            @if let Some((_, holders)) = &file.task {
+                                small class="sec3" { " task open" @if !holders.is_empty() { " · claimed by " (holders.join(", ")) } }
+                            } @else if let Some(cover) = file.covered_by.first() {
+                                small class="sec3" { " covered by #" (cover.change) @if cover.reproduced { " · runner reproduced" } @else { " · not yet re-run" } }
+                            }
+                        }
                         (stack(&file.counts))
                         span class="n" { (thousands(file.counts.total())) }
                         span class={ "n" @if file.counts.debt() > 0 { " debt" } } { (thousands(file.counts.debt())) }

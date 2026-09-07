@@ -312,7 +312,7 @@ pub(crate) mod raw {
 
     const CHANGE_COLS: &str = "id, repo, number, target, title, task, parent_change, state, \
                                owner, latest_revision, external_key, landed_oid, opened_at, \
-                               updated_at, preferred_revision, \
+                               updated_at, preferred_revision, landed_revision, \
                                (SELECT COUNT(DISTINCT by) FROM revisions r \
                                  WHERE r.change_id = changes.id AND r.by != '')";
 
@@ -334,7 +334,8 @@ pub(crate) mod raw {
                 opened_at: row.get(12)?,
                 updated_at: row.get(13)?,
                 preferred_revision: row.get(14)?,
-                competing: row.get::<_, i64>(15)? > 1,
+                landed_revision: row.get(15)?,
+                competing: row.get::<_, i64>(16)? > 1,
             },
             row.get::<_, String>(7)?,
         ))
@@ -507,7 +508,7 @@ pub(crate) mod raw {
     pub fn claims_on(conn: &Connection, change: &str, revision: i64) -> CoreResult<Vec<Claim>> {
         let rows = conn
             .prepare_cached(
-                "SELECT id, change_id, revision, kind, command, passed, summary, unchecked, by, seq
+                "SELECT id, change_id, revision, kind, command, passed, summary, unchecked, by, seq, covers
                  FROM claims WHERE change_id = ? AND revision = ? ORDER BY rowid",
             )?
             .query_map(params![change, revision], |row| {
@@ -522,16 +523,30 @@ pub(crate) mod raw {
                     row.get::<_, String>(7)?,
                     row.get::<_, String>(8)?,
                     row.get::<_, i64>(9)?,
+                    row.get::<_, String>(10)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
             .map(
-                |(id, change_id, revision, kind, command, passed, summary, unchecked, by, seq)| {
+                |(
+                    id,
+                    change_id,
+                    revision,
+                    kind,
+                    command,
+                    passed,
+                    summary,
+                    unchecked,
+                    by,
+                    seq,
+                    covers,
+                )| {
                     let at = format!("claim {id}");
                     Ok(Claim {
                         kind: parsed(&at, &kind, ClaimKind::parse)?,
                         unchecked: serde_json::from_str(&unchecked).map_err(|e| corrupt(&at, e))?,
+                        covers: serde_json::from_str(&covers).map_err(|e| corrupt(&at, e))?,
                         id: crate::id::ClaimId(id),
                         change: ChangeId(change_id),
                         revision,
@@ -549,7 +564,7 @@ pub(crate) mod raw {
     pub fn claim(conn: &Connection, id: &str) -> CoreResult<Option<Claim>> {
         let row = conn
             .prepare_cached(
-                "SELECT id, change_id, revision, kind, command, passed, summary, unchecked, by, seq
+                "SELECT id, change_id, revision, kind, command, passed, summary, unchecked, by, seq, covers
                  FROM claims WHERE id = ?",
             )?
             .query_row(params![id], |row| {
@@ -564,15 +579,29 @@ pub(crate) mod raw {
                     row.get::<_, String>(7)?,
                     row.get::<_, String>(8)?,
                     row.get::<_, i64>(9)?,
+                    row.get::<_, String>(10)?,
                 ))
             })
             .optional()?;
         row.map(
-            |(id, change_id, revision, kind, command, passed, summary, unchecked, by, seq)| {
+            |(
+                id,
+                change_id,
+                revision,
+                kind,
+                command,
+                passed,
+                summary,
+                unchecked,
+                by,
+                seq,
+                covers,
+            )| {
                 let at = format!("claim {id}");
                 Ok(Claim {
                     kind: parsed(&at, &kind, ClaimKind::parse)?,
                     unchecked: serde_json::from_str(&unchecked).map_err(|e| corrupt(&at, e))?,
+                    covers: serde_json::from_str(&covers).map_err(|e| corrupt(&at, e))?,
                     id: crate::id::ClaimId(id),
                     change: ChangeId(change_id),
                     revision,
@@ -1707,6 +1736,102 @@ impl Store {
                 at: jiff::Timestamp::now().to_string(),
             }),
         }))
+    }
+
+    /// Every covering claim on a landed change in a repository, made on
+    /// the revision that landed, with whether a third-party runner
+    /// reproduced it. What the debt map applies over the tree.
+    pub fn covers(&self, repo: &str) -> CoreResult<Vec<crate::Cover>> {
+        let rows: Vec<(String, String, String, String, i64, i64)> = self
+            .conn
+            .prepare_cached(
+                "SELECT cl.id, cl.covers, cl.by, c.id, c.number, c.landed_revision
+                   FROM claims cl JOIN changes c ON c.id = cl.change_id
+                  WHERE c.repo = ?1 AND c.state = 'merged' AND cl.covers != '[]'
+                    AND cl.revision = c.landed_revision
+                  ORDER BY c.number, cl.rowid",
+            )?
+            .query_map(params![repo], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut covers = Vec::new();
+        for (claim, patterns, by, change, number, revision) in rows {
+            let patterns: Vec<String> = serde_json::from_str(&patterns)
+                .map_err(|e| corrupt(&format!("claim {claim}"), e))?;
+            let verifications = raw::verifications_on(&self.conn, &change, revision)?;
+            let standing = crate::policy::standing_positions(&verifications);
+            let counted = crate::policy::reproductions(&self.conn, repo, &standing)?;
+            let reproduced = counted.by_claim.contains_key(&claim);
+            for pattern in patterns {
+                covers.push(crate::Cover {
+                    pattern,
+                    claim: crate::id::ClaimId(claim.clone()),
+                    change: ChangeId(change.clone()),
+                    number,
+                    by: PrincipalId(by.clone()),
+                    reproduced,
+                });
+            }
+        }
+        Ok(covers)
+    }
+
+    /// Remember the map's counts at a tip; a tip already recorded stays.
+    pub fn record_debt_snapshot(
+        &mut self,
+        repo: &str,
+        snapshot: &crate::DebtSnapshot,
+    ) -> CoreResult<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO debt_snapshots
+                 (repo, tip, seq, at, reproduced, claimed, gap, argued, imported)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                repo,
+                snapshot.tip,
+                snapshot.seq,
+                snapshot.at,
+                snapshot.reproduced,
+                snapshot.claimed,
+                snapshot.gap,
+                snapshot.argued,
+                snapshot.imported
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// The burndown: every tip the map was computed at, oldest first.
+    pub fn debt_history(&self, repo: &str, limit: i64) -> CoreResult<Vec<crate::DebtSnapshot>> {
+        let mut points: Vec<crate::DebtSnapshot> = self
+            .conn
+            .prepare_cached(
+                "SELECT tip, seq, at, reproduced, claimed, gap, argued, imported
+                   FROM debt_snapshots WHERE repo = ?1 ORDER BY seq DESC LIMIT ?2",
+            )?
+            .query_map(params![repo, limit], |row| {
+                Ok(crate::DebtSnapshot {
+                    tip: row.get(0)?,
+                    seq: row.get(1)?,
+                    at: row.get(2)?,
+                    reproduced: row.get(3)?,
+                    claimed: row.get(4)?,
+                    gap: row.get(5)?,
+                    argued: row.get(6)?,
+                    imported: row.get(7)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        points.reverse();
+        Ok(points)
     }
 
     /// The latest comparison made on a change, if any was.

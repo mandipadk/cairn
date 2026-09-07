@@ -246,6 +246,11 @@ async fn land(
     carry_children(state, entry, &landed).await;
     crate::receipts::attach(state, &entry.repo, &entry.change, &landed).await;
     mirror_branch(state, &entry.repo, &entry.target, &landed).await;
+    // Redraw the debt map at the new tip, so the burndown has its point
+    // whether or not anybody opens the page.
+    if let Err(err) = crate::debt::map(state, &entry.repo, &entry.target).await {
+        tracing::warn!(error = %err.message, repo = %entry.repo, "queue: debt map not redrawn");
+    }
     Ok(true)
 }
 

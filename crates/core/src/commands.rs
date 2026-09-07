@@ -2628,6 +2628,16 @@ impl Store {
         for gap in &spec.unchecked {
             bounded("a declared gap", gap, MAX_TITLE)?;
         }
+        require(spec.covers.len() <= MAX_ITEMS, || {
+            format!("a claim covers at most {MAX_ITEMS} paths")
+        })?;
+        for path in &spec.covers {
+            require(
+                !path.trim().is_empty() && !path.contains(char::is_whitespace),
+                || format!("{path:?} is not a path or a prefix a claim can cover"),
+            )?;
+            bounded("a covered path", path, MAX_TITLE)?;
+        }
         let current = raw::change(&tx, change.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("change {change}")))?;
         authorize(
@@ -2654,6 +2664,7 @@ impl Store {
                 passed: spec.passed,
                 summary: spec.summary,
                 unchecked: spec.unchecked,
+                covers: spec.covers,
             },
         )?;
         tx.commit()?;

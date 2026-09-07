@@ -12,6 +12,8 @@ use serde_json::Value;
 
 /// What a verified receipt says, in the terms a person asks about.
 pub struct Summary {
+    /// The forge that issued it, when the receipt names one.
+    pub forge: Option<String>,
     pub repo: String,
     pub number: i64,
     pub title: String,
@@ -46,7 +48,11 @@ impl std::fmt::Display for Summary {
             self.disputed,
             self.verdicts,
             self.key
-        )
+        )?;
+        if let Some(forge) = &self.forge {
+            write!(f, " · from {forge}")?;
+        }
+        Ok(())
     }
 }
 
@@ -104,6 +110,7 @@ pub fn verify(document: &str, expected_key: Option<&str>) -> anyhow::Result<Summ
     let verifications = get("/verifications");
     let runs = verifications.as_array().cloned().unwrap_or_default();
     Ok(Summary {
+        forge: get("/forge").as_str().map(str::to_owned),
         repo: get("/repo").as_str().unwrap_or("").to_owned(),
         number: get("/change/number").as_i64().unwrap_or(0),
         title: get("/change/title").as_str().unwrap_or("").to_owned(),

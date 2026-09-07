@@ -1,0 +1,145 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": true,
+      "external_key": "Ia2forgetrailing",
+      "id": "c-75rdyjj6ykdh32pywhrkk2daxv",
+      "landed_oid": "957c362c45b30913bf60491f13c8b3db6b8dbf66",
+      "landed_revision": 1,
+      "latest_revision": 2,
+      "number": 83,
+      "opened_at": "2026-09-07T18:21:35.375784593Z",
+      "owner": "attempt-a",
+      "parent_change": null,
+      "preferred_revision": 1,
+      "repo": "cairn",
+      "state": "merged",
+      "target": "main",
+      "task": "t-05hj5kdremv3jq2vnxxcmwy6f8",
+      "title": "Say which forge issued a receipt, at the end of the summary",
+      "updated_at": "2026-09-07T18:37:56.020879214Z"
+    },
+    "claims": [
+      {
+        "by": "attempt-a",
+        "change": "c-75rdyjj6ykdh32pywhrkk2daxv",
+        "command": "cargo test -p cairn-client",
+        "covers": [],
+        "id": "cl-5vxzyjz16v21w924x1k352ennf",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 655,
+        "summary": "cairn-client unit tests pass with the forge in the summary",
+        "unchecked": [
+          "the workspace suite"
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "957c362c45b30913bf60491f13c8b3db6b8dbf66",
+    "landed_at": "2026-09-07T18:37:56.020879214Z",
+    "merged_by": "mandip",
+    "repo": "cairn",
+    "revision": {
+      "by": "attempt-a",
+      "change": "c-75rdyjj6ykdh32pywhrkk2daxv",
+      "commit_oid": "d17054dce0513a08ee86be81e64aa88bb62b77d2",
+      "message": "Say which forge issued a receipt, at the end of the summary\n\nThe summary line ends with the key; the forge that signed with it\nbelongs beside it. A receipt without a forge field reads as before.\n\nChange-Id: Ia2forgetrailing\nTask: t-05hj5kdremv3jq2vnxxcmwy6f8",
+      "number": 1,
+      "paths": [
+        "crates/client/src/receipt.rs"
+      ],
+      "session": "s-26d5fvxt16g40wb8914tqk2ya4"
+    },
+    "seq": 671,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "competing revisions have a comparison",
+          "evidence": "revision 1 preferred; it is the one judged here",
+          "satisfied": true
+        },
+        {
+          "description": "a human has looked at this change since it was drawn for one",
+          "evidence": "drawn 2026-09-07 for unverified_claim, declared_gap; asked mandip; human verdict on revision 1: yes",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-5vxzyjz16v21w924x1k352ennf",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-5vxzyjz16v21w924x1k352ennf",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: [mandip]; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "attempt-a: 1 judged claims, 100% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 1 judged claims, 20 needed; 1 path(s) outside docs/, *.md: crates/client/src/receipt.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [
+      {
+        "by": "mandip",
+        "change": "c-75rdyjj6ykdh32pywhrkk2daxv",
+        "disposition": "approve",
+        "domain": "correctness",
+        "id": "v-1bdgy6abyw14trxt03phdddjx2",
+        "rationale": "Read both attempts. r1 adds the forge as an optional field, parses it from the receipt, and appends it after the key; a receipt without a forge reads exactly as before. The unit tests cover the parse.",
+        "revision": 1,
+        "seq": 661
+      }
+    ],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-75rdyjj6ykdh32pywhrkk2daxv",
+        "claim": "cl-5vxzyjz16v21w924x1k352ennf",
+        "command": "cargo test -p cairn-client",
+        "id": "vr-46pmw01vdfvyyqexa7te1mkkpy",
+        "observed": "exit 0: Doc-tests cairn_client",
+        "revision": 1,
+        "seq": 669
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "8ygY4WRaG93GONq/3WSXoZIjrkIsOJ9vho4SDvYSgc2uayRh67nXIzfxPcnEQDR58RKMRx0ZXRrCgV/480kvBw=="
+  }
+}

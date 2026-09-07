@@ -31,6 +31,9 @@ get() { curl -sS "$URL/api/$1" -H "Authorization: Bearer $2"; }
 as_scout() { GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c credential.helper="!f() { echo username=scout; echo password=$AGENT; }; f" "$@"; }
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 
+echo "operating.md: the binary names its version and build"
+"$BIN" --version | grep -qE '^cairn [0-9]+\.[0-9]+\.[0-9]+.* \(.+\)$' || { echo "!! --version did not name a version and a build: $("$BIN" --version)"; exit 1; }
+
 echo "README: bootstrap, then serve"
 TOKEN=$("$BIN" admin bootstrap --db forge.db you --display "You" | grep -oE 'cairn_[A-Za-z0-9_-]+' | head -1)
 [ -n "$TOKEN" ] || { echo "!! bootstrap printed no token"; exit 1; }

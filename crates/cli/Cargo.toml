@@ -1,6 +1,6 @@
 [package]
 name = "cairn"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 license.workspace = true
 repository.workspace = true
@@ -8,10 +8,10 @@ repository.workspace = true
 [dependencies]
 anyhow = "1.0.104"
 axum = "0.8.9"
-cairn-client = { version = "0.1.0", path = "../client" }
-cairn-core = { version = "0.1.0", path = "../core" }
-cairn-git = { version = "0.1.0", path = "../git" }
-cairn-server = { version = "0.1.0", path = "../server" }
+cairn-client = { path = "../client" }
+cairn-core = { path = "../core" }
+cairn-git = { path = "../git" }
+cairn-server = { path = "../server" }
 clap = { version = "4.6.6", features = ["derive"] }
 jiff = "0.2.35"
 rpassword = "7.5.4"

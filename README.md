@@ -122,8 +122,9 @@ with the reason.
 ## Try it
 
 ```sh
-cargo run -- admin bootstrap --db forge.db you --display "You"
-cargo run -- serve --db forge.db --listen 127.0.0.1:6160
+cargo install --git https://cairn.mandip.dev/git/cairn cairn
+cairn admin bootstrap --db forge.db you --display "You"
+cairn serve --db forge.db --listen 127.0.0.1:6160
 ```
 
 Open `http://127.0.0.1:6160`, sign in with the token it printed, and

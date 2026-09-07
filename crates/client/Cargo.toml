@@ -1,6 +1,6 @@
 [package]
 name = "cairn-client"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 rust-version.workspace = true
 # The pieces other tools embed - the MCP adapter and the claim runner -

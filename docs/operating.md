@@ -16,6 +16,20 @@ any object, so it depends on the transport advertising it, and older git
 quietly produces a SHA-1 working copy whose first push will not match the
 repository it came from. Verified: 2.40 fails, 2.43 works.
 
+## Installing
+
+From source, with a Rust toolchain on the machine:
+
+```sh
+cargo install --git https://cairn.mandip.dev/git/cairn cairn
+```
+
+The mirror at `github.com/mandipadk/cairn` is the same code. `cairn
+--version` names the version and the commit it was built from, and
+`/healthz` on a running forge carries the same string. A packaged build is
+what `scripts/release.sh` produces: one archive with the binary, the
+licence and the README, beside a `SHA256SUMS` that covers it.
+
 ## Running
 
 ```sh
@@ -168,6 +182,17 @@ bucket's lifecycle rule is the retention. To restore, extract the bundle
 and point `serve` at the copies; `cairn admin fsck --db <copy> --repos
 <copy>/repos` proves the bundle before you need it, and the first-run walk
 does exactly that on every change to these documents.
+
+## Upgrading
+
+Stop the service, take a backup, install the new binary, start it. The
+first open after an upgrade that changed the schema rebuilds every
+projection from the log — the tree, the queue, blame, the rankings — and
+the forge serves only once that is done; the log itself, tokens, sessions
+and the idempotency ledger are not touched. On the reference instance the
+rebuild takes seconds, and it grows with the log. Run `cairn admin fsck`
+afterwards, and read `cairn --version` or `/healthz` to be sure which
+build is answering.
 
 ## Watching it
 

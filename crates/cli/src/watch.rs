@@ -26,7 +26,7 @@ pub struct Seen {
 /// One look at the forge.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {
-    Up { seq: u64 },
+    Up { seq: u64, version: Option<String> },
     Down { reason: String },
 }
 
@@ -50,6 +50,7 @@ pub fn probe(agent: &ureq::Agent, url: &str) -> Answer {
     match response.body_mut().read_json::<serde_json::Value>() {
         Ok(v) if status == 200 && v["ok"] == true => Answer::Up {
             seq: v["seq"].as_u64().unwrap_or(0),
+            version: v["version"].as_str().map(str::to_owned),
         },
         Ok(v) => Answer::Down {
             reason: format!("healthz answered {status}: {v}"),
@@ -69,7 +70,13 @@ pub fn decide(
     url: &str,
 ) -> (Seen, Option<Mail>) {
     let (up, detail) = match answer {
-        Answer::Up { seq } => (true, format!("healthz ok, seq {seq}")),
+        Answer::Up { seq, version } => (
+            true,
+            match version {
+                Some(version) => format!("healthz ok, seq {seq}, cairn {version}"),
+                None => format!("healthz ok, seq {seq}"),
+            },
+        ),
         Answer::Down { reason } => (false, reason.clone()),
     };
     match previous {
@@ -197,7 +204,10 @@ mod tests {
     const URL: &str = "https://forge.example";
 
     fn up() -> Answer {
-        Answer::Up { seq: 7 }
+        Answer::Up {
+            seq: 7,
+            version: None,
+        }
     }
 
     fn down() -> Answer {

@@ -27,6 +27,10 @@
 //! [`Event`]: event::Event
 //! [`EventSeq`]: event::EventSeq
 
+/// The version this build reports: the crate version, then the commit
+/// and its date as `build.rs` found them (or what CAIRN_BUILD said).
+pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("CAIRN_BUILD"), ")");
+
 mod attention;
 mod commands;
 mod error;

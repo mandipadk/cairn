@@ -12,7 +12,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "cairn", version, about = "An agent-native forge")]
+#[command(name = "cairn", version = cairn_core::VERSION, about = "An agent-native forge")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -300,6 +300,7 @@ async fn main() -> anyhow::Result<()> {
             signing_key_file,
         } => {
             let git_version = cairn_git::preflight().context("checking the git on PATH")?;
+            tracing::info!("cairn {}", cairn_core::VERSION);
             let store = Store::open(&db)
                 .with_context(|| format!("opening forge database at {}", db.display()))?;
             let listener = tokio::net::TcpListener::bind(listen)

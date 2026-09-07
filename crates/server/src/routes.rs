@@ -1910,7 +1910,11 @@ pub async fn get_mirror(
 /// that needs a credential is a probe nobody configures.
 pub async fn health(State(app): State<AppState>) -> Response {
     match app.with_store(|s| s.latest_seq()) {
-        Ok(seq) => (StatusCode::OK, Json(json!({ "ok": true, "seq": seq.0 }))).into_response(),
+        Ok(seq) => (
+            StatusCode::OK,
+            Json(json!({ "ok": true, "seq": seq.0, "version": cairn_core::VERSION })),
+        )
+            .into_response(),
         Err(err) => {
             tracing::error!(error = %err, "health: the store did not answer");
             (

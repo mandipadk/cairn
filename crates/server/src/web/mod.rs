@@ -2622,6 +2622,8 @@ async fn render_tree(
 }
 
 pub(crate) struct Sidebar {
+    /// Names the repository has given landed commits, newest first.
+    pub tags: Vec<cairn_core::Tag>,
     pub open_changes: Vec<cairn_core::Change>,
     pub queue: Vec<cairn_core::QueueEntry>,
     pub sessions: Vec<cairn_core::Session>,
@@ -2648,6 +2650,7 @@ fn sidebar_data(
     open_changes.reverse();
     open_changes.truncate(5);
     Ok(Sidebar {
+        tags: app.with_store(|s| s.tags(repo))?,
         open_changes,
         queue: app.with_store(|s| s.queue_for(repo, target))?,
         sessions: app.with_store(|s| s.active_sessions_in(repo))?,

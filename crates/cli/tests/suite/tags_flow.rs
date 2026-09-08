@@ -106,6 +106,34 @@ async fn a_tag_names_landed_history_and_travels_to_the_mirror() {
             .unwrap_or(false)
     })
     .await;
+
+    // The repository page shows it.
+    let (_, cookie) = sign_in_as(&forge, "ada").await;
+    let (status, page) = page_with_cookie(app, "/demo", &cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(page.contains("v0.1") && page.contains("Tags"), "{page}");
+
+    // fsck holds git to the record: a tag that vanishes, or one that
+    // appears behind the forge's back, is a divergence.
+    let clean = forge.state.branches_match_the_log().await.unwrap();
+    assert!(clean.is_empty(), "{clean:?}");
+    let bare = forge._tmp.path().join("repos").join("demo.git");
+    assert!(bare.is_dir(), "{}", bare.display());
+    git(&bare, &["update-ref", "-d", "refs/tags/v0.1"]);
+    git(&bare, &["update-ref", "refs/tags/rogue", &landed]);
+    let diverged = forge.state.branches_match_the_log().await.unwrap();
+    assert!(
+        diverged
+            .iter()
+            .any(|d| d.contains("refs/tags/v0.1 is missing")),
+        "{diverged:?}"
+    );
+    assert!(
+        diverged
+            .iter()
+            .any(|d| d.contains("refs/tags/rogue exists") && d.contains("never recorded")),
+        "{diverged:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

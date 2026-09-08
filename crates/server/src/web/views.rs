@@ -2426,6 +2426,20 @@ pub fn repository(
                             }
                         }
                     }
+                    @if !sidebar.tags.is_empty() {
+                        section class="side-sec" {
+                            header {
+                                h2 { "Tags" }
+                                span { (sidebar.tags.len()) }
+                            }
+                            @for tag in sidebar.tags.iter().take(8) {
+                                div class="srow" {
+                                    span class="t" { code { (tag.name) } }
+                                    span class="age" { code { (short(&tag.commit_oid)) } " " (tag.by.as_str()) }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         },

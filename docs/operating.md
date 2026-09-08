@@ -173,8 +173,10 @@ offline against it.
 - `cairn admin mail-check` — reach the relay and authenticate, sending
   nothing; reads the same flags and environment as `serve`.
 - `cairn admin fsck [--repos <dir>]` — check that current state is
-  exactly the log applied; exits non-zero on any divergence, so it can
-  run from cron or a health check.
+  exactly the log applied; with `--repos`, also that every branch
+  contains what the log says landed on it and that the tags in git are
+  exactly the tags on the record. Exits non-zero on any divergence, so
+  it can run from cron or a health check.
 
 ## Backups
 

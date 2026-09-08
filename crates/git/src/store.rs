@@ -497,6 +497,35 @@ impl GitStore {
             .collect())
     }
 
+    /// Every tag: its short name, the object the ref points at, and the
+    /// commit that resolves to (the same for a lightweight tag).
+    pub async fn list_tags(&self, name: &str) -> GitResult<Vec<(String, String, String)>> {
+        let path = self.existing_repo_path(name)?;
+        let stdout = self
+            .run(
+                Some(&path),
+                &[
+                    "for-each-ref",
+                    "--format=%(refname:short) %(objectname) %(*objectname)",
+                    "refs/tags",
+                ],
+            )
+            .await?;
+        Ok(String::from_utf8_lossy(&stdout)
+            .lines()
+            .filter_map(|line| {
+                let mut parts = line.split(' ');
+                let tag = parts.next()?.to_owned();
+                let object = parts.next()?.to_owned();
+                let commit = parts
+                    .next()
+                    .filter(|peeled| !peeled.is_empty())
+                    .map_or_else(|| object.clone(), str::to_owned);
+                Some((tag, object, commit))
+            })
+            .collect())
+    }
+
     /// Point a ref at an object (creating it if missing). Fails if the
     /// object is not present in the repo.
     pub async fn set_ref(&self, name: &str, refname: &str, oid: &str) -> GitResult<()> {

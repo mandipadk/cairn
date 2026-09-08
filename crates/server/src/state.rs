@@ -409,6 +409,54 @@ impl AppState {
                 ));
             }
         }
+        // Tags are the log projected onto git too: every recorded name
+        // must be a ref at the recorded object, and no ref may exist
+        // that the log never saw.
+        if let Some(git) = self.git() {
+            fn short(oid: &str) -> &str {
+                oid.get(..9).unwrap_or(oid)
+            }
+            for repo in self.with_store(|store| store.repos())? {
+                let recorded = self.with_store(|store| store.tags(&repo.name))?;
+                let in_git = match git.store.list_tags(&repo.name).await {
+                    Ok(tags) => tags,
+                    Err(err) => {
+                        divergences.push(format!("{}: tags could not be listed: {err}", repo.name));
+                        continue;
+                    }
+                };
+                for tag in &recorded {
+                    let want = tag.object_oid.as_deref().unwrap_or(&tag.commit_oid);
+                    match in_git.iter().find(|(name, _, _)| *name == tag.name) {
+                        None => divergences.push(format!(
+                            "{}: tag {} is on the record but refs/tags/{} is missing",
+                            repo.name, tag.name, tag.name
+                        )),
+                        Some((_, object, commit))
+                            if object != want || *commit != tag.commit_oid =>
+                        {
+                            divergences.push(format!(
+                                "{}: refs/tags/{} points at {} but the log says {}",
+                                repo.name,
+                                tag.name,
+                                short(object),
+                                short(want)
+                            ))
+                        }
+                        Some(_) => {}
+                    }
+                }
+                for (name, object, _) in &in_git {
+                    if !recorded.iter().any(|tag| tag.name == *name) {
+                        divergences.push(format!(
+                            "{}: refs/tags/{name} exists at {} but the log never recorded it",
+                            repo.name,
+                            short(object)
+                        ));
+                    }
+                }
+            }
+        }
         Ok(divergences)
     }
 

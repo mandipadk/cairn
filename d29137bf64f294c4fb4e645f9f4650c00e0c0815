@@ -1,0 +1,125 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Idocs0095agents",
+      "id": "c-4npqthp8g2wjh9s5rr6cwht2nb",
+      "landed_oid": "d29137bf64f294c4fb4e645f9f4650c00e0c0815",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 95,
+      "opened_at": "2026-09-08T02:00:56.829947538Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Tell an agent how to connect, and what the forge will hold it to",
+      "updated_at": "2026-09-08T02:01:15.192070218Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-4npqthp8g2wjh9s5rr6cwht2nb",
+        "command": "scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-06dxveqxa28c757bv023wa4r5f",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 748,
+        "summary": "First-run walk green on this tree. The quickstart names only tools the MCP server lists, checked against the tool list in the source, and the Claude Code and Cursor forms spell the same command.",
+        "unchecked": [
+          "Neither harness was driven end to end against the forge for this change; the MCP handshake and tool list are what the walk exercises."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "d29137bf64f294c4fb4e645f9f4650c00e0c0815",
+    "landed_at": "2026-09-08T02:01:15.192070218Z",
+    "merged_by": "mandip",
+    "repo": "cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-4npqthp8g2wjh9s5rr6cwht2nb",
+      "commit_oid": "d29137bf64f294c4fb4e645f9f4650c00e0c0815",
+      "message": "Tell an agent how to connect, and what the forge will hold it to\n\ndocs/agents.md is the quickstart the README only gestured at: the one\nline that registers the MCP server in Claude Code, the JSON that does\nthe same in Cursor and most other harnesses, and then the shape of the\nwork in the tools' own names, from claim_task through end_session, with\nthe honesty the forge insists on along the way: what was not checked,\nwhat a claim covers, what readiness says is missing, and an outcome\nwritten for the next reader. The README points at it.\n\nChange-Id: Idocs0095agents\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "README.md",
+        "docs/agents.md"
+      ],
+      "session": null
+    },
+    "seq": 751,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-06dxveqxa28c757bv023wa4r5f",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-06dxveqxa28c757bv023wa4r5f",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 98 judged claims, 97% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; stands in for runner_verification; all 2 path(s) match docs/, *.md",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-4npqthp8g2wjh9s5rr6cwht2nb",
+        "claim": "cl-06dxveqxa28c757bv023wa4r5f",
+        "command": "scripts/first-run.sh",
+        "id": "vr-0qdnz5mhv5gbft0nmcgcrnq380",
+        "observed": "exit 0: first run: every documented step did what the documents say",
+        "revision": 1,
+        "seq": 749
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "PxhWwpGoQi2dx3IIhpqWpXgayRzK7IB7PX2V21n3x+dq5v1F8r793q0fsqN1L1P167gXYP81sKkU6D9aAKvyAw=="
+  }
+}

@@ -74,6 +74,19 @@ CREATE TABLE IF NOT EXISTS waitlist (
   note   TEXT
 ) STRICT;
 
+-- What somebody said broke. Kept beside the waitlist for the same
+-- reason: it is a person's words about this software, not derived from
+-- the log, and it can be removed when they ask.
+CREATE TABLE IF NOT EXISTS reports (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  filed   TEXT NOT NULL,
+  what    TEXT NOT NULL,
+  place   TEXT,
+  contact TEXT,
+  by      TEXT,
+  version TEXT NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS inbox_read (
   principal TEXT NOT NULL,
   seq       INTEGER NOT NULL,

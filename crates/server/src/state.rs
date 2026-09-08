@@ -64,6 +64,7 @@ pub struct AppState {
     /// A public form anyone can post to needs its own allowance, kept
     /// apart from sign-in so neither can exhaust the other.
     pub(crate) waitlist_limiter: crate::guard::LoginLimiter,
+    pub(crate) report_limiter: crate::guard::LoginLimiter,
     /// Asking for a password reset is a public form too.
     pub(crate) reset_limiter: crate::guard::LoginLimiter,
     /// API writes, per principal: a runaway loop is told to wait.
@@ -109,6 +110,7 @@ impl AppState {
             proxy_trust: crate::guard::ProxyTrust::Connection,
             login_limiter: crate::guard::LoginLimiter::default(),
             waitlist_limiter: crate::guard::LoginLimiter::new(5, Duration::from_secs(300)),
+            report_limiter: crate::guard::LoginLimiter::new(5, Duration::from_secs(300)),
             reset_limiter: crate::guard::LoginLimiter::new(5, Duration::from_secs(300)),
             write_limiter: crate::guard::Limiter::new(
                 DEFAULT_WRITES_PER_MINUTE,
@@ -368,6 +370,11 @@ impl AppState {
     /// about, not part of the graph.
     pub fn waitlist(&self) -> cairn_core::CoreResult<Vec<(String, String, Option<String>)>> {
         self.with_store(|store| store.waitlist())
+    }
+
+    /// What people reported broke; operational, like the waitlist.
+    pub fn reports(&self) -> cairn_core::CoreResult<Vec<cairn_core::Report>> {
+        self.with_store(|store| store.reports())
     }
 
     pub fn leave_waitlist(&self, email: &str) -> cairn_core::CoreResult<bool> {

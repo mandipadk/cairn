@@ -177,6 +177,9 @@ organisations as a level above teams, quotas on repository size, and rate
 limiting on reads. What is here is tested at the boundaries where a forge
 is usually wrong — authority, concurrency, crash recovery, hostile input,
 resource limits — and `fsck` runs clean on the instance serving this page.
+When something breaks anyway, say so at
+[cairn.mandip.dev/report](https://cairn.mandip.dev/report); it reaches
+whoever runs the forge, and a self-hosted forge has the same form.
 
 ## License
 

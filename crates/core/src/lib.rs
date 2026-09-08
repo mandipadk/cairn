@@ -59,6 +59,7 @@ pub use record::Record;
 pub use search::{HitKind, SearchHit, SearchQuery};
 pub use store::Store;
 pub use types::Anchor;
+pub use types::Report;
 pub use types::Tag;
 pub use types::{
     BrowserSession, Capability, Change, ChangeSpec, ChangeState, Claim, ClaimKind, ClaimSpec,

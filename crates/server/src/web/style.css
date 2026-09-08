@@ -823,3 +823,19 @@ details.thread[open] > summary .closed-inline { visibility: hidden; }
 form.line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 form.line input[type="number"] { width: 72px; font: inherit; font-size: 13px; padding: 6px 10px; color: var(--ink); background: var(--raise); border: 1px solid var(--hair); border-radius: 6px; }
 form.line input[type="number"]:focus { outline: none; border-color: var(--ink2); }
+
+/* Reports: a stranger's form, and the operator's list of what came in. */
+.report h1 { margin-top: 48px; }
+.report .lede-small { color: var(--ink2); margin: 10px 0 0; max-width: 60ch; }
+.report form.report { display: flex; flex-direction: column; gap: 14px; margin: 26px 0 14px; max-width: 60ch; }
+.report form.report label { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--ink2); }
+.report form.report textarea, .report form.report input {
+  font: inherit; font-size: 13px; color: var(--ink); background: var(--raise);
+  border: 1px solid var(--hair); border-radius: 4px; padding: 8px 10px;
+}
+.report form.report textarea { min-height: 150px; resize: vertical; }
+.report form.report .btn { align-self: flex-start; }
+.reportrow { padding: 14px 22px; border-top: 1px solid var(--hair); }
+.reportrow .meta { font-size: 12px; color: var(--ink2); }
+.reportrow .what { white-space: pre-wrap; margin: 8px 0; max-width: 70ch; }
+.reportrow .who { font-size: 12.5px; color: var(--ink2); margin-bottom: 8px; }

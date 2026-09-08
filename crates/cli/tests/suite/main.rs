@@ -44,6 +44,7 @@ mod read_boundary_flow;
 mod receipt_flow;
 mod recovery_flow;
 mod repo_lifecycle_flow;
+mod report_flow;
 mod reset_flow;
 mod search_flow;
 mod security_flow;

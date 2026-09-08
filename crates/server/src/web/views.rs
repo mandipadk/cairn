@@ -325,6 +325,9 @@ fn sidebar(chrome: &Chrome, signed: bool, current: Option<&str>) -> Markup {
                 a class={ @if current == Some("people") { "on" } @else { "" } } href="/people" {
                     span { "People" } span class="n" {}
                 }
+                a class={ @if current == Some("reports") { "on" } @else { "" } } href="/reports" {
+                    span { "Reports" } span class="n" {}
+                }
                 a class={ @if current == Some("teams") { "on" } @else { "" } } href="/teams" {
                     span { "Teams" } span class="n" {}
                 }
@@ -1956,6 +1959,112 @@ pub fn teams(
                     input id="display" name="display" type="text" autocomplete="off";
                 }
                 button class="btn" type="submit" { "Add a team" }
+            }
+        },
+    )
+}
+
+/// Where anyone says what broke. Works signed out, since the person most
+/// likely to have hit something is the one who could not get in.
+pub fn report(
+    theme: Theme,
+    viewer: Option<&Viewer>,
+    filed: Option<i64>,
+    error: Option<&str>,
+) -> Markup {
+    layout(
+        theme,
+        viewer,
+        None,
+        None,
+        "Report",
+        html! {
+            div class="welcome report" {
+                h1 { "Say what broke" }
+                p class="lede-small" {
+                    "What you did, what you expected, and what happened instead. "
+                    "The version of this forge is recorded with it. An address is "
+                    "optional; leave one if you want to hear back."
+                }
+                @if let Some(id) = filed {
+                    p class="joined" { "Recorded as report " (id) ". Thank you." }
+                }
+                form class="report" method="post" action="/report" {
+                    label {
+                        span { "What happened" }
+                        textarea name="what" rows="8" required minlength="10"
+                            placeholder="I pushed a change with … and the page said …" {}
+                    }
+                    label {
+                        span { "Where" }
+                        input name="place" type="text" maxlength="300"
+                            placeholder="a page, a command, a change number";
+                    }
+                    label {
+                        span { "How to reach you" }
+                        input name="contact" type="email" autocomplete="email"
+                            placeholder="optional";
+                    }
+                    button class="btn" type="submit" { "Send the report" }
+                    @if let Some(error) = error {
+                        p class="error" { (error) }
+                    }
+                }
+                p class="fineprint" {
+                    "Reports are kept beside the waitlist and not in the log, so one "
+                    "can be removed when you ask."
+                }
+            }
+        },
+    )
+}
+
+/// What was reported and not yet dealt with, newest first, for whoever
+/// runs the forge.
+pub fn reports(
+    theme: Theme,
+    viewer: &Viewer,
+    reports: &[cairn_core::Report],
+    error: Option<&str>,
+) -> Markup {
+    layout(
+        theme,
+        Some(viewer),
+        None,
+        None,
+        "Reports",
+        html! {
+            div class="sechead" { b { "Reports" } span { (reports.len()) } }
+            @if reports.is_empty() {
+                p class="empty" { "Nothing reported. The form is at " a href="/report" { "/report" } "." }
+            }
+            @for report in reports {
+                article class="reportrow" {
+                    div class="meta" {
+                        b { "#" (report.id) }
+                        " · " (report.filed.get(..16).unwrap_or(&report.filed).replace('T', " "))
+                        " · " (report.version)
+                        @if let Some(place) = &report.place { " · " (place) }
+                    }
+                    p class="what" { (report.what) }
+                    div class="who" {
+                        @if let Some(contact) = &report.contact {
+                            a href={ "mailto:" (contact) } { (contact) }
+                            @if let Some(by) = &report.by { ", signed in as " b { (by) } }
+                        } @else if let Some(by) = &report.by {
+                            "signed in as " b { (by) }
+                        } @else {
+                            "no address left"
+                        }
+                    }
+                    form class="line" method="post" action="/reports" {
+                        input type="hidden" name="id" value=(report.id);
+                        button class="btn" type="submit" { "Dismiss" }
+                    }
+                }
+            }
+            @if let Some(error) = error {
+                p class="error" { (error) }
             }
         },
     )

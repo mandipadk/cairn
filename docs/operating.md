@@ -168,6 +168,8 @@ offline against it.
   grant admin.
 - `cairn admin waitlist [--remove <email>]` — list the waitlist, or
   remove someone who asked to be forgotten.
+- `cairn admin reports [--dismiss <id>]` — what people reported broke,
+  newest first; or dismiss one.
 - `cairn admin mail-check` — reach the relay and authenticate, sending
   nothing; reads the same flags and environment as `serve`.
 - `cairn admin fsck [--repos <dir>]` — check that current state is
@@ -224,6 +226,16 @@ so as well. Mail uses the same settings as `serve` (`CAIRN_SMTP_URL` and
 answer is only printed. Run it every few minutes from a timer on a machine
 that is not the forge. Run on the forge's own machine, it still catches a
 hung process or a dead tunnel, but not the machine going away.
+
+## Reports
+
+`/report` is where anyone, signed in or not, says what broke: what they
+did, where, and how to reach them if they like. The forge version is
+recorded with it. Reports live beside the waitlist and outside the log,
+so one can be removed when the person asks. Whoever runs the forge reads
+them at `/reports` or with `cairn admin reports`, and, when the forge can
+send mail, hears of each one at their confirmed address as it arrives.
+The form is rate limited by source like the waitlist.
 
 ## Single sign-on and workload identity
 

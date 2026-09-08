@@ -45,6 +45,8 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(root))
         .route("/waitlist", post(join_waitlist))
+        .route("/report", get(report_page).post(file_report))
+        .route("/reports", get(reports_page).post(reports_action))
         .route("/assets/{file}", get(asset))
         .route("/login", get(login_page).post(login_submit))
         .route("/login/link", post(login_link))
@@ -1916,6 +1918,129 @@ async fn join_waitlist(
         Err(cairn_core::CoreError::Invalid(message)) => {
             Redirect::to(&format!("/?error={}", urlencode(&message))).into_response()
         }
+        Err(err) => oops(err),
+    }
+}
+
+#[derive(Deserialize)]
+struct ReportQuery {
+    #[serde(default)]
+    filed: Option<i64>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+/// The form for saying what broke. Signed out or in: the person most
+/// likely to have hit something is the one who could not get in.
+async fn report_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    headers: HeaderMap,
+    Query(query): Query<ReportQuery>,
+) -> Response {
+    let viewer = viewer_from(&headers, &app);
+    views::report(theme, viewer.as_ref(), query.filed, query.error.as_deref()).into_response()
+}
+
+#[derive(Deserialize)]
+struct ReportForm {
+    what: String,
+    #[serde(default)]
+    place: String,
+    #[serde(default)]
+    contact: String,
+}
+
+/// Take a report from anyone: rate limited by source and bounded, kept
+/// beside the waitlist, and mailed to whoever runs the forge when the
+/// forge can send mail and they have a confirmed address.
+async fn file_report(
+    State(app): State<AppState>,
+    crate::guard::ClientIp(client): crate::guard::ClientIp,
+    headers: HeaderMap,
+    Form(form): Form<ReportForm>,
+) -> Response {
+    if let Some(peer) = client
+        && !app.report_limiter.accept(peer)
+    {
+        return crate::guard::too_many_attempts();
+    }
+    let by = viewer_from(&headers, &app).map(|v| v.0.as_str().to_owned());
+    let filed = app.with_store(|store| {
+        store.file_report(
+            &form.what,
+            &form.place,
+            &form.contact,
+            by.as_deref(),
+            cairn_core::VERSION,
+        )
+    });
+    let id = match filed {
+        Ok(id) => id,
+        Err(cairn_core::CoreError::Invalid(message)) => {
+            return Redirect::to(&format!("/report?error={}", urlencode(&message))).into_response();
+        }
+        Err(err) => return oops(err),
+    };
+    if let Some(mailer) = app.mailer() {
+        let addresses = app
+            .with_store(|store| store.operator_addresses())
+            .unwrap_or_default();
+        let contact = form.contact.trim().to_lowercase();
+        let from = match (contact.as_str(), &by) {
+            ("", None) => "no address left".to_owned(),
+            ("", Some(by)) => format!("signed in as {by}"),
+            (contact, None) => contact.to_owned(),
+            (contact, Some(by)) => format!("{contact}, signed in as {by}"),
+        };
+        let body = format!(
+            "Report {id} on cairn {}\nWhere: {}\nFrom: {from}\n\n{}\n",
+            cairn_core::VERSION,
+            form.place.trim(),
+            form.what.trim()
+        );
+        for to in addresses {
+            if let Err(err) = mailer.send(&to, &format!("cairn report {id}"), &body) {
+                tracing::warn!(error = %err, to, "report mail not sent");
+            }
+        }
+    }
+    Redirect::to(&format!("/report?filed={id}")).into_response()
+}
+
+/// What was reported, for whoever runs the forge.
+async fn reports_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    viewer: Viewer,
+    Query(flash): Query<FlashQuery>,
+) -> Response {
+    if !viewer.1.admin {
+        return not_found();
+    }
+    match app.with_store(|store| store.reports()) {
+        Ok(reports) => {
+            views::reports(theme, &viewer, &reports, flash.error.as_deref()).into_response()
+        }
+        Err(err) => oops(err),
+    }
+}
+
+#[derive(Deserialize)]
+struct DismissForm {
+    id: i64,
+}
+
+async fn reports_action(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Form(form): Form<DismissForm>,
+) -> Response {
+    if !viewer.1.admin {
+        return not_found();
+    }
+    match app.with_store(|store| store.dismiss_report(form.id)) {
+        Ok(_) => Redirect::to("/reports").into_response(),
         Err(err) => oops(err),
     }
 }

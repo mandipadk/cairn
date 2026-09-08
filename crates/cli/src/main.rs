@@ -217,6 +217,14 @@ enum AdminCommand {
         #[arg(long)]
         remove: Option<String>,
     },
+    /// What people reported broke, newest first; or dismiss one.
+    Reports {
+        #[arg(long, default_value = "cairn.db")]
+        db: PathBuf,
+        /// Dismiss this report instead of listing.
+        #[arg(long)]
+        dismiss: Option<i64>,
+    },
     /// Prove the mail configuration without sending anyone anything:
     /// reach the relay, negotiate TLS, authenticate, hang up. Reads the
     /// same flags and environment as `serve`.
@@ -483,6 +491,45 @@ async fn main() -> anyhow::Result<()> {
                     .with_context(|| format!("{principal:?} is not a valid principal slug"))?;
                 store.grant_bootstrap_admin(&id)?;
                 println!("{principal} now holds an unscoped admin grant");
+            }
+            AdminCommand::Reports { db, dismiss } => {
+                let mut store = Store::open(&db)
+                    .with_context(|| format!("opening forge database at {}", db.display()))?;
+                match dismiss {
+                    Some(id) => {
+                        if store.dismiss_report(id)? {
+                            println!("dismissed report {id}");
+                        } else {
+                            println!("no report {id}");
+                        }
+                    }
+                    None => {
+                        let reports = store.reports()?;
+                        if reports.is_empty() {
+                            println!("nothing reported");
+                        }
+                        for report in reports {
+                            let from = match (&report.contact, &report.by) {
+                                (Some(c), Some(by)) => format!("{c}, signed in as {by}"),
+                                (Some(c), None) => c.clone(),
+                                (None, Some(by)) => format!("signed in as {by}"),
+                                (None, None) => "no address left".to_owned(),
+                            };
+                            println!(
+                                "#{} {} on {}{}\n  from {from}\n  {}\n",
+                                report.id,
+                                report.filed.get(..19).unwrap_or(&report.filed),
+                                report.version,
+                                report
+                                    .place
+                                    .as_deref()
+                                    .map(|p| format!(" at {p}"))
+                                    .unwrap_or_default(),
+                                report.what.replace('\n', "\n  ")
+                            );
+                        }
+                    }
+                }
             }
             AdminCommand::Waitlist { db, remove } => {
                 let mut store = Store::open(&db)

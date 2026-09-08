@@ -691,6 +691,23 @@ pub struct Mirror {
     pub enabled: bool,
 }
 
+/// What somebody said broke, kept outside the log so it can be removed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Report {
+    pub id: i64,
+    pub filed: String,
+    pub what: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact: Option<String>,
+    /// Who was signed in when they said it, if anyone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+    /// The forge version that was answering.
+    pub version: String,
+}
+
 /// A name a repository gave to a landed commit.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Tag {

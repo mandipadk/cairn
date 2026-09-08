@@ -666,6 +666,86 @@ impl Store {
         Ok(removed == 1)
     }
 
+    /// Take a stranger's account of what broke. Bounded like everything
+    /// a caller controls; an address is optional and checked when given.
+    pub fn file_report(
+        &mut self,
+        what: &str,
+        place: &str,
+        contact: &str,
+        by: Option<&str>,
+        version: &str,
+    ) -> CoreResult<i64> {
+        let what = what.trim();
+        require(what.chars().count() >= 10, || {
+            "say a little more: what you did, and what happened".into()
+        })?;
+        bounded("report", what, MAX_TEXT)?;
+        let place = place.trim();
+        bounded("where", place, MAX_TITLE)?;
+        let contact = contact.trim().to_lowercase();
+        require(contact.is_empty() || valid_email(&contact), || {
+            "that does not look like an email address".into()
+        })?;
+        self.conn.execute(
+            "INSERT INTO reports (filed, what, place, contact, by, version)
+             VALUES (?, ?, ?, ?, ?, ?)",
+            rusqlite::params![
+                jiff::Timestamp::now().to_string(),
+                what,
+                (!place.is_empty()).then_some(place),
+                (!contact.is_empty()).then_some(contact.as_str()),
+                by,
+                version
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// What has been reported and not yet dismissed, newest first.
+    pub fn reports(&self) -> CoreResult<Vec<crate::types::Report>> {
+        Ok(self
+            .conn
+            .prepare(
+                "SELECT id, filed, what, place, contact, by, version FROM reports ORDER BY id DESC",
+            )?
+            .query_map([], |row| {
+                Ok(crate::types::Report {
+                    id: row.get(0)?,
+                    filed: row.get(1)?,
+                    what: row.get(2)?,
+                    place: row.get(3)?,
+                    contact: row.get(4)?,
+                    by: row.get(5)?,
+                    version: row.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Drop a report, because it was dealt with or because whoever sent
+    /// it asked.
+    pub fn dismiss_report(&mut self, id: i64) -> CoreResult<bool> {
+        let removed = self
+            .conn
+            .execute("DELETE FROM reports WHERE id = ?", rusqlite::params![id])?;
+        Ok(removed == 1)
+    }
+
+    /// Where a report goes: the confirmed address of everyone who runs
+    /// the forge. Nothing to configure, and nothing to leak to a
+    /// stranger, since the addresses stay on the sending side.
+    pub fn operator_addresses(&self) -> CoreResult<Vec<String>> {
+        let mut addresses = Vec::new();
+        for admin in raw::admins(&self.conn)? {
+            let contact = self.contact_of(&PrincipalId(admin))?;
+            if let (true, Some(email)) = (contact.verified, contact.email) {
+                addresses.push(email);
+            }
+        }
+        Ok(addresses)
+    }
+
     /// What the log says about a principal over the last `window_days`.
     pub fn record_of(
         &self,

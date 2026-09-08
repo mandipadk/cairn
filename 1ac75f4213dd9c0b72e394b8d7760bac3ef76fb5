@@ -1,0 +1,124 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Idocs0096runbook",
+      "id": "c-0hc28r8ts017jfcztr5gc9208w",
+      "landed_oid": "1ac75f4213dd9c0b72e394b8d7760bac3ef76fb5",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 96,
+      "opened_at": "2026-09-08T02:13:11.324579374Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Reshape the operating guide into a runbook",
+      "updated_at": "2026-09-08T02:13:31.146562688Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-0hc28r8ts017jfcztr5gc9208w",
+        "command": "scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-4ny2qr6s3yt3pgfkck9c5vxbrj",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 755,
+        "summary": "First-run walk green on this tree. Every command and flag the runbook names was checked against `cairn admin --help` and `cairn serve --help`; each failure paragraph describes a behaviour an existing test holds the forge to.",
+        "unchecked": [
+          "The failure procedures were not rehearsed on the reference instance for this change; the crash and dispute ones are covered by recovery_flow, verify_flow and the core lifecycle tests."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "1ac75f4213dd9c0b72e394b8d7760bac3ef76fb5",
+    "landed_at": "2026-09-08T02:13:31.146562688Z",
+    "merged_by": "mandip",
+    "repo": "cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-0hc28r8ts017jfcztr5gc9208w",
+      "commit_oid": "1ac75f4213dd9c0b72e394b8d7760bac3ef76fb5",
+      "message": "Reshape the operating guide into a runbook\n\nThe guide had grown one section per feature, in the order the features\narrived. It is now ordered the way an operator meets it: before you\nstart, install, first run, exposure, mail, ways to sign in; then day to\nday; then keeping it running; then a section that did not exist, what to\ndo when something is wrong, one paragraph per failure the forge can\nalready name: the forge down, a branch left behind by a crash, a\nprojection that differs from the log, a mirror push that failed, a\nchange stuck in the queue, a runner's dispute, somebody locked out, an\naddress that will not confirm, a lost signing key, a full disk, mail\nthat does not arrive. Each says what the forge does on its own and what\nis left to a person. A reference closes it with every command, flag and\nvariable in one place, and the second-watcher note covers a laptop with\nno mail credentials. Nothing in it claims a behaviour the tests do not\nalready hold the forge to.\n\nChange-Id: Idocs0096runbook\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "docs/operating.md"
+      ],
+      "session": null
+    },
+    "seq": 758,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-4ny2qr6s3yt3pgfkck9c5vxbrj",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-4ny2qr6s3yt3pgfkck9c5vxbrj",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 99 judged claims, 97% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; stands in for runner_verification; all 1 path(s) match docs/, *.md",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-0hc28r8ts017jfcztr5gc9208w",
+        "claim": "cl-4ny2qr6s3yt3pgfkck9c5vxbrj",
+        "command": "scripts/first-run.sh",
+        "id": "vr-7v9p9506r2xrzt1bhjwdp1dd1t",
+        "observed": "exit 0: first run: every documented step did what the documents say",
+        "revision": 1,
+        "seq": 756
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "26XjyDZh1JX+kQFlfvFO63pGbIHL1aKAQtRBfBNY0s0MiS93BYqWODRpDCvEMiQKzLCirvVpK7IsPZaGMJ+hDw=="
+  }
+}

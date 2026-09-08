@@ -1,0 +1,195 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Iowners0097",
+      "id": "c-72rwqy09y6fkxhhkqtyhqjwr4j",
+      "landed_oid": "f93030234737379a21e38ff64dc4c877ea2d0b1b",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 97,
+      "opened_at": "2026-09-08T05:39:28.734221117Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Put the owner in every repository's name",
+      "updated_at": "2026-09-08T05:40:17.787858229Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-72rwqy09y6fkxhhkqtyhqjwr4j",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-53fa4a8mn8vkk4jrzm2mytb37g",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 762,
+        "summary": "fmt, clippy -D warnings, the workspace suite and the first-run walk pass. Rehearsed on a copy of this forge's database and repositories: adopt-owners, fsck clean, old addresses redirect, every receipt verifies, both git addresses clone.",
+        "unchecked": [
+          "The deploy itself: the service is stopped, the new binary installed, adopt-owners run on the live database and repositories, and the service started, by the landing chain after this lands; the rehearsal proved the steps on a copy, not the timing.",
+          "Organisations owning repositories are covered by core and cli tests on a team principal; no organisation exists on this forge yet."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "f93030234737379a21e38ff64dc4c877ea2d0b1b",
+    "landed_at": "2026-09-08T05:40:17.787858229Z",
+    "merged_by": "mandip",
+    "repo": "cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-72rwqy09y6fkxhhkqtyhqjwr4j",
+      "commit_oid": "f93030234737379a21e38ff64dc4c877ea2d0b1b",
+      "message": "Put the owner in every repository's name\n\nA repository is now named owner/name, where the owner is the person or\norganisation that holds it, and that name is its address everywhere:\nthe pages at /owner/name, git at /git/owner/name, the API at\n/api/repos/owner/name, and the directory on disk. An organisation is a\nteam that owns repositories: its members act for it, so the New form\noffers your own name and every organisation you belong to, and an owner\npage lists what an owner holds. Ownership still moves only by an\naccepted offer, and accepting now renames the repository under its new\nowner. Every former name, from a rename or a transfer, keeps answering\nwith a permanent redirect to where the repository went, on the pages,\nover git and over the API, so a clone made yesterday still fetches.\n\nThe ids the forge's own routes occupy (api, git, login, assets and the\nrest) are refused as principal ids, since an owner is the first segment\nof every address; a repository may be called anything a slug allows.\nDeleting a repository asks for its full name.\n\nA forge from before this change adopts the model with\ncairn admin adopt-owners, which renames each repository under its owner\nand moves its directory in one step; serve refuses to start while any\nrepository lacks an owner in its name, and says which command to run.\nThe first-run walk creates under /ada, and the tests address every\nrepository by its owner.\n\nChange-Id: Iowners0097\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "README.md",
+        "crates/cli/src/main.rs",
+        "crates/cli/tests/suite/account_flow.rs",
+        "crates/cli/tests/suite/account_state_flow.rs",
+        "crates/cli/tests/suite/agent_api_flow.rs",
+        "crates/cli/tests/suite/attempts_flow.rs",
+        "crates/cli/tests/suite/attempts_page_flow.rs",
+        "crates/cli/tests/suite/attention_budget_flow.rs",
+        "crates/cli/tests/suite/auth_flow.rs",
+        "crates/cli/tests/suite/burndown_flow.rs",
+        "crates/cli/tests/suite/claim_form_flow.rs",
+        "crates/cli/tests/suite/common/mod.rs",
+        "crates/cli/tests/suite/concurrency_flow.rs",
+        "crates/cli/tests/suite/credential_flow.rs",
+        "crates/cli/tests/suite/debt_flow.rs",
+        "crates/cli/tests/suite/event_scope_flow.rs",
+        "crates/cli/tests/suite/fsck_flow.rs",
+        "crates/cli/tests/suite/git_flow.rs",
+        "crates/cli/tests/suite/home_flow.rs",
+        "crates/cli/tests/suite/hostile_input_flow.rs",
+        "crates/cli/tests/suite/hygiene_flow.rs",
+        "crates/cli/tests/suite/import_flow.rs",
+        "crates/cli/tests/suite/inbox_flow.rs",
+        "crates/cli/tests/suite/lease_flow.rs",
+        "crates/cli/tests/suite/limits_flow.rs",
+        "crates/cli/tests/suite/mcp.rs",
+        "crates/cli/tests/suite/mirror_flow.rs",
+        "crates/cli/tests/suite/oidc_flow.rs",
+        "crates/cli/tests/suite/pages_flow.rs",
+        "crates/cli/tests/suite/pages_more_flow.rs",
+        "crates/cli/tests/suite/password_flow.rs",
+        "crates/cli/tests/suite/public_flow.rs",
+        "crates/cli/tests/suite/quorum_flow.rs",
+        "crates/cli/tests/suite/read_boundary_flow.rs",
+        "crates/cli/tests/suite/receipt_flow.rs",
+        "crates/cli/tests/suite/recovery_flow.rs",
+        "crates/cli/tests/suite/repo_lifecycle_flow.rs",
+        "crates/cli/tests/suite/report_flow.rs",
+        "crates/cli/tests/suite/search_flow.rs",
+        "crates/cli/tests/suite/security_flow.rs",
+        "crates/cli/tests/suite/simulate_flow.rs",
+        "crates/cli/tests/suite/tags_flow.rs",
+        "crates/cli/tests/suite/teams_flow.rs",
+        "crates/cli/tests/suite/threads_flow.rs",
+        "crates/cli/tests/suite/threads_page_flow.rs",
+        "crates/cli/tests/suite/transfer_flow.rs",
+        "crates/cli/tests/suite/trust_flow.rs",
+        "crates/cli/tests/suite/verify_flow.rs",
+        "crates/cli/tests/suite/visibility_flow.rs",
+        "crates/cli/tests/suite/web_flow.rs",
+        "crates/core/src/commands.rs",
+        "crates/core/src/event.rs",
+        "crates/core/src/id.rs",
+        "crates/core/src/lib.rs",
+        "crates/core/src/queries.rs",
+        "crates/core/src/store.rs",
+        "crates/core/tests/suite/lifecycle.rs",
+        "crates/git/src/store.rs",
+        "crates/server/src/debt.rs",
+        "crates/server/src/git_http.rs",
+        "crates/server/src/lib.rs",
+        "crates/server/src/receipts.rs",
+        "crates/server/src/repo_path.rs",
+        "crates/server/src/routes.rs",
+        "crates/server/src/web/mod.rs",
+        "crates/server/src/web/views.rs",
+        "crates/server/tests/api.rs",
+        "docs/agents.md",
+        "docs/architecture.md",
+        "docs/operating.md",
+        "scripts/first-run.sh"
+      ],
+      "session": null
+    },
+    "seq": 765,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-53fa4a8mn8vkk4jrzm2mytb37g",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-53fa4a8mn8vkk4jrzm2mytb37g",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 100 judged claims, 98% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 67 path(s) outside docs/, *.md: crates/cli/src/main.rs, crates/cli/tests/suite/account_flow.rs, crates/cli/tests/suite/account_state_flow.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-72rwqy09y6fkxhhkqtyhqjwr4j",
+        "claim": "cl-53fa4a8mn8vkk4jrzm2mytb37g",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "id": "vr-4gkb1hv51wfh6p7qsh8j4659wt",
+        "observed": "exit 0: Doc-tests cairn_server",
+        "revision": 1,
+        "seq": 763
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "GLgxSVbbGowTca6wqH8IPFLLh4ya+wNUO6XQrA4ALegPTOLczzPHBrg40pK6BqvP4DQsAfMB/VQ1pmZ5PLIBCg=="
+  }
+}

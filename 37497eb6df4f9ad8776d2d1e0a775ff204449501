@@ -1,0 +1,136 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Ireport0092door",
+      "id": "c-5vs9639a054se1xhe6ty63f8s2",
+      "landed_oid": "37497eb6df4f9ad8776d2d1e0a775ff204449501",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 92,
+      "opened_at": "2026-09-08T01:13:31.834991233Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Give anyone a place to say what broke, and hand it to whoever runs the forge",
+      "updated_at": "2026-09-08T01:14:19.881669697Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-5vs9639a054se1xhe6ty63f8s2",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-00088pq0jnw4v4mjw4kr9eapyt",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 727,
+        "summary": "Suite green, exit status gated; rustfmt and clippy clean, warnings denied. New report_flow: a stranger's report is recorded, mailed to the confirmed admin address, read and dismissed on the admin page; short text and bad addresses are refused. Walk green.",
+        "unchecked": [
+          "The source rate limit on /report is asserted only through the shared limiter's own tests; in-process requests carry no peer address."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "37497eb6df4f9ad8776d2d1e0a775ff204449501",
+    "landed_at": "2026-09-08T01:14:19.881669697Z",
+    "merged_by": "mandip",
+    "repo": "cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-5vs9639a054se1xhe6ty63f8s2",
+      "commit_oid": "37497eb6df4f9ad8776d2d1e0a775ff204449501",
+      "message": "Give anyone a place to say what broke, and hand it to whoever runs the forge\n\nAn alpha needs a door for bad news that does not depend on another\ncompany's issue tracker. /report takes what somebody did, where, and how\nto reach them, signed in or not, records the forge version with it, and\nkeeps it beside the waitlist rather than in the log, so a report can be\nremoved when the person asks. Whoever runs the forge reads them at\n/reports or with `cairn admin reports`, and, when the forge can send\nmail, hears of each at their confirmed address as it arrives, without\nanything to configure. The form is bounded and rate limited by source\nlike the waitlist. The README says where to report.\n\nChange-Id: Ireport0092door\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "README.md",
+        "crates/cli/src/main.rs",
+        "crates/cli/tests/suite/main.rs",
+        "crates/cli/tests/suite/report_flow.rs",
+        "crates/core/src/commands.rs",
+        "crates/core/src/lib.rs",
+        "crates/core/src/store.rs",
+        "crates/core/src/types.rs",
+        "crates/server/src/state.rs",
+        "crates/server/src/web/mod.rs",
+        "crates/server/src/web/style.css",
+        "crates/server/src/web/views.rs",
+        "docs/operating.md"
+      ],
+      "session": null
+    },
+    "seq": 730,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-00088pq0jnw4v4mjw4kr9eapyt",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-00088pq0jnw4v4mjw4kr9eapyt",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 95 judged claims, 97% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 11 path(s) outside docs/, *.md: crates/cli/src/main.rs, crates/cli/tests/suite/main.rs, crates/cli/tests/suite/report_flow.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-5vs9639a054se1xhe6ty63f8s2",
+        "claim": "cl-00088pq0jnw4v4mjw4kr9eapyt",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "id": "vr-6mxaqnyrdydx2jngpxr7zg98x0",
+        "observed": "exit 0: Doc-tests cairn_server",
+        "revision": 1,
+        "seq": 728
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "UBDsQGMpIFcJqkH8HioWYcounRROCeeOGW6fWd4UVhbMPn7JdkvgJAHwmUtrVqIbRTunK3uRuWXCgup5BGygCg=="
+  }
+}

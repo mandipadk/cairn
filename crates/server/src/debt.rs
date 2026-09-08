@@ -9,9 +9,10 @@
 
 use crate::auth::MaybeActor;
 use crate::error::{ApiError, ApiResult};
+use crate::repo_path::RepoName;
 use crate::state::AppState;
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use cairn_core::{
     Cover, DebtSnapshot, LineState, PrincipalId, Provenance, line_state, path_matches,
@@ -336,7 +337,7 @@ pub struct HistoryQuery {
 pub async fn history(
     State(app): State<AppState>,
     who: MaybeActor,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     axum::extract::Query(query): axum::extract::Query<HistoryQuery>,
 ) -> ApiResult<Json<Value>> {
     crate::routes::readable_repo_by(&app, &who, &repo)?;
@@ -419,7 +420,7 @@ pub async fn create_pay_down_tasks(
 pub async fn pay_down(
     State(app): State<AppState>,
     actor: crate::auth::Actor,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Json(body): Json<PayDownBody>,
 ) -> ApiResult<Json<Value>> {
     let created = create_pay_down_tasks(&app, &actor.0, &repo, body.count.unwrap_or(5)).await?;
@@ -430,7 +431,7 @@ pub async fn pay_down(
 pub async fn debt(
     State(app): State<AppState>,
     who: MaybeActor,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
 ) -> ApiResult<Json<Value>> {
     let record = crate::routes::readable_repo_by(&app, &who, &repo)?;
     let map = map(&app, &repo, &record.default_branch).await?;

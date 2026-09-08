@@ -22,7 +22,7 @@ async fn claimed_change(app: &Router, title: &str, paths: &[&str]) -> (String, S
         "POST",
         "/api/changes",
         "scout",
-        Some(json!({ "repo": "demo", "target": "main", "title": title })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": title })),
     )
     .await;
     let change = opened["id"].as_str().unwrap().to_owned();
@@ -69,7 +69,7 @@ async fn set_trust_policy(app: &Router) {
     ok(
         app,
         "POST",
-        "/api/repos/demo/policy",
+        "/api/repos/ada/demo/policy",
         "ada",
         Some(json!({
             "require_executed_check": true,
@@ -233,7 +233,7 @@ async fn a_push_records_the_paths_its_commit_touched() {
         &[
             "clone",
             "-q",
-            &format!("http://scout:x@{addr}/git/demo"),
+            &format!("http://scout:x@{addr}/git/ada/demo"),
             "wc",
         ],
     );
@@ -249,7 +249,7 @@ async fn a_push_records_the_paths_its_commit_touched() {
     git(&wc, &["commit", "-q", "--amend", "--no-edit"]);
     git(&wc, &["push", "-q", "origin", "HEAD:refs/for/main"]);
 
-    let changes = ok(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let changes = ok(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let change = changes[0]["id"].as_str().unwrap();
     let revisions = ok(
         app,
@@ -276,14 +276,14 @@ async fn trust_is_set_and_cleared_from_the_policy_page() {
     let (_, ada) = sign_in_as(&forge, "ada").await;
     let (status, location) = post_form(
         app,
-        "/demo/settings/policy",
+        "/ada/demo/settings/policy",
         &ada,
         "action=save&require_executed_check=on&require_runner_verification=on&runner_quorum=1&independence=none&attention_budget=\
          &trust_waives=runner_verification&trust_waives=independent_approval&trust_percent=98&trust_claims=20&trust_days=90&trust_paths=docs%2F%2C+*.md",
     )
     .await;
     assert_eq!(status, StatusCode::SEE_OTHER, "{location}");
-    let policy = ok(app, "GET", "/api/repos/demo/policy", "ada", None).await;
+    let policy = ok(app, "GET", "/api/repos/ada/demo/policy", "ada", None).await;
     assert_eq!(
         policy["trust"],
         json!({
@@ -293,19 +293,19 @@ async fn trust_is_set_and_cleared_from_the_policy_page() {
         }),
         "{policy}"
     );
-    let (status, page) = page_with_cookie(app, "/demo/settings", &ada).await;
+    let (status, page) = page_with_cookie(app, "/ada/demo/settings", &ada).await;
     assert_eq!(status, StatusCode::OK);
     assert!(page.contains(r#"value="docs/, *.md""#), "{page}");
 
     // Nothing waived means no trust is spent, whatever the numbers say.
     let (status, _) = post_form(
         app,
-        "/demo/settings/policy",
+        "/ada/demo/settings/policy",
         &ada,
         "action=save&require_executed_check=on&independence=none&attention_budget=&trust_percent=98&trust_claims=20&trust_days=90",
     )
     .await;
     assert_eq!(status, StatusCode::SEE_OTHER);
-    let policy = ok(app, "GET", "/api/repos/demo/policy", "ada", None).await;
+    let policy = ok(app, "GET", "/api/repos/ada/demo/policy", "ada", None).await;
     assert!(policy["trust"].is_null(), "{policy}");
 }

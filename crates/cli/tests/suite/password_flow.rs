@@ -41,7 +41,7 @@ async fn a_name_and_password_signs_someone_in() {
     );
 
     let session = cookie.split(';').next().unwrap().to_owned();
-    let (status, _) = page_with_cookie(&forge.app, "/demo", &session).await;
+    let (status, _) = page_with_cookie(&forge.app, "/ada/demo", &session).await;
     assert_eq!(status, StatusCode::OK, "the session should reach a page");
 
     // The cookie must not be the password, the name, or anything derived
@@ -88,7 +88,7 @@ async fn changing_a_password_ends_existing_sessions() {
     let (_, cookie) = sign_in(&forge.app, "ada", GOOD).await;
     let session = cookie.unwrap().split(';').next().unwrap().to_owned();
     assert_eq!(
-        page_with_cookie(&forge.app, "/demo", &session).await.0,
+        page_with_cookie(&forge.app, "/ada/demo", &session).await.0,
         StatusCode::OK
     );
 
@@ -97,7 +97,7 @@ async fn changing_a_password_ends_existing_sessions() {
         StatusCode::OK
     );
     assert_eq!(
-        page_with_cookie(&forge.app, "/demo", &session).await.0,
+        page_with_cookie(&forge.app, "/ada/demo", &session).await.0,
         StatusCode::SEE_OTHER,
         "a password change that leaves old sessions alive locks nobody out"
     );

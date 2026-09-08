@@ -30,7 +30,7 @@ async fn push_review_merge_sha256_repo() {
     // The server half holds on any git: the repository really was
     // created with a sha256 object database. Worth asserting separately,
     // so an old client costs us the end-to-end run and nothing more.
-    let (_, repo) = api(&forge.app, "GET", "/api/repos/demo", "ada", None).await;
+    let (_, repo) = api(&forge.app, "GET", "/api/repos/ada/demo", "ada", None).await;
     assert_eq!(repo["object_format"], "sha256");
 
     let (running, reported) = cairn_git::version().expect("git on PATH");
@@ -51,7 +51,11 @@ async fn single_change_flow(forge: Forge, oid_len: usize) {
     // Clone (anonymous reads), commit with a Change-Id trailer.
     git(
         &forge.work,
-        &["clone", &format!("http://scout:x@{addr}/git/demo"), "wc"],
+        &[
+            "clone",
+            &format!("http://scout:x@{addr}/git/ada/demo"),
+            "wc",
+        ],
     );
     let wc = forge.work.join("wc");
     commit_file(
@@ -75,7 +79,7 @@ async fn single_change_flow(forge: Forge, oid_len: usize) {
         &wc,
         &[
             "push",
-            &format!("http://{addr}/git/demo"),
+            &format!("http://{addr}/git/ada/demo"),
             "HEAD:refs/for/main",
         ],
     );
@@ -83,11 +87,11 @@ async fn single_change_flow(forge: Forge, oid_len: usize) {
     // The transport IS the API: push with scout's real token as the
     // Basic password (dev mode would also accept it; the strict path
     // has its own test below).
-    let push_url = format!("http://scout:{}@{addr}/git/demo", forge.scout_token);
+    let push_url = format!("http://scout:{}@{addr}/git/ada/demo", forge.scout_token);
     git(&wc, &["remote", "set-url", "origin", &push_url]);
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
 
-    let (status, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (status, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(changes.as_array().unwrap().len(), 1);
     let change = &changes[0];
@@ -124,7 +128,7 @@ async fn single_change_flow(forge: Forge, oid_len: usize) {
     let second_oid = git(&wc, &["rev-parse", "HEAD"]).trim().to_owned();
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
 
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     assert_eq!(
         changes.as_array().unwrap().len(),
         1,
@@ -174,7 +178,7 @@ async fn single_change_flow(forge: Forge, oid_len: usize) {
         &forge.work,
         &[
             "clone",
-            &format!("http://scout:x@{addr}/git/demo"),
+            &format!("http://scout:x@{addr}/git/ada/demo"),
             "verify",
         ],
     );
@@ -189,7 +193,11 @@ async fn stacked_push_with_guards_and_bottom_up_merge() {
 
     git(
         &forge.work,
-        &["clone", &format!("http://scout:x@{addr}/git/demo"), "wc"],
+        &[
+            "clone",
+            &format!("http://scout:x@{addr}/git/ada/demo"),
+            "wc",
+        ],
     );
     let wc = forge.work.join("wc");
 
@@ -221,7 +229,7 @@ async fn stacked_push_with_guards_and_bottom_up_merge() {
 
     // One push, three linked changes, bottom-up numbering.
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let changes = changes.as_array().unwrap().clone();
     assert_eq!(changes.len(), 3);
     for (index, change) in changes.iter().enumerate() {
@@ -247,7 +255,7 @@ async fn stacked_push_with_guards_and_bottom_up_merge() {
 
     // Re-pushing the identical stack records nothing new.
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
-    let (_, unchanged) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, unchanged) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     assert!(
         unchanged
             .as_array()
@@ -271,7 +279,7 @@ async fn stacked_push_with_guards_and_bottom_up_merge() {
     );
     let amended_top = git(&wc, &["rev-parse", "HEAD"]).trim().to_owned();
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
-    let (_, after) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, after) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let revisions: Vec<i64> = after
         .as_array()
         .unwrap()
@@ -334,7 +342,7 @@ async fn push_requires_a_live_token_without_dev_mode() {
         .unwrap();
     let (_, token, _) = store.mint_token(&scout, &scout, None, None).unwrap();
     store
-        .create_repo(&ada, "demo", "main", cairn_core::ObjectFormat::Sha1)
+        .create_repo(&ada, None, "demo", "main", cairn_core::ObjectFormat::Sha1)
         .unwrap();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -342,7 +350,10 @@ async fn push_requires_a_live_token_without_dev_mode() {
     let git_store = GitStore::new(&repos, env!("CARGO_BIN_EXE_cairn"));
     // The repo entered the graph through the store, so create the bare
     // repo directly too; no dev identity anywhere in this test.
-    git_store.create_repo("demo", "main", "sha1").await.unwrap();
+    git_store
+        .create_repo("ada/demo", "main", "sha1")
+        .await
+        .unwrap();
     let app = router(AppState::new(store).with_git(git_store, format!("http://{addr}")));
     tokio::spawn(axum::serve(listener, app.clone()).into_future());
 
@@ -352,7 +363,7 @@ async fn push_requires_a_live_token_without_dev_mode() {
         &work,
         &[
             "clone",
-            &format!("http://scout:{token}@{addr}/git/demo"),
+            &format!("http://scout:{token}@{addr}/git/ada/demo"),
             "wc",
         ],
     );
@@ -362,9 +373,9 @@ async fn push_requires_a_live_token_without_dev_mode() {
     // No credentials, wrong password, and a bare username are all
     // refused for writing.
     for bad in [
-        format!("http://{addr}/git/demo"),
-        format!("http://scout:wrong@{addr}/git/demo"),
-        format!("http://scout@{addr}/git/demo"),
+        format!("http://{addr}/git/ada/demo"),
+        format!("http://scout:wrong@{addr}/git/ada/demo"),
+        format!("http://scout@{addr}/git/ada/demo"),
     ] {
         let output = git_raw(&wc, &["push", &bad, "HEAD:refs/for/main"]);
         assert!(
@@ -378,7 +389,7 @@ async fn push_requires_a_live_token_without_dev_mode() {
         &wc,
         &[
             "push",
-            &format!("http://scout:{token}@{addr}/git/demo"),
+            &format!("http://scout:{token}@{addr}/git/ada/demo"),
             "HEAD:refs/for/main",
         ],
     );
@@ -386,7 +397,7 @@ async fn push_requires_a_live_token_without_dev_mode() {
         &wc,
         &[
             "ls-remote",
-            &format!("http://scout:{token}@{addr}/git/demo"),
+            &format!("http://scout:{token}@{addr}/git/ada/demo"),
         ],
     );
     assert!(
@@ -407,12 +418,16 @@ async fn merge_queue_lands_trains_and_reports_conflicts() {
     // Seed main with a first landed change so later work has a base.
     git(
         &forge.work,
-        &["clone", &format!("http://scout:x@{addr}/git/demo"), "wc"],
+        &[
+            "clone",
+            &format!("http://scout:x@{addr}/git/ada/demo"),
+            "wc",
+        ],
     );
     let wc = forge.work.join("wc");
     commit_file(&wc, "base.txt", "base\n", "Base\n\nChange-Id: Iq00");
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let base_change = changes[0]["id"].as_str().unwrap().to_owned();
     approve_and_merge(app, &base_change).await;
     git(&wc, &["fetch", "-q", "origin", "main"]);
@@ -427,7 +442,7 @@ async fn merge_queue_lands_trains_and_reports_conflicts() {
     let right_oid = git(&wc, &["rev-parse", "HEAD"]).trim().to_owned();
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
 
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let by_key = |key: &str| {
         changes
             .as_array()
@@ -476,7 +491,7 @@ async fn merge_queue_lands_trains_and_reports_conflicts() {
 
     // The train lands both without any further help.
     wait_for(app, "both queued changes to merge", async |app: &Router| {
-        let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+        let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
         changes
             .as_array()
             .unwrap()
@@ -521,7 +536,7 @@ async fn merge_queue_lands_trains_and_reports_conflicts() {
         &[
             "clone",
             "-q",
-            &format!("http://scout:x@{addr}/git/demo"),
+            &format!("http://scout:x@{addr}/git/ada/demo"),
             "train",
         ],
     );
@@ -538,7 +553,7 @@ async fn merge_queue_lands_trains_and_reports_conflicts() {
         "Clash\n\nChange-Id: Iq03",
     );
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let clash = changes
         .as_array()
         .unwrap()
@@ -580,7 +595,7 @@ async fn merge_queue_lands_trains_and_reports_conflicts() {
         app,
         "the conflicting change to be dequeued",
         async |app: &Router| {
-            let (_, queue) = api(app, "GET", "/api/repos/demo/queue", "ada", None).await;
+            let (_, queue) = api(app, "GET", "/api/repos/ada/demo/queue", "ada", None).await;
             queue.as_array().unwrap().is_empty()
         },
     )
@@ -613,7 +628,11 @@ async fn landing_a_parent_carries_its_children_forward() {
 
     git(
         &forge.work,
-        &["clone", &format!("http://scout:x@{addr}/git/demo"), "wc"],
+        &[
+            "clone",
+            &format!("http://scout:x@{addr}/git/ada/demo"),
+            "wc",
+        ],
     );
     let wc = forge.work.join("wc");
 
@@ -625,11 +644,11 @@ async fn landing_a_parent_carries_its_children_forward() {
         "Initial\n\nChange-Id: Iinit00",
     );
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let initial = changes[0]["id"].as_str().unwrap().to_owned();
     approve_and_enqueue(app, &initial).await;
     wait_for(app, "the initial change to land", async |app: &Router| {
-        let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+        let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
         changes[0]["state"] == "merged"
     })
     .await;
@@ -640,7 +659,7 @@ async fn landing_a_parent_carries_its_children_forward() {
     commit_file(&wc, "base.txt", "base\n", "Base\n\nChange-Id: Istack01");
     commit_file(&wc, "top.txt", "top\n", "Top\n\nChange-Id: Istack02");
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let by_key = |key: &str| -> String {
         changes
             .as_array()
@@ -668,7 +687,7 @@ async fn landing_a_parent_carries_its_children_forward() {
     git(&wc, &["checkout", "-q", "-b", "side", "FETCH_HEAD"]);
     commit_file(&wc, "side.txt", "side\n", "Side\n\nChange-Id: Iside03");
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let side = changes
         .as_array()
         .unwrap()
@@ -680,7 +699,7 @@ async fn landing_a_parent_carries_its_children_forward() {
         .to_owned();
     approve_and_enqueue(app, &side).await;
     wait_for(app, "the side change to land", async |app: &Router| {
-        let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+        let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
         changes
             .as_array()
             .unwrap()
@@ -696,7 +715,7 @@ async fn landing_a_parent_carries_its_children_forward() {
         app,
         "the child to be carried forward",
         async |app: &Router| {
-            let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+            let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
             changes.as_array().unwrap().iter().any(|c| {
                 c["id"] == child.as_str() && c["latest_revision"].as_i64().unwrap_or(0) >= 2
             })
@@ -756,16 +775,20 @@ async fn separate_branches_land_in_parallel() {
 
     git(
         &forge.work,
-        &["clone", &format!("http://scout:x@{addr}/git/demo"), "wc"],
+        &[
+            "clone",
+            &format!("http://scout:x@{addr}/git/ada/demo"),
+            "wc",
+        ],
     );
     let wc = forge.work.join("wc");
     commit_file(&wc, "root.txt", "root\n", "Root\n\nChange-Id: Iroot");
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let root = changes[0]["id"].as_str().unwrap().to_owned();
     approve_and_enqueue(app, &root).await;
     wait_for(app, "the root change to land", async |app: &Router| {
-        let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+        let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
         changes[0]["state"] == "merged"
     })
     .await;
@@ -779,7 +802,7 @@ async fn separate_branches_land_in_parallel() {
     commit_file(&wc, "on-dev.txt", "dev\n", "On dev\n\nChange-Id: Idev");
     git(&wc, &["push", "origin", "HEAD:refs/for/release"]);
 
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let of = |key: &str| -> String {
         changes
             .as_array()
@@ -806,7 +829,7 @@ async fn separate_branches_land_in_parallel() {
     approve_and_enqueue(app, &on_release).await;
 
     wait_for(app, "both lanes to land", async |app: &Router| {
-        let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+        let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
         changes
             .as_array()
             .unwrap()
@@ -821,6 +844,6 @@ async fn separate_branches_land_in_parallel() {
     let refs = git(&wc, &["ls-remote", "origin"]);
     assert!(refs.contains("refs/heads/main"));
     assert!(refs.contains("refs/heads/release"));
-    let (_, queue) = api(app, "GET", "/api/repos/demo/queue", "ada", None).await;
+    let (_, queue) = api(app, "GET", "/api/repos/ada/demo/queue", "ada", None).await;
     assert!(queue.as_array().unwrap().is_empty());
 }

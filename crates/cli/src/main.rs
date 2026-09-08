@@ -217,6 +217,20 @@ enum AdminCommand {
         #[arg(long)]
         remove: Option<String>,
     },
+    /// Give every repository named the old way, without its owner in
+    /// front, its owner's name: `demo` becomes `ada/demo`, on the record
+    /// and on disk. Run once when upgrading to a forge that expects
+    /// owners; `serve` refuses to start until it has been.
+    AdoptOwners {
+        #[arg(long, default_value = "cairn.db")]
+        db: PathBuf,
+        /// The repositories directory, so each moves under its owner.
+        #[arg(long, default_value = "repos")]
+        repos: PathBuf,
+        /// Who the renames are recorded as: an unscoped admin.
+        #[arg(long)]
+        r#as: String,
+    },
     /// What people reported broke, newest first; or dismiss one.
     Reports {
         #[arg(long, default_value = "cairn.db")]
@@ -311,6 +325,29 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!("cairn {}", cairn_core::VERSION);
             let store = Store::open(&db)
                 .with_context(|| format!("opening forge database at {}", db.display()))?;
+            // A repository without its owner in its name predates owners
+            // and has no address on this forge; adopting is one command,
+            // and refusing to serve is better than serving it nowhere.
+            let unowned: Vec<String> = store
+                .repos()?
+                .into_iter()
+                .filter(|r| !r.name.contains('/'))
+                .map(|r| r.name)
+                .collect();
+            if !unowned.is_empty() {
+                anyhow::bail!(
+                    "{} repositor{} named without an owner ({}): run `cairn admin adopt-owners --db {} --repos {} --as <admin>` first",
+                    unowned.len(),
+                    if unowned.len() == 1 {
+                        "y is"
+                    } else {
+                        "ies are"
+                    },
+                    unowned.join(", "),
+                    db.display(),
+                    repos.display()
+                );
+            }
             let listener = tokio::net::TcpListener::bind(listen)
                 .await
                 .with_context(|| format!("binding {listen}"))?;
@@ -491,6 +528,29 @@ async fn main() -> anyhow::Result<()> {
                     .with_context(|| format!("{principal:?} is not a valid principal slug"))?;
                 store.grant_bootstrap_admin(&id)?;
                 println!("{principal} now holds an unscoped admin grant");
+            }
+            AdminCommand::AdoptOwners { db, repos, r#as } => {
+                let mut store = Store::open(&db)
+                    .with_context(|| format!("opening forge database at {}", db.display()))?;
+                let actor = PrincipalId::new(&r#as).context("--as must be a slug")?;
+                let git = GitStore::new(
+                    &repos,
+                    std::env::current_exe().context("locating own binary")?,
+                );
+                let renamed = store.adopt_owners(&actor)?;
+                if renamed.is_empty() {
+                    println!("every repository already carries its owner's name");
+                }
+                for env in &renamed {
+                    if let cairn_core::Event::RepoRenamed { repo, to } = &env.event {
+                        match git.rename_repo(repo, to).await {
+                            Ok(()) => println!("{repo} -> {to}"),
+                            Err(err) => println!(
+                                "{repo} -> {to} (recorded; the directory did not move: {err})"
+                            ),
+                        }
+                    }
+                }
             }
             AdminCommand::Reports { db, dismiss } => {
                 let mut store = Store::open(&db)

@@ -61,7 +61,7 @@ async fn a_write_asked_twice_is_done_once() {
     let forge = boot().await;
     let app = &forge.app;
     let task = json!({
-        "repo": "demo", "title": "Only once",
+        "repo": "ada/demo", "title": "Only once",
         "spec": "A retry must not make a second task."
     });
 
@@ -103,7 +103,7 @@ async fn a_write_asked_twice_is_done_once() {
     );
 
     // A different request under a used key is a mistake, and refused.
-    let other = json!({ "repo": "demo", "title": "Something else", "spec": "Not the same." });
+    let other = json!({ "repo": "ada/demo", "title": "Something else", "spec": "Not the same." });
     let (status, _, refused) = call(
         app,
         "POST",
@@ -182,7 +182,7 @@ async fn tasks_come_in_pages_newest_first() {
             "POST",
             "/api/tasks",
             "ada",
-            Some(json!({ "repo": "demo", "title": format!("Task {i}"), "spec": "paged" })),
+            Some(json!({ "repo": "ada/demo", "title": format!("Task {i}"), "spec": "paged" })),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -204,7 +204,7 @@ async fn tasks_come_in_pages_newest_first() {
             .map(|t| t["title"].as_str().unwrap().to_owned())
             .collect()
     };
-    let (status, page) = api(app, "GET", "/api/tasks?limit=2&repo=demo", "ada", None).await;
+    let (status, page) = api(app, "GET", "/api/tasks?limit=2&repo=ada/demo", "ada", None).await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert_eq!(titles(&page), ["Task 5", "Task 4"]);
     let cursor = page["next_before"].as_i64().expect("more to come");
@@ -212,7 +212,7 @@ async fn tasks_come_in_pages_newest_first() {
     let (_, page) = api(
         app,
         "GET",
-        &format!("/api/tasks?limit=2&repo=demo&before={cursor}"),
+        &format!("/api/tasks?limit=2&repo=ada/demo&before={cursor}"),
         "ada",
         None,
     )
@@ -223,7 +223,7 @@ async fn tasks_come_in_pages_newest_first() {
     let (_, page) = api(
         app,
         "GET",
-        &format!("/api/tasks?limit=2&repo=demo&before={cursor}"),
+        &format!("/api/tasks?limit=2&repo=ada/demo&before={cursor}"),
         "ada",
         None,
     )
@@ -233,7 +233,7 @@ async fn tasks_come_in_pages_newest_first() {
 
     // Without a page asked for, the answer is what it always was: the
     // whole list, oldest first, now saying which event created each.
-    let (_, all) = api(app, "GET", "/api/tasks?repo=demo", "ada", None).await;
+    let (_, all) = api(app, "GET", "/api/tasks?repo=ada/demo", "ada", None).await;
     let all = all.as_array().unwrap();
     assert_eq!(all.len(), 5);
     assert_eq!(all[0]["title"], "Task 1");
@@ -251,7 +251,7 @@ async fn the_inbox_pages_by_seq() {
         "POST",
         "/api/changes",
         "scout",
-        Some(json!({ "repo": "demo", "target": "main", "title": "Paged inbox" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "Paged inbox" })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{opened}");
@@ -282,7 +282,7 @@ async fn the_inbox_pages_by_seq() {
         "POST",
         "/api/grants",
         "ada",
-        Some(json!({ "grantee": "scout", "repo": "demo", "actions": ["review"] })),
+        Some(json!({ "grantee": "scout", "repo": "ada/demo", "actions": ["review"] })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{granted}");

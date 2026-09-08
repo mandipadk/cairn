@@ -35,7 +35,7 @@ async fn change_with_claim(app: &Router, title: &str) -> (String, String) {
         "POST",
         "/api/changes",
         "scout",
-        Some(json!({ "repo": "demo", "target": "main", "title": title })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": title })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{opened}");
@@ -108,7 +108,7 @@ async fn awaiting(app: &Router, runner: &str) -> Vec<String> {
     let (status, waiting) = api(
         app,
         "GET",
-        "/api/repos/demo/awaiting-verification",
+        "/api/repos/ada/demo/awaiting-verification",
         runner,
         None,
     )
@@ -126,7 +126,7 @@ async fn set_quorum(app: &Router, quorum: u32) {
     let (status, body) = api(
         app,
         "POST",
-        "/api/repos/demo/policy",
+        "/api/repos/ada/demo/policy",
         "ada",
         Some(json!({
             "require_executed_check": true,
@@ -157,7 +157,7 @@ async fn two_provenances_make_quorum_and_the_same_one_twice_does_not() {
         "POST",
         "/api/grants",
         "ada",
-        Some(json!({ "grantee": "arbiter", "repo": "demo", "actions": ["verify", "push"] })),
+        Some(json!({ "grantee": "arbiter", "repo": "ada/demo", "actions": ["verify", "push"] })),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -226,7 +226,7 @@ async fn two_provenances_make_quorum_and_the_same_one_twice_does_not() {
 
     // Every third-party word is on the page as a run of the claim.
     let (status, page) =
-        page_with_cookie(app, &format!("/demo/changes/{}", 1), "cairn_dev=ada").await;
+        page_with_cookie(app, &format!("/ada/demo/changes/{}", 1), "cairn_dev=ada").await;
     assert_eq!(status, StatusCode::OK);
     for who in ["runner-a", "runner-b", "runner-c", "arbiter"] {
         assert!(
@@ -267,7 +267,7 @@ async fn runners_disagreeing_is_a_signal_and_a_block() {
         .unwrap();
     assert_eq!(disputed["satisfied"], false, "{disputed}");
 
-    let (status, attention) = api(app, "GET", "/api/repos/demo/attention", "ada", None).await;
+    let (status, attention) = api(app, "GET", "/api/repos/ada/demo/attention", "ada", None).await;
     assert_eq!(status, StatusCode::OK, "{attention}");
     let item = attention
         .as_array()
@@ -302,7 +302,7 @@ async fn runners_disagreeing_is_a_signal_and_a_block() {
     )
     .await;
     assert_eq!(trace["satisfied"], true, "{trace}");
-    let (_, attention) = api(app, "GET", "/api/repos/demo/attention", "ada", None).await;
+    let (_, attention) = api(app, "GET", "/api/repos/ada/demo/attention", "ada", None).await;
     let still = attention
         .as_array()
         .unwrap()
@@ -320,18 +320,18 @@ async fn the_quorum_is_set_from_the_policy_page() {
     let (_, ada) = sign_in_as(&forge, "ada").await;
     let (status, location) = post_form(
         app,
-        "/demo/settings/policy",
+        "/ada/demo/settings/policy",
         &ada,
         "action=save&require_executed_check=on&require_runner_verification=on&runner_quorum=3&independence=none&attention_budget=",
     )
     .await;
     assert_eq!(status, StatusCode::SEE_OTHER, "{location}");
-    let (_, policy) = api(app, "GET", "/api/repos/demo/policy", "ada", None).await;
+    let (_, policy) = api(app, "GET", "/api/repos/ada/demo/policy", "ada", None).await;
     assert_eq!(policy["runner_quorum"], 3, "{policy}");
     assert_eq!(policy["require_runner_verification"], true);
 
     // The page shows the number it holds.
-    let (status, page) = page_with_cookie(app, "/demo/settings", &ada).await;
+    let (status, page) = page_with_cookie(app, "/ada/demo/settings", &ada).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         page.contains(r#"name="runner_quorum""#) && page.contains(r#"value="3""#),
@@ -341,13 +341,13 @@ async fn the_quorum_is_set_from_the_policy_page() {
     // Out of range is refused with a word, not saved.
     let (status, page) = post_form_page(
         app,
-        "/demo/settings/policy",
+        "/ada/demo/settings/policy",
         &ada,
         "action=save&require_runner_verification=on&runner_quorum=42&independence=none&attention_budget=",
     )
     .await;
     assert!(status.is_success() || status.is_redirection(), "{status}");
-    let (_, policy) = api(app, "GET", "/api/repos/demo/policy", "ada", None).await;
+    let (_, policy) = api(app, "GET", "/api/repos/ada/demo/policy", "ada", None).await;
     assert_eq!(
         policy["runner_quorum"], 3,
         "an out-of-range quorum must not be saved: {page}"

@@ -23,65 +23,83 @@ async fn ownership_is_offered_on_settings_and_accepted_from_the_inbox() {
 
     // Bee cannot see the repository, let alone its settings.
     assert_eq!(
-        get_with_cookie(app, "/demo", &bee).await,
+        get_with_cookie(app, "/ada/demo", &bee).await,
         StatusCode::NOT_FOUND
     );
     assert_eq!(
-        get_with_cookie(app, "/demo/settings", &bee).await,
+        get_with_cookie(app, "/ada/demo/settings", &bee).await,
         StatusCode::NOT_FOUND
     );
-    let (_, page) = page_with_cookie(app, "/demo", &ada).await;
+    let (_, page) = page_with_cookie(app, "/ada/demo", &ada).await;
     assert!(
-        page.contains(r#"href="/demo/settings""#),
+        page.contains(r#"href="/ada/demo/settings""#),
         "the owner gets a Settings tab"
     );
 
     // Visibility is a setting, not an API call.
-    let (status, location) =
-        post_form(app, "/demo/settings/visibility", &ada, "visibility=public").await;
+    let (status, location) = post_form(
+        app,
+        "/ada/demo/settings/visibility",
+        &ada,
+        "visibility=public",
+    )
+    .await;
     assert_eq!(status, StatusCode::SEE_OTHER);
-    assert_eq!(location, "/demo/settings?done=1");
+    assert_eq!(location, "/ada/demo/settings?done=1");
     assert_eq!(
-        get_with_cookie(app, "/demo", &bee).await,
+        get_with_cookie(app, "/ada/demo", &bee).await,
         StatusCode::OK,
         "public now"
     );
     assert_eq!(
-        get_with_cookie(app, "/demo/settings", &bee).await,
+        get_with_cookie(app, "/ada/demo/settings", &bee).await,
         StatusCode::NOT_FOUND,
         "reading is not owning"
     );
 
     // Ada offers demo to bee; bee is told, and answers from the offer page.
-    let (_, location) =
-        post_form(app, "/demo/settings/transfer", &ada, "action=offer&to=bee").await;
-    assert_eq!(location, "/demo/settings?done=1");
+    let (_, location) = post_form(
+        app,
+        "/ada/demo/settings/transfer",
+        &ada,
+        "action=offer&to=bee",
+    )
+    .await;
+    assert_eq!(location, "/ada/demo/settings?done=1");
     let (_, inbox) = page_with_cookie(app, "/inbox", &bee).await;
     assert!(
-        inbox.contains("ada offered you ownership of demo"),
+        inbox.contains("ada offered you ownership of ada/demo"),
         "{inbox}"
     );
-    assert!(inbox.contains(r#"href="/demo/transfer""#));
-    let (status, page) = page_with_cookie(app, "/demo/transfer", &bee).await;
+    assert!(inbox.contains(r#"href="/ada/demo/transfer""#));
+    let (status, page) = page_with_cookie(app, "/ada/demo/transfer", &bee).await;
     assert_eq!(status, StatusCode::OK);
     assert!(page.contains("has offered you"));
     assert_eq!(
-        get_with_cookie(app, "/demo/transfer", &ada).await,
+        get_with_cookie(app, "/ada/demo/transfer", &ada).await,
         StatusCode::NOT_FOUND,
         "not ada's to answer"
     );
 
-    let (status, location) = post_form(app, "/demo/transfer", &bee, "action=accept").await;
+    let (status, location) = post_form(app, "/ada/demo/transfer", &bee, "action=accept").await;
     assert_eq!(status, StatusCode::SEE_OTHER);
-    assert_eq!(location, "/demo");
-    let (_, repo) = api_with_token(app, "GET", "/api/repos/demo", &forge.ada_token, None).await;
+    assert_eq!(location, "/bee/demo", "it lives under its new owner");
+    let (_, repo) = api_with_token(app, "GET", "/api/repos/bee/demo", &forge.ada_token, None).await;
     assert_eq!(repo["owner"], "bee");
+    assert_eq!(repo["name"], "bee/demo");
+    let (status, _) =
+        api_with_token(app, "GET", "/api/repos/ada/demo", &forge.ada_token, None).await;
+    assert_eq!(
+        status,
+        StatusCode::PERMANENT_REDIRECT,
+        "the old address follows it"
+    );
 
     // The tab moved with the ownership.
-    let (_, page) = page_with_cookie(app, "/demo", &bee).await;
-    assert!(page.contains(r#"href="/demo/settings""#));
+    let (_, page) = page_with_cookie(app, "/bee/demo", &bee).await;
+    assert!(page.contains(r#"href="/bee/demo/settings""#));
     assert_eq!(
-        get_with_cookie(app, "/demo/settings", &ada).await,
+        get_with_cookie(app, "/bee/demo/settings", &ada).await,
         StatusCode::OK,
         "ada runs the forge, so still sees it"
     );

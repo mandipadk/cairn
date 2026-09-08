@@ -16,6 +16,25 @@ use crate::common::*;
 use axum::http::StatusCode;
 use serde_json::json;
 
+/// Every repository directory, as `owner/name.git`, sorted.
+fn on_disk(repos: &std::path::Path) -> Vec<String> {
+    let mut found = Vec::new();
+    for owner in std::fs::read_dir(repos).unwrap() {
+        let owner = owner.unwrap();
+        let name = owner.file_name().to_string_lossy().into_owned();
+        if owner.file_type().unwrap().is_dir() && !name.ends_with(".git") {
+            for entry in std::fs::read_dir(owner.path()).unwrap() {
+                let entry = entry.unwrap().file_name().to_string_lossy().into_owned();
+                found.push(format!("{name}/{entry}"));
+            }
+        } else {
+            found.push(name);
+        }
+    }
+    found.sort();
+    found
+}
+
 /// A repository name becomes a directory. Anything that could name a
 /// directory somewhere else has to be refused before it gets there.
 #[tokio::test(flavor = "multi_thread")]
@@ -41,11 +60,6 @@ async fn repo_names_that_could_escape_their_directory_are_refused() {
         "dollar$sign",
         "back\\slash",
         "new\nline",
-        // Reserved: these would shadow the forge's own routes.
-        "api",
-        "git",
-        "login",
-        "assets",
     ];
     for name in hostile {
         let (status, body) = api(
@@ -62,14 +76,31 @@ async fn repo_names_that_could_escape_their_directory_are_refused() {
             "repo name {name:?} should have been refused, got {body}"
         );
     }
+    // An owner is the first segment of every repository address, so an id
+    // that would shadow the forge's own routes is refused where ids are made.
+    for id in ["api", "git", "login", "assets"] {
+        let (status, body) = api(
+            app,
+            "POST",
+            "/api/principals",
+            "ada",
+            Some(json!({ "id": id, "kind": "human", "display": "Shadow" })),
+        )
+        .await;
+        assert_ne!(
+            status,
+            StatusCode::OK,
+            "principal id {id:?} should have been refused, got {body}"
+        );
+    }
 
     // Ground truth: the only repository on disk is the one boot made.
-    let mut found: Vec<String> = std::fs::read_dir(&repos)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
-    found.sort();
-    assert_eq!(found, vec!["demo.git"], "something else reached the disk");
+    let found = on_disk(&repos);
+    assert_eq!(
+        found,
+        vec!["ada/demo.git"],
+        "something else reached the disk"
+    );
 
     // And nothing was created beside the repos directory either.
     let siblings: Vec<String> = std::fs::read_dir(forge._tmp.path())
@@ -94,14 +125,14 @@ async fn tree_paths_cannot_climb_out_of_the_repository() {
     std::fs::write(&secret_path, "TOP-SECRET-CANARY\n").unwrap();
 
     let attempts = [
-        "/demo/tree/../../secret.txt",
-        "/demo/tree/../../../secret.txt",
-        "/demo/tree/..%2f..%2fsecret.txt",
-        "/demo/tree/....//....//secret.txt",
-        "/demo/tree//etc/hostname",
-        "/demo/tree/%2e%2e%2f%2e%2e%2fsecret.txt",
-        "/demo/blame/../../secret.txt",
-        "/demo/blame/..%2f..%2fsecret.txt",
+        "/ada/demo/tree/../../secret.txt",
+        "/ada/demo/tree/../../../secret.txt",
+        "/ada/demo/tree/..%2f..%2fsecret.txt",
+        "/ada/demo/tree/....//....//secret.txt",
+        "/ada/demo/tree//etc/hostname",
+        "/ada/demo/tree/%2e%2e%2f%2e%2e%2fsecret.txt",
+        "/ada/demo/blame/../../secret.txt",
+        "/ada/demo/blame/..%2f..%2fsecret.txt",
     ];
     for attempt in attempts {
         let (status, body) = page_with_cookie(app, attempt, "cairn_dev=ada").await;
@@ -142,7 +173,7 @@ async fn values_that_git_would_read_as_options_are_refused() {
             "POST",
             "/api/changes",
             "ada",
-            Some(json!({ "repo": "demo", "target": target, "title": "T" })),
+            Some(json!({ "repo": "ada/demo", "target": target, "title": "T" })),
         )
         .await;
         assert_ne!(
@@ -158,7 +189,7 @@ async fn values_that_git_would_read_as_options_are_refused() {
         "POST",
         "/api/changes",
         "ada",
-        Some(json!({ "repo": "demo", "target": "main", "title": "T" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "T" })),
     )
     .await;
     let change_id = change["id"].as_str().unwrap().to_owned();
@@ -289,13 +320,10 @@ async fn a_caller_without_authority_leaves_nothing_on_disk() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
 
-    let found: Vec<String> = std::fs::read_dir(&repos)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
+    let found = on_disk(&repos);
     assert_eq!(
         found,
-        vec!["demo.git"],
+        vec!["ada/demo.git"],
         "a refused create must not leave a repository on disk"
     );
 }
@@ -312,7 +340,7 @@ async fn a_hostile_commit_message_smuggles_nothing_into_the_graph() {
         &[
             "clone",
             "-q",
-            &format!("http://scout:x@{addr}/git/demo"),
+            &format!("http://scout:x@{addr}/git/ada/demo"),
             "wc",
         ],
     );
@@ -351,7 +379,7 @@ async fn a_hostile_commit_message_smuggles_nothing_into_the_graph() {
     }
 
     // Nothing hostile reached the graph.
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     assert!(
         changes.as_array().map(|c| c.is_empty()).unwrap_or(true),
         "no change should exist after only refused pushes: {changes}"

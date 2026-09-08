@@ -103,7 +103,7 @@ async fn full_agent_workflow_over_mcp() {
         )
         .unwrap();
     store
-        .create_repo(&ada, "demo", "main", cairn_core::ObjectFormat::Sha1)
+        .create_repo(&ada, None, "demo", "main", cairn_core::ObjectFormat::Sha1)
         .unwrap();
     store
         .issue_grant(
@@ -117,7 +117,7 @@ async fn full_agent_workflow_over_mcp() {
     let (task, _) = store
         .create_task(
             &ada,
-            Some("demo"),
+            Some("ada/demo"),
             "Try the adapter",
             "Walk the protocol over MCP.",
             None,

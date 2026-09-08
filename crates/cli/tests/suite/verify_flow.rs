@@ -80,13 +80,17 @@ async fn a_runner_reproduces_one_claim_and_disputes_another() {
 
     git(
         &forge.work,
-        &["clone", &format!("http://scout:x@{addr}/git/demo"), "wc"],
+        &[
+            "clone",
+            &format!("http://scout:x@{addr}/git/ada/demo"),
+            "wc",
+        ],
     );
     let wc = forge.work.join("wc");
     commit_file(&wc, "a.txt", "a\n", "Honest change\n\nChange-Id: Ihonest");
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
 
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let honest = changes[0]["id"].as_str().unwrap().to_owned();
 
     // A claim whose command genuinely succeeds, as claimed.
@@ -112,7 +116,7 @@ async fn a_runner_reproduces_one_claim_and_disputes_another() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let output = run_verifier(&server, &runner_token, "demo", 1, &wc);
+    let output = run_verifier(&server, &runner_token, "ada/demo", 1, &wc);
     assert!(output.contains("reproduced"), "runner output: {output}");
     let (_, readiness) = api(
         app,
@@ -146,7 +150,7 @@ async fn a_runner_reproduces_one_claim_and_disputes_another() {
         "Optimistic change\n\nChange-Id: Ioptimistic",
     );
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let optimistic = changes
         .as_array()
         .unwrap()
@@ -191,7 +195,7 @@ async fn a_runner_reproduces_one_claim_and_disputes_another() {
         "unverified claims are taken at face value"
     );
 
-    let output = run_verifier(&server, &runner_token, "demo", 2, &wc);
+    let output = run_verifier(&server, &runner_token, "ada/demo", 2, &wc);
     assert!(output.contains("DISPUTED"), "runner output: {output}");
     assert!(
         output.contains("cannot land"),
@@ -256,7 +260,7 @@ async fn a_runner_reproduces_one_claim_and_disputes_another() {
         app,
         "the reproducible change to land",
         async |app: &Router| {
-            let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+            let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
             changes[0]["state"] == "merged"
         },
     )
@@ -303,7 +307,11 @@ async fn a_runner_sweeps_everything_waiting_and_fails_loudly() {
     // Two changes: one whose claim holds up, one whose does not.
     git(
         &forge.work,
-        &["clone", &format!("http://scout:x@{addr}/git/demo"), "wc"],
+        &[
+            "clone",
+            &format!("http://scout:x@{addr}/git/ada/demo"),
+            "wc",
+        ],
     );
     let wc = forge.work.join("wc");
     for (file, key, command) in [
@@ -312,7 +320,7 @@ async fn a_runner_sweeps_everything_waiting_and_fails_loudly() {
     ] {
         commit_file(&wc, file, "x\n", &format!("Work\n\nChange-Id: {key}"));
         git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
-        let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+        let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
         let change = changes
             .as_array()
             .unwrap()
@@ -339,7 +347,7 @@ async fn a_runner_sweeps_everything_waiting_and_fails_loudly() {
     let (_, waiting) = api(
         app,
         "GET",
-        "/api/repos/demo/awaiting-verification",
+        "/api/repos/ada/demo/awaiting-verification",
         "ada",
         None,
     )
@@ -358,7 +366,7 @@ async fn a_runner_sweeps_everything_waiting_and_fails_loudly() {
             "--token",
             &ci_token,
             "--repo",
-            "demo",
+            "ada/demo",
             "--workdir",
             workspace.to_str().unwrap(),
             "--checkout",
@@ -386,13 +394,13 @@ async fn a_runner_sweeps_everything_waiting_and_fails_loudly() {
     let (_, waiting) = api(
         app,
         "GET",
-        "/api/repos/demo/awaiting-verification",
+        "/api/repos/ada/demo/awaiting-verification",
         "ada",
         None,
     )
     .await;
     assert!(waiting.as_array().unwrap().is_empty());
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     for change in changes.as_array().unwrap() {
         let id = change["id"].as_str().unwrap();
         let (_, verifications) = api(

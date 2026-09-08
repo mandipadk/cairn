@@ -21,7 +21,7 @@ async fn land(
     let (_, change) = api(
         app,
         "GET",
-        &format!("/api/repos/demo/changes/{}", key_number(app, key).await),
+        &format!("/api/repos/ada/demo/changes/{}", key_number(app, key).await),
         "ada",
         None,
     )
@@ -70,7 +70,7 @@ async fn land(
 }
 
 async fn key_number(app: &axum::Router, key: &str) -> i64 {
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     changes
         .as_array()
         .unwrap()
@@ -89,7 +89,7 @@ async fn every_line_is_backed_by_what_the_log_knows_and_the_map_rolls_it_up() {
     let (status, _) = api(
         app,
         "POST",
-        "/api/repos/demo/policy",
+        "/api/repos/ada/demo/policy",
         "ada",
         Some(json!({
             "require_executed_check": false, "independence": "human_or_two_models",
@@ -113,7 +113,7 @@ async fn every_line_is_backed_by_what_the_log_knows_and_the_map_rolls_it_up() {
         &[
             "clone",
             "-q",
-            &format!("http://scout:{}@{addr}/git/demo", forge.scout_token),
+            &format!("http://scout:{}@{addr}/git/ada/demo", forge.scout_token),
             "wc",
         ],
     );
@@ -144,7 +144,14 @@ async fn every_line_is_backed_by_what_the_log_knows_and_the_map_rolls_it_up() {
     .await;
 
     // Per line, over the blame API.
-    let (status, blame) = api(app, "GET", "/api/repos/demo/blame?path=gap.rs", "ada", None).await;
+    let (status, blame) = api(
+        app,
+        "GET",
+        "/api/repos/ada/demo/blame?path=gap.rs",
+        "ada",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{blame}");
     assert!(
         blame["lines"]
@@ -158,7 +165,7 @@ async fn every_line_is_backed_by_what_the_log_knows_and_the_map_rolls_it_up() {
     let (_, blame) = api(
         app,
         "GET",
-        "/api/repos/demo/blame?path=reproduced.rs",
+        "/api/repos/ada/demo/blame?path=reproduced.rs",
         "ada",
         None,
     )
@@ -174,7 +181,7 @@ async fn every_line_is_backed_by_what_the_log_knows_and_the_map_rolls_it_up() {
     assert_eq!(blame["debt_lines"], 0);
 
     // Rolled up, most debt first.
-    let (status, map) = api(app, "GET", "/api/repos/demo/debt", "ada", None).await;
+    let (status, map) = api(app, "GET", "/api/repos/ada/demo/debt", "ada", None).await;
     assert_eq!(status, StatusCode::OK, "{map}");
     assert_eq!(map["counts"]["reproduced"], 3, "{map}");
     assert_eq!(map["counts"]["claimed"], 2);
@@ -194,28 +201,28 @@ async fn every_line_is_backed_by_what_the_log_knows_and_the_map_rolls_it_up() {
     );
     // The page says the same, files most debt first, and blame marks each line.
     let (_, cookie) = sign_in_as(&forge, "ada").await;
-    let (status, page) = page_with_cookie(app, "/demo/debt", &cookie).await;
+    let (status, page) = page_with_cookie(app, "/ada/demo/debt", &cookie).await;
     assert_eq!(status, StatusCode::OK);
     assert!(page.contains("What backs this code"), "{page}");
     assert!(
-        page.contains(r#"class="tab active" href="/demo/debt""#),
+        page.contains(r#"class="tab active" href="/ada/demo/debt""#),
         "{page}"
     );
     let gap_at = page.find("gap.rs").unwrap();
     let repro_at = page.find("reproduced.rs").unwrap();
     assert!(gap_at < repro_at, "most debt first: {page}");
     assert!(page.contains("under a declared gap"), "{page}");
-    let (status, blame) = page_with_cookie(app, "/demo/blame/gap.rs", &cookie).await;
+    let (status, blame) = page_with_cookie(app, "/ada/demo/blame/gap.rs", &cookie).await;
     assert_eq!(status, StatusCode::OK);
     assert!(blame.contains(r#"class="cline gap"#), "{blame}");
     assert!(blame.contains("4 under a declared gap"), "{blame}");
-    let (_, blame) = page_with_cookie(app, "/demo/blame/reproduced.rs", &cookie).await;
+    let (_, blame) = page_with_cookie(app, "/ada/demo/blame/reproduced.rs", &cookie).await;
     assert!(blame.contains(r#"class="cline reproduced"#), "{blame}");
     assert!(blame.contains("3 reproduced"), "{blame}");
     // The same tip answers from the cache; a stranger reads it once the repo is public.
-    let (_, again) = api(app, "GET", "/api/repos/demo/debt", "ada", None).await;
+    let (_, again) = api(app, "GET", "/api/repos/ada/demo/debt", "ada", None).await;
     assert_eq!(again["tip"], map["tip"]);
-    let (status, _) = api_anonymous(app, "GET", "/api/repos/demo/debt", None).await;
+    let (status, _) = api_anonymous(app, "GET", "/api/repos/ada/demo/debt", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -254,13 +261,13 @@ async fn history_from_before_the_forge_is_imported_debt() {
     let (status, done) = api(
         app,
         "POST",
-        "/api/repos/imported/import",
+        "/api/repos/ada/imported/import",
         "ada",
         Some(json!({ "source": format!("file://{}", elsewhere.display()) })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{done}");
-    let (status, map) = api(app, "GET", "/api/repos/imported/debt", "ada", None).await;
+    let (status, map) = api(app, "GET", "/api/repos/ada/imported/debt", "ada", None).await;
     assert_eq!(status, StatusCode::OK, "{map}");
     assert_eq!(map["counts"]["imported"], 3, "{map}");
     assert_eq!(map["counts"]["reproduced"], 0);

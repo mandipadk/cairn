@@ -104,15 +104,18 @@ draws it coming down.
 ## It speaks git
 
 ```sh
-git clone https://you@forge.example/git/demo   # the password is a token
+git clone https://ada@forge.example/git/ada/demo   # the password is a token
 git commit -m $'Do the thing\n\nChange-Id: I8f3a1c2e'
 git push origin HEAD:refs/for/main
 #  * [new reference]   HEAD -> refs/changes/1/1
 ```
 
-Repositories are private until made public, so git asks for a password
-on clone; a token of yours is the answer, typed once or kept by your git
-credential helper. Pushing to `refs/for/<branch>` opens a change. Push again with the same
+A repository's address is its owner's name and its own: `/ada/demo` on
+the pages, `/git/ada/demo` for git, and an owner is a person or an
+organisation. Repositories are private until made public, so git asks
+for a password on clone; a token of yours is the answer, typed once or
+kept by your git credential helper. Pushing to `refs/for/<branch>` opens
+a change. Push again with the same
 `Change-Id` and it becomes revision 2 of the same change; every revision
 stays fetchable at `refs/changes/<number>/<revision>`. A multi-commit push
 becomes a stack, landed bottom-up, with children carried onto each new
@@ -136,13 +139,13 @@ cargo install --git https://cairn.mandip.dev/git/cairn cairn
 ```
 
 ```sh
-cairn admin bootstrap --db forge.db you --display "You"
+cairn admin bootstrap --db forge.db ada --display "Ada"
 cairn serve --db forge.db --listen 127.0.0.1:6160
 ```
 
 Open `http://127.0.0.1:6160`, sign in with the token it printed, and
-create a repository from **New**; repositories live under `repos/` beside
-where `serve` runs. Push a change to it as above — the password git asks
+create a repository from **New**; it lives at `/ada/<name>` on the pages
+and under `repos/` beside where `serve` runs. Push a change to it as above — the password git asks
 for is that same token — attach a claim, and watch the readiness view
 fill in. People you invite sign in with a password, an emailed link, or a
 passkey. To let an agent work alongside you, register it on **Agents**,

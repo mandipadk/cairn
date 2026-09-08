@@ -135,7 +135,7 @@ async fn importing_and_mirroring_are_the_operators_to_authorise() {
     let (status, body) = api_with_token(
         app,
         "POST",
-        "/api/repos/bees/import",
+        "/api/repos/bee/bees/import",
         &bee,
         Some(json!({ "source": "file:///etc", "branch": "main" })),
     )
@@ -146,7 +146,7 @@ async fn importing_and_mirroring_are_the_operators_to_authorise() {
     let (status, body) = api_with_token(
         app,
         "POST",
-        "/api/repos/demo/import",
+        "/api/repos/ada/demo/import",
         &bee,
         Some(json!({ "source": "https://127.0.0.1:1/nothing.git", "branch": "main" })),
     )
@@ -158,7 +158,7 @@ async fn importing_and_mirroring_are_the_operators_to_authorise() {
     let (status, body) = api_with_token(
         app,
         "POST",
-        "/api/repos/bees/mirror",
+        "/api/repos/bee/bees/mirror",
         &bee,
         Some(json!({ "mirror": { "url": "https://attacker.example/x.git", "enabled": true } })),
     )
@@ -167,7 +167,7 @@ async fn importing_and_mirroring_are_the_operators_to_authorise() {
     let (status, body) = api_with_token(
         app,
         "POST",
-        "/api/repos/bees/mirror",
+        "/api/repos/bee/bees/mirror",
         &forge.ada_token,
         Some(json!({ "mirror": { "url": "file:///tmp/x.git", "enabled": true } })),
     )
@@ -184,7 +184,7 @@ async fn private_repositories_do_not_leak_through_side_doors() {
     let (status, _) = api_with_token(
         app,
         "GET",
-        "/api/repos/demo/blame?path=README.md",
+        "/api/repos/ada/demo/blame?path=README.md",
         &bee,
         None,
     )
@@ -197,7 +197,7 @@ async fn private_repositories_do_not_leak_through_side_doors() {
     let (status, _) = api_with_token(
         app,
         "POST",
-        "/api/repos/demo/policy",
+        "/api/repos/ada/demo/policy",
         &bee,
         Some(json!({
             "preview": true,

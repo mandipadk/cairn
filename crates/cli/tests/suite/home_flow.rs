@@ -66,8 +66,8 @@ async fn the_home_ranks_what_wants_a_person_across_every_repository() {
     )
     .await;
 
-    let first = change_wanting_attention(&forge, "demo", "Something in demo", "Ia").await;
-    let second = change_wanting_attention(&forge, "second", "Something in second", "Ib").await;
+    let first = change_wanting_attention(&forge, "ada/demo", "Something in demo", "Ia").await;
+    let second = change_wanting_attention(&forge, "ada/second", "Something in second", "Ib").await;
 
     let (status, body) = page_with_cookie(app, "/", "cairn_dev=ada").await;
     assert_eq!(status, StatusCode::OK, "home should render, not redirect");

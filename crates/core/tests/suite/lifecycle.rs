@@ -56,7 +56,7 @@ fn seeded() -> (Store, PrincipalId, PrincipalId, PrincipalId) {
         )
         .unwrap();
     store
-        .create_repo(&human, "forge", "main", ObjectFormat::Sha1)
+        .create_repo(&human, None, "forge", "main", ObjectFormat::Sha1)
         .unwrap();
     // Agents act only under grants; the human delegates.
     store
@@ -88,7 +88,7 @@ fn full_lifecycle_intent_to_merge() {
     let (task, _) = store
         .create_task(
             &human,
-            Some("forge"),
+            Some("ada/forge"),
             "Harden slug validation",
             "Reject uppercase and boundary dashes; property-test the validator.",
             None,
@@ -105,7 +105,7 @@ fn full_lifecycle_intent_to_merge() {
             &scout,
             ChangeSpec {
                 task: Some(task.clone()),
-                ..ChangeSpec::new("forge", "main", "Harden slug validation")
+                ..ChangeSpec::new("ada/forge", "main", "Harden slug validation")
             },
         )
         .unwrap();
@@ -258,7 +258,7 @@ fn two_distinct_agent_models_satisfy_independence() {
         .unwrap();
 
     let (change, _, _) = store
-        .open_change(&scout, ChangeSpec::new("forge", "main", "Refactor"))
+        .open_change(&scout, ChangeSpec::new("ada/forge", "main", "Refactor"))
         .unwrap();
     store
         .push_revision(&scout, &change, OID, None, "refactor")
@@ -307,7 +307,7 @@ fn two_distinct_agent_models_satisfy_independence() {
 fn blocking_verdict_vetoes_and_concern_does_not() {
     let (mut store, human, scout, _) = seeded();
     let (change, _, _) = store
-        .open_change(&scout, ChangeSpec::new("forge", "main", "Risky"))
+        .open_change(&scout, ChangeSpec::new("ada/forge", "main", "Risky"))
         .unwrap();
     store
         .push_revision(&scout, &change, OID, None, "risky")
@@ -361,7 +361,7 @@ fn blocking_verdict_vetoes_and_concern_does_not() {
 fn owner_approval_does_not_count_as_independent() {
     let (mut store, human, scout, _) = seeded();
     let (change, _, _) = store
-        .open_change(&human, ChangeSpec::new("forge", "main", "Self-serve"))
+        .open_change(&human, ChangeSpec::new("ada/forge", "main", "Self-serve"))
         .unwrap();
     store
         .push_revision(&human, &change, OID, None, "self")
@@ -418,14 +418,14 @@ fn protocol_misuse_is_rejected_with_typed_errors() {
     let ghost = principal("ghost");
     assert!(matches!(
         store
-            .create_repo(&ghost, "x-repo", "main", ObjectFormat::Sha1)
+            .create_repo(&ghost, None, "x-repo", "main", ObjectFormat::Sha1)
             .unwrap_err(),
         CoreError::NotFound(_)
     ));
 
     // Empty rationale and bad oids are invalid.
     let (change, _, _) = store
-        .open_change(&scout, ChangeSpec::new("forge", "main", "C"))
+        .open_change(&scout, ChangeSpec::new("ada/forge", "main", "C"))
         .unwrap();
     assert!(matches!(
         store
@@ -563,15 +563,15 @@ fn capability_law_scopes_expires_and_revokes() {
         )
         .unwrap();
     store
-        .create_repo(&human, "alpha", "main", ObjectFormat::Sha1)
+        .create_repo(&human, None, "alpha", "main", ObjectFormat::Sha1)
         .unwrap();
     store
-        .create_repo(&human, "beta", "main", ObjectFormat::Sha1)
+        .create_repo(&human, None, "beta", "main", ObjectFormat::Sha1)
         .unwrap();
 
     // No grant: refused, and the refusal says what to do about it.
     let err = store
-        .open_change(&agent, ChangeSpec::new("alpha", "main", "X"))
+        .open_change(&agent, ChangeSpec::new("ada/alpha", "main", "X"))
         .unwrap_err();
     match err {
         CoreError::Forbidden(message) => {
@@ -589,20 +589,26 @@ fn capability_law_scopes_expires_and_revokes() {
 
     // Repo-scoped grant covers alpha, not beta, and not repo-less work.
     let (grant, _) = store
-        .issue_grant(&human, &agent, Some("alpha"), vec![Capability::Push], None)
+        .issue_grant(
+            &human,
+            &agent,
+            Some("ada/alpha"),
+            vec![Capability::Push],
+            None,
+        )
         .unwrap();
     store
-        .open_change(&agent, ChangeSpec::new("alpha", "main", "X"))
+        .open_change(&agent, ChangeSpec::new("ada/alpha", "main", "X"))
         .unwrap();
     assert!(matches!(
         store
-            .open_change(&agent, ChangeSpec::new("beta", "main", "Y"))
+            .open_change(&agent, ChangeSpec::new("ada/beta", "main", "Y"))
             .unwrap_err(),
         CoreError::Forbidden(_)
     ));
     // Capability is not identity: push does not confer review.
     let (change, _, _) = store
-        .open_change(&agent, ChangeSpec::new("alpha", "main", "Z"))
+        .open_change(&agent, ChangeSpec::new("ada/alpha", "main", "Z"))
         .unwrap();
     store
         .push_revision(&agent, &change, OID, None, "z")
@@ -625,7 +631,7 @@ fn capability_law_scopes_expires_and_revokes() {
     store.revoke_grant(&human, &grant, "trial over").unwrap();
     assert!(matches!(
         store
-            .open_change(&agent, ChangeSpec::new("alpha", "main", "W"))
+            .open_change(&agent, ChangeSpec::new("ada/alpha", "main", "W"))
             .unwrap_err(),
         CoreError::Forbidden(_)
     ));
@@ -635,14 +641,14 @@ fn capability_law_scopes_expires_and_revokes() {
         .issue_grant(
             &human,
             &agent,
-            Some("alpha"),
+            Some("ada/alpha"),
             vec![Capability::Push],
             Some("2020-01-01T00:00:00Z"),
         )
         .unwrap();
     assert!(matches!(
         store
-            .open_change(&agent, ChangeSpec::new("alpha", "main", "W"))
+            .open_change(&agent, ChangeSpec::new("ada/alpha", "main", "W"))
             .unwrap_err(),
         CoreError::Forbidden(_)
     ));
@@ -650,13 +656,13 @@ fn capability_law_scopes_expires_and_revokes() {
         .issue_grant(
             &human,
             &agent,
-            Some("alpha"),
+            Some("ada/alpha"),
             vec![Capability::Push],
             Some("2100-01-01T00:00:00Z"),
         )
         .unwrap();
     store
-        .open_change(&agent, ChangeSpec::new("alpha", "main", "W"))
+        .open_change(&agent, ChangeSpec::new("ada/alpha", "main", "W"))
         .unwrap();
 
     // Delegation is a human act; agents cannot widen authority.
@@ -672,7 +678,7 @@ fn capability_law_scopes_expires_and_revokes() {
 fn merge_queue_lifecycle_and_guards() {
     let (mut store, human, scout, _) = seeded();
     let (change, _, _) = store
-        .open_change(&scout, ChangeSpec::new("forge", "main", "Queued work"))
+        .open_change(&scout, ChangeSpec::new("ada/forge", "main", "Queued work"))
         .unwrap();
     store
         .push_revision(&scout, &change, OID, None, "work")
@@ -704,7 +710,7 @@ fn merge_queue_lifecycle_and_guards() {
     ));
     store.enqueue_change(&human, &change).unwrap();
     assert!(store.queue_entry(&change).unwrap().is_some());
-    assert_eq!(store.queue_for("forge", "main").unwrap().len(), 1);
+    assert_eq!(store.queue_for("ada/forge", "main").unwrap().len(), 1);
     assert!(matches!(
         store.enqueue_change(&human, &change).unwrap_err(),
         CoreError::Conflict(_)
@@ -726,7 +732,7 @@ fn merge_queue_lifecycle_and_guards() {
 
     // Stacks land bottom-up: a child cannot queue past its open parent.
     let (parent, _, _) = store
-        .open_change(&scout, ChangeSpec::new("forge", "main", "Parent"))
+        .open_change(&scout, ChangeSpec::new("ada/forge", "main", "Parent"))
         .unwrap();
     store
         .push_revision(&scout, &parent, OID, None, "p")
@@ -736,7 +742,7 @@ fn merge_queue_lifecycle_and_guards() {
             &scout,
             ChangeSpec {
                 parent_change: Some(parent.clone()),
-                ..ChangeSpec::new("forge", "main", "Child")
+                ..ChangeSpec::new("ada/forge", "main", "Child")
             },
         )
         .unwrap();
@@ -783,7 +789,10 @@ fn merge_queue_lifecycle_and_guards() {
 fn provenance_follows_a_landed_commit_to_its_judgment() {
     let (mut store, human, scout, _) = seeded();
     let (change, number, _) = store
-        .open_change(&scout, ChangeSpec::new("forge", "main", "Touch the parser"))
+        .open_change(
+            &scout,
+            ChangeSpec::new("ada/forge", "main", "Touch the parser"),
+        )
         .unwrap();
     store
         .push_revision(&scout, &change, OID, None, "parse")
@@ -815,7 +824,7 @@ fn provenance_follows_a_landed_commit_to_its_judgment() {
         .unwrap();
 
     // Nothing is attributable until the change actually lands.
-    assert!(store.provenance_of("forge", OID).unwrap().is_none());
+    assert!(store.provenance_of("ada/forge", OID).unwrap().is_none());
 
     // The queue rebased it, so the landed commit is not the revision.
     let landed = "b".repeat(40);
@@ -824,7 +833,7 @@ fn provenance_follows_a_landed_commit_to_its_judgment() {
         .unwrap();
 
     let found = store
-        .provenance_of("forge", &landed)
+        .provenance_of("ada/forge", &landed)
         .unwrap()
         .expect("attributable");
     assert_eq!(found.change.number, number);
@@ -838,7 +847,7 @@ fn provenance_follows_a_landed_commit_to_its_judgment() {
     );
     assert_eq!(found.approvals().len(), 1);
     // The reviewed revision's oid is not what the branch carries.
-    assert!(store.provenance_of("forge", OID).unwrap().is_none());
+    assert!(store.provenance_of("ada/forge", OID).unwrap().is_none());
     // Another repo's commits are not ours to attribute.
     assert!(store.provenance_of("other", &landed).unwrap().is_none());
 }
@@ -847,7 +856,10 @@ fn provenance_follows_a_landed_commit_to_its_judgment() {
 fn reasoning_only_claims_are_not_an_executed_check() {
     let (mut store, human, scout, _) = seeded();
     let (change, _, _) = store
-        .open_change(&scout, ChangeSpec::new("forge", "main", "Argued, not run"))
+        .open_change(
+            &scout,
+            ChangeSpec::new("ada/forge", "main", "Argued, not run"),
+        )
         .unwrap();
     store
         .push_revision(&scout, &change, OID, None, "argue")
@@ -900,7 +912,10 @@ fn a_disputed_claim_blocks_the_merge() {
         .unwrap();
 
     let (change, _, _) = store
-        .open_change(&scout, ChangeSpec::new("forge", "main", "Claims something"))
+        .open_change(
+            &scout,
+            ChangeSpec::new("ada/forge", "main", "Claims something"),
+        )
         .unwrap();
     store
         .push_revision(&scout, &change, OID, None, "work")
@@ -989,7 +1004,7 @@ fn a_disputed_claim_blocks_the_merge() {
 
     // Agreement is recorded the same way and leaves the gate open.
     let (fresh, _, _) = store
-        .open_change(&scout, ChangeSpec::new("forge", "main", "Reproducible"))
+        .open_change(&scout, ChangeSpec::new("ada/forge", "main", "Reproducible"))
         .unwrap();
     store
         .push_revision(&scout, &fresh, OID, None, "work")
@@ -1051,7 +1066,7 @@ fn change_with_claim(
     spec: ClaimSpec,
 ) -> cairn_core::ChangeId {
     let (change, _, _) = store
-        .open_change(owner, ChangeSpec::new("forge", "main", title))
+        .open_change(owner, ChangeSpec::new("ada/forge", "main", title))
         .unwrap();
     store
         .push_revision(owner, &change, OID, None, "work")
@@ -1140,7 +1155,7 @@ fn attention_ranks_by_what_judgment_is_worth() {
         .verify_claim(&arbiter, &disputed_claim, false, "cargo test", "2 failures")
         .unwrap();
 
-    let ranked = store.attention_for("forge").unwrap();
+    let ranked = store.attention_for("ada/forge").unwrap();
     let order: Vec<&str> = ranked.iter().map(|i| i.change.title.as_str()).collect();
     assert_eq!(
         order[0], "Contested",
@@ -1201,7 +1216,7 @@ fn sampling_draws_agent_only_work_deterministically() {
             )
             .unwrap();
         total += 1;
-        let ranked = store.attention_for("forge").unwrap();
+        let ranked = store.attention_for("ada/forge").unwrap();
         let item = ranked.iter().find(|i| i.change.id == change);
         if item.is_some_and(|i| {
             i.signals
@@ -1217,8 +1232,8 @@ fn sampling_draws_agent_only_work_deterministically() {
     );
 
     // The draw is a property of the change, not of when you asked.
-    let first = store.attention_for("forge").unwrap();
-    let second = store.attention_for("forge").unwrap();
+    let first = store.attention_for("ada/forge").unwrap();
+    let second = store.attention_for("ada/forge").unwrap();
     let ids = |items: &[cairn_core::AttentionItem]| -> Vec<String> {
         items
             .iter()
@@ -1248,7 +1263,7 @@ fn sampling_draws_agent_only_work_deterministically() {
                 "looked",
             )
             .unwrap();
-        let after = store.attention_for("forge").unwrap();
+        let after = store.attention_for("ada/forge").unwrap();
         assert!(
             !after.iter().any(|i| i.change.id == sampled.change.id
                 && i.signals
@@ -1267,7 +1282,7 @@ fn session_for(
     title: &str,
 ) -> cairn_core::SessionId {
     let (task, _) = store
-        .create_task(human, Some("forge"), title, "spec", None)
+        .create_task(human, Some("ada/forge"), title, "spec", None)
         .unwrap();
     store.claim_task(agent, &task).unwrap();
     store.open_session(agent, &task).unwrap().0
@@ -1287,7 +1302,7 @@ fn leases_surface_collisions_before_the_work_is_spent() {
         .declare_paths(
             &scout,
             &scout_session,
-            "forge",
+            "ada/forge",
             vec!["crates/core/src/parser.rs".into(), "docs/".into()],
         )
         .unwrap();
@@ -1298,7 +1313,7 @@ fn leases_surface_collisions_before_the_work_is_spent() {
         .declare_paths(
             &arbiter,
             &arbiter_session,
-            "forge",
+            "ada/forge",
             vec!["crates/core/".into(), "README.md".into()],
         )
         .unwrap();
@@ -1312,7 +1327,10 @@ fn leases_surface_collisions_before_the_work_is_spent() {
 
     // Once the other side has produced code, the warning gets louder.
     let (change, _, _) = store
-        .open_change(&scout, ChangeSpec::new("forge", "main", "Parser rework"))
+        .open_change(
+            &scout,
+            ChangeSpec::new("ada/forge", "main", "Parser rework"),
+        )
         .unwrap();
     store
         .push_revision(&scout, &change, OID, Some(&scout_session), "parser")
@@ -1320,7 +1338,7 @@ fn leases_surface_collisions_before_the_work_is_spent() {
     // Asking about that path without excluding anyone finds both
     // sessions, with work already in flight reported first.
     let conflicts = store
-        .path_conflicts("forge", &["crates/core/src/parser.rs".to_owned()])
+        .path_conflicts("ada/forge", &["crates/core/src/parser.rs".to_owned()])
         .unwrap();
     assert_eq!(conflicts.len(), 2);
     assert_eq!(conflicts[0].holder, scout);
@@ -1339,14 +1357,14 @@ fn leases_surface_collisions_before_the_work_is_spent() {
         .declare_paths(
             &arbiter,
             &arbiter_session,
-            "forge",
+            "ada/forge",
             vec!["README.md".into()],
         )
         .unwrap();
     assert!(overlaps.is_empty());
     assert!(
         store
-            .path_conflicts("forge", &["crates/core/".to_owned()])
+            .path_conflicts("ada/forge", &["crates/core/".to_owned()])
             .unwrap()
             .iter()
             .all(|o| o.holder != arbiter),
@@ -1359,14 +1377,14 @@ fn leases_surface_collisions_before_the_work_is_spent() {
         .unwrap();
     assert!(
         store
-            .path_conflicts("forge", &["crates/core/src/parser.rs".to_owned()])
+            .path_conflicts("ada/forge", &["crates/core/src/parser.rs".to_owned()])
             .unwrap()
             .is_empty(),
         "ending a session must release its lease"
     );
     assert!(matches!(
         store
-            .declare_paths(&scout, &scout_session, "forge", vec!["src/".into()])
+            .declare_paths(&scout, &scout_session, "ada/forge", vec!["src/".into()])
             .unwrap_err(),
         CoreError::Conflict(_)
     ));
@@ -1374,13 +1392,13 @@ fn leases_surface_collisions_before_the_work_is_spent() {
     // Leases belong to the session that holds them.
     assert!(matches!(
         store
-            .declare_paths(&scout, &arbiter_session, "forge", vec!["src/".into()])
+            .declare_paths(&scout, &arbiter_session, "ada/forge", vec!["src/".into()])
             .unwrap_err(),
         CoreError::Conflict(_)
     ));
     assert!(matches!(
         store
-            .declare_paths(&arbiter, &arbiter_session, "forge", vec![])
+            .declare_paths(&arbiter, &arbiter_session, "ada/forge", vec![])
             .unwrap_err(),
         CoreError::Invalid(_)
     ));
@@ -1406,10 +1424,13 @@ fn lessons_keep_what_attempts_learned() {
 
     // Everything ended is remembered; failures can be asked for alone.
     assert_eq!(
-        store.lessons(Some("forge"), None, false, 50).unwrap().len(),
+        store
+            .lessons(Some("ada/forge"), None, false, 50)
+            .unwrap()
+            .len(),
         2
     );
-    let failures = store.lessons(Some("forge"), None, true, 50).unwrap();
+    let failures = store.lessons(Some("ada/forge"), None, true, 50).unwrap();
     assert_eq!(failures.len(), 1);
     assert_eq!(failures[0].agent, scout);
     assert_eq!(failures[0].task_title, "Migrate the event log");
@@ -1445,7 +1466,7 @@ fn lessons_keep_what_attempts_learned() {
     let running = session_for(&mut store, &human, &scout, "Still going");
     assert!(
         store
-            .lessons(Some("forge"), None, false, 50)
+            .lessons(Some("ada/forge"), None, false, 50)
             .unwrap()
             .iter()
             .all(|l| l.session != running)
@@ -1460,7 +1481,7 @@ fn a_repo_chooses_the_rules_its_work_must_meet() {
         .unwrap();
 
     // A repo that never says anything keeps the shipped defaults.
-    let repo = store.repo("forge").unwrap().unwrap();
+    let repo = store.repo("ada/forge").unwrap().unwrap();
     assert_eq!(repo.policy, cairn_core::Policy::default());
 
     let change = change_with_claim(&mut store, &scout, "Ordinary work", passing_with_command());
@@ -1489,7 +1510,7 @@ fn a_repo_chooses_the_rules_its_work_must_meet() {
     };
 
     // Before committing to it, ask what it would cost.
-    let preview = store.policy_preview("forge", &strict).unwrap();
+    let preview = store.policy_preview("ada/forge", &strict).unwrap();
     assert_eq!(preview.len(), 1);
     let (previewed, trace) = &preview[0];
     assert_eq!(previewed.id, change);
@@ -1503,13 +1524,18 @@ fn a_repo_chooses_the_rules_its_work_must_meet() {
     // Only admins set policy.
     assert!(matches!(
         store
-            .set_policy(&scout, "forge", strict.clone())
+            .set_policy(&scout, "ada/forge", strict.clone())
             .unwrap_err(),
         CoreError::Forbidden(_)
     ));
-    store.set_policy(&human, "forge", strict).unwrap();
+    store.set_policy(&human, "ada/forge", strict).unwrap();
     assert_eq!(
-        store.repo("forge").unwrap().unwrap().policy.independence,
+        store
+            .repo("ada/forge")
+            .unwrap()
+            .unwrap()
+            .policy
+            .independence,
         cairn_core::Independence::HumanOrTwoModels
     );
 
@@ -1578,7 +1604,7 @@ fn a_repo_chooses_the_rules_its_work_must_meet() {
     store
         .set_policy(
             &human,
-            "forge",
+            "ada/forge",
             cairn_core::Policy {
                 require_executed_check: false,
                 independence: cairn_core::Independence::None,
@@ -1593,7 +1619,10 @@ fn a_repo_chooses_the_rules_its_work_must_meet() {
         )
         .unwrap();
     let bare = store
-        .open_change(&scout, ChangeSpec::new("forge", "main", "Nothing claimed"))
+        .open_change(
+            &scout,
+            ChangeSpec::new("ada/forge", "main", "Nothing claimed"),
+        )
         .unwrap()
         .0;
     store
@@ -1640,7 +1669,7 @@ fn projections_rebuild_themselves_from_the_log() {
             )
             .unwrap();
         store
-            .create_repo(&human, "forge", "main", ObjectFormat::Sha1)
+            .create_repo(&human, None, "forge", "main", ObjectFormat::Sha1)
             .unwrap();
         store
             .issue_grant(&human, &scout, None, vec![Capability::Push], None)
@@ -1648,7 +1677,7 @@ fn projections_rebuild_themselves_from_the_log() {
         store
             .set_policy(
                 &human,
-                "forge",
+                "ada/forge",
                 cairn_core::Policy {
                     independence: cairn_core::Independence::HumanOnly,
                     ..cairn_core::Policy::default()
@@ -1656,7 +1685,7 @@ fn projections_rebuild_themselves_from_the_log() {
             )
             .unwrap();
         let (change, _, _) = store
-            .open_change(&scout, ChangeSpec::new("forge", "main", "Something"))
+            .open_change(&scout, ChangeSpec::new("ada/forge", "main", "Something"))
             .unwrap();
         store
             .push_revision(&scout, &change, OID, None, "work")
@@ -1689,14 +1718,14 @@ fn projections_rebuild_themselves_from_the_log() {
     // Opening rebuilds everything from the log, and the state that
     // comes back is the state that was there.
     let store = Store::open(&path).unwrap();
-    let repo = store.repo("forge").unwrap().expect("the repo returns");
+    let repo = store.repo("ada/forge").unwrap().expect("the repo returns");
     assert_eq!(repo.default_branch, "main");
     assert_eq!(
         repo.policy.independence,
         cairn_core::Independence::HumanOnly,
         "a policy set by an event must survive the rebuild"
     );
-    let changes = store.changes_in_repo("forge").unwrap();
+    let changes = store.changes_in_repo("ada/forge").unwrap();
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0].state, cairn_core::ChangeState::Merged);
     assert_eq!(changes[0].latest_revision, 1);
@@ -1721,7 +1750,10 @@ fn a_runner_that_re_runs_replaces_its_own_earlier_verdict() {
         .unwrap();
 
     let (change, _, _) = store
-        .open_change(&scout, ChangeSpec::new("forge", "main", "Claims something"))
+        .open_change(
+            &scout,
+            ChangeSpec::new("ada/forge", "main", "Claims something"),
+        )
         .unwrap();
     store
         .push_revision(&scout, &change, OID, None, "work")
@@ -1801,7 +1833,7 @@ fn notices_go_to_whose_work_it_is_and_never_to_the_actor() {
     // Scout opens a change in a repository the human owns: the owner
     // hears about it, scout does not hear about its own push.
     let (change, _, _) = store
-        .open_change(&scout, ChangeSpec::new("forge", "main", "Scout's work"))
+        .open_change(&scout, ChangeSpec::new("ada/forge", "main", "Scout's work"))
         .unwrap();
     store
         .push_revision(&scout, &change, OID, None, "work")
@@ -1863,12 +1895,18 @@ fn notices_go_to_whose_work_it_is_and_never_to_the_actor() {
 
     // Authority given to you is addressed to you.
     store
-        .issue_grant(&human, &scout, Some("forge"), vec![Capability::Merge], None)
+        .issue_grant(
+            &human,
+            &scout,
+            Some("ada/forge"),
+            vec![Capability::Merge],
+            None,
+        )
         .unwrap();
     let scouts = store.inbox(&scout, 10).unwrap();
     assert_eq!(scouts[0].kind, "granted");
     assert!(
-        scouts[0].what.contains("merge on forge"),
+        scouts[0].what.contains("merge on ada/forge"),
         "{}",
         scouts[0].what
     );
@@ -1884,14 +1922,14 @@ fn search_ranks_the_exact_thing_first_and_hides_what_you_cannot_read() {
     let (open, _, _) = store
         .open_change(
             &scout,
-            ChangeSpec::new("forge", "main", "Carry children onto the tip"),
+            ChangeSpec::new("ada/forge", "main", "Carry children onto the tip"),
         )
         .unwrap();
     store.push_revision(&scout, &open, OID, None, "w").unwrap();
     let (other, _, _) = store
         .open_change(
             &scout,
-            ChangeSpec::new("forge", "main", "Also carry the children"),
+            ChangeSpec::new("ada/forge", "main", "Also carry the children"),
         )
         .unwrap();
     store.push_revision(&scout, &other, OID, None, "w").unwrap();
@@ -1949,23 +1987,31 @@ fn ownership_moves_only_when_the_other_side_says_yes() {
 
     // Not to an agent: owning carries everything, and agents are granted
     // what they need instead.
-    assert!(store.offer_transfer(&human, "forge", &scout).is_err());
+    assert!(store.offer_transfer(&human, "ada/forge", &scout).is_err());
     // Not by somebody who does not own it.
     assert!(matches!(
-        store.offer_transfer(&bee, "forge", &bee).unwrap_err(),
+        store.offer_transfer(&bee, "ada/forge", &bee).unwrap_err(),
         CoreError::Forbidden(_)
     ));
 
-    store.offer_transfer(&human, "forge", &bee).unwrap();
-    let repo = store.repo("forge").unwrap().unwrap();
+    store.offer_transfer(&human, "ada/forge", &bee).unwrap();
+    let repo = store.repo("ada/forge").unwrap().unwrap();
     assert_eq!(repo.owner, human, "an offer changes nothing yet");
     assert_eq!(repo.pending_owner.as_ref(), Some(&bee));
     assert_eq!(store.inbox(&bee, 5).unwrap()[0].kind, "transfer");
 
     // Only the offeree can accept; anyone else is refused.
-    assert!(store.accept_transfer(&scout, "forge").is_err());
-    store.accept_transfer(&bee, "forge").unwrap();
-    let repo = store.repo("forge").unwrap().unwrap();
+    assert!(store.accept_transfer(&scout, "ada/forge").is_err());
+    // Accepting puts the new owner's name in front: two events, and the
+    // old address remembers where it went.
+    let events = store.accept_transfer(&bee, "ada/forge").unwrap();
+    assert_eq!(events.len(), 2, "accepted, then renamed");
+    assert!(store.repo("ada/forge").unwrap().is_none());
+    assert_eq!(
+        store.current_name_for("ada/forge").unwrap().as_deref(),
+        Some("bee/forge")
+    );
+    let repo = store.repo("bee/forge").unwrap().unwrap();
     assert_eq!(repo.owner, bee);
     assert!(repo.pending_owner.is_none());
     assert_eq!(store.inbox(&human, 5).unwrap()[0].kind, "transferred");
@@ -1978,30 +2024,30 @@ fn ownership_moves_only_when_the_other_side_says_yes() {
         .register_principal(&human, &cat, PrincipalKind::Human, "Cat", None, None)
         .unwrap();
     store
-        .create_repo(&cat, "garden", "main", ObjectFormat::Sha1)
+        .create_repo(&cat, None, "garden", "main", ObjectFormat::Sha1)
         .unwrap();
-    store.offer_transfer(&cat, "garden", &bee).unwrap();
-    store.accept_transfer(&bee, "garden").unwrap();
+    store.offer_transfer(&cat, "cat/garden", &bee).unwrap();
+    store.accept_transfer(&bee, "cat/garden").unwrap();
     assert!(matches!(
-        store.offer_transfer(&cat, "garden", &cat).unwrap_err(),
+        store.offer_transfer(&cat, "bee/garden", &cat).unwrap_err(),
         CoreError::Forbidden(_)
     ));
     // The new owner may offer it back, and the offeree may decline; the
     // owner may also withdraw an offer they made.
-    store.offer_transfer(&bee, "forge", &human).unwrap();
-    store.decline_transfer(&human, "forge").unwrap();
+    store.offer_transfer(&bee, "bee/forge", &human).unwrap();
+    store.decline_transfer(&human, "bee/forge").unwrap();
     assert!(
         store
-            .repo("forge")
+            .repo("bee/forge")
             .unwrap()
             .unwrap()
             .pending_owner
             .is_none()
     );
-    store.offer_transfer(&bee, "forge", &human).unwrap();
-    store.decline_transfer(&bee, "forge").unwrap();
+    store.offer_transfer(&bee, "bee/forge", &human).unwrap();
+    store.decline_transfer(&bee, "bee/forge").unwrap();
     assert!(
-        store.decline_transfer(&bee, "forge").is_err(),
+        store.decline_transfer(&bee, "bee/forge").is_err(),
         "nothing on offer to withdraw"
     );
 
@@ -2020,39 +2066,45 @@ fn a_team_holds_authority_and_its_members_carry_it() {
         .register_principal(&human, &bee, PrincipalKind::Human, "Bee", None, None)
         .unwrap();
     store
-        .issue_grant(&human, &crew, Some("forge"), vec![Capability::Push], None)
+        .issue_grant(
+            &human,
+            &crew,
+            Some("ada/forge"),
+            vec![Capability::Push],
+            None,
+        )
         .unwrap();
 
     // Bee holds nothing of their own on forge.
     assert!(matches!(
         store
-            .open_change(&bee, ChangeSpec::new("forge", "main", "Bee's work"))
+            .open_change(&bee, ChangeSpec::new("ada/forge", "main", "Bee's work"))
             .unwrap_err(),
         CoreError::Forbidden(_)
     ));
-    assert!(!store.may_read(&bee, "forge"));
+    assert!(!store.may_read(&bee, "ada/forge"));
 
     // On the team, bee carries its grant, at once.
     store.add_team_member(&human, &crew, &bee).unwrap();
-    assert!(store.may_read(&bee, "forge"));
+    assert!(store.may_read(&bee, "ada/forge"));
     let (change, _, _) = store
-        .open_change(&bee, ChangeSpec::new("forge", "main", "Bee's work"))
+        .open_change(&bee, ChangeSpec::new("ada/forge", "main", "Bee's work"))
         .unwrap();
     assert_eq!(store.inbox(&bee, 5).unwrap()[0].kind, "team");
 
     // Off the team, gone at once; what bee already did stands.
     store.remove_team_member(&human, &crew, &bee).unwrap();
-    assert!(!store.may_read(&bee, "forge"));
+    assert!(!store.may_read(&bee, "ada/forge"));
     assert!(
         store
             .push_revision(&bee, &change, OID, None, "more")
             .is_err()
     );
 
-    // A team never acts, never signs in, never joins a team, never owns.
+    // A team never acts, never signs in, never joins a team.
     assert!(matches!(
         store
-            .open_change(&crew, ChangeSpec::new("forge", "main", "x"))
+            .open_change(&crew, ChangeSpec::new("ada/forge", "main", "x"))
             .unwrap_err(),
         CoreError::Forbidden(_)
     ));
@@ -2062,7 +2114,22 @@ fn a_team_holds_authority_and_its_members_carry_it() {
         .register_principal(&human, &other, PrincipalKind::Team, "Other", None, None)
         .unwrap();
     assert!(store.add_team_member(&human, &other, &crew).is_err());
-    assert!(store.offer_transfer(&human, "forge", &crew).is_err());
+
+    // A team can own: offered to the team, a member accepts for it, and
+    // the repository takes the team's name in front.
+    store.offer_transfer(&human, "ada/forge", &crew).unwrap();
+    assert!(
+        store.accept_transfer(&bee, "ada/forge").is_err(),
+        "bee is off the team and cannot accept for it"
+    );
+    store.add_team_member(&human, &crew, &bee).unwrap();
+    store.accept_transfer(&bee, "ada/forge").unwrap();
+    let owned = store.repo("crew/forge").unwrap().unwrap();
+    assert_eq!(owned.owner, crew);
+    assert_eq!(
+        store.current_name_for("ada/forge").unwrap().as_deref(),
+        Some("crew/forge")
+    );
 
     assert!(store.fsck().unwrap().is_empty());
 }

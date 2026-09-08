@@ -50,7 +50,7 @@ async fn the_feed_does_not_hand_private_work_to_strangers() {
         "/api/changes",
         &forge.ada_token,
         Some(json!({
-            "repo": "demo", "target": "main", "title": "CANARY secret plans"
+            "repo": "ada/demo", "target": "main", "title": "CANARY secret plans"
         })),
     )
     .await;
@@ -97,7 +97,7 @@ async fn a_grant_opens_the_feed_exactly_as_far_as_the_repository() {
         "POST",
         "/api/changes",
         &forge.ada_token,
-        Some(json!({ "repo": "demo", "target": "main", "title": "CANARY shared work" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "CANARY shared work" })),
     )
     .await;
 
@@ -116,7 +116,7 @@ async fn a_grant_opens_the_feed_exactly_as_far_as_the_repository() {
         "POST",
         "/api/grants",
         &forge.ada_token,
-        Some(json!({ "grantee": "bee", "repo": "demo", "actions": ["review"] })),
+        Some(json!({ "grantee": "bee", "repo": "ada/demo", "actions": ["review"] })),
     )
     .await;
     assert!(

@@ -11,7 +11,7 @@ async fn change_with_revision(forge: &Forge) -> String {
         "POST",
         "/api/changes",
         &forge.scout_token,
-        Some(json!({ "repo": "demo", "target": "main", "title": "Under discussion" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "Under discussion" })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{change}");
@@ -194,7 +194,7 @@ async fn a_concern_holds_the_change_until_a_later_revision_resolves_it() {
         "{inbox}"
     );
     // And the log says it in words.
-    let (_, log) = page_with_cookie(app, "/demo/log", &cookie).await;
+    let (_, log) = page_with_cookie(app, "/ada/demo/log", &cookie).await;
     assert!(log.contains("raised a concern on"), "{log}");
     assert!(log.contains("src/lib.rs:12"), "{log}");
     assert!(log.contains("as fixed in revision 2"), "{log}");

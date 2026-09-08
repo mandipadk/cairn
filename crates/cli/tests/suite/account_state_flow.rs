@@ -68,14 +68,14 @@ async fn deactivation_shuts_every_door_at_once_and_reactivation_reopens_them() {
     let (status, location) = get_redirect(app, "/you", &bee).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
     assert_eq!(location, "/login");
-    let (status, _) = api_with_token(app, "GET", "/api/repos/demo", &bee_token, None).await;
+    let (status, _) = api_with_token(app, "GET", "/api/repos/ada/demo", &bee_token, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     let (status, refused) = api(
         app,
         "POST",
         "/api/changes",
         "bee",
-        Some(json!({ "repo": "demo", "target": "main", "title": "x" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "x" })),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
@@ -105,7 +105,7 @@ async fn deactivation_shuts_every_door_at_once_and_reactivation_reopens_them() {
     assert_eq!(location, "/people");
     let (status, _) = sign_in_as(&forge, "bee").await;
     assert_eq!(status, StatusCode::SEE_OTHER);
-    let (_, log) = page_with_cookie(app, "/demo/log", &ada).await;
+    let (_, log) = page_with_cookie(app, "/ada/demo/log", &ada).await;
     let _ = log;
 }
 
@@ -113,7 +113,8 @@ async fn deactivation_shuts_every_door_at_once_and_reactivation_reopens_them() {
 async fn a_deactivated_agent_stops_at_its_next_request() {
     let forge = boot().await;
     let app = &forge.app;
-    let (status, _) = api_with_token(app, "GET", "/api/repos/demo", &forge.scout_token, None).await;
+    let (status, _) =
+        api_with_token(app, "GET", "/api/repos/ada/demo", &forge.scout_token, None).await;
     assert_eq!(status, StatusCode::OK);
     let (status, _) = api(
         app,
@@ -124,7 +125,8 @@ async fn a_deactivated_agent_stops_at_its_next_request() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let (status, _) = api_with_token(app, "GET", "/api/repos/demo", &forge.scout_token, None).await;
+    let (status, _) =
+        api_with_token(app, "GET", "/api/repos/ada/demo", &forge.scout_token, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     let (status, _) = api(
         app,
@@ -135,6 +137,7 @@ async fn a_deactivated_agent_stops_at_its_next_request() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let (status, _) = api_with_token(app, "GET", "/api/repos/demo", &forge.scout_token, None).await;
+    let (status, _) =
+        api_with_token(app, "GET", "/api/repos/ada/demo", &forge.scout_token, None).await;
     assert_eq!(status, StatusCode::OK);
 }

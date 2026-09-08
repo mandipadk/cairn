@@ -838,7 +838,17 @@ pub fn search(
     )
 }
 
-pub fn new_repo(theme: Theme, viewer: &Viewer, error: Option<&str>) -> Markup {
+/// `owners` is who the viewer may create under: themselves first, then
+/// every organisation they belong to. With one choice there is nothing
+/// to ask; the name simply lands under it.
+pub fn new_repo(
+    theme: Theme,
+    viewer: &Viewer,
+    owners: &[String],
+    chosen: Option<&str>,
+    error: Option<&str>,
+) -> Markup {
+    let chosen = chosen.unwrap_or(viewer.0.as_str());
     layout(
         theme,
         Some(viewer),
@@ -852,10 +862,24 @@ pub fn new_repo(theme: Theme, viewer: &Viewer, error: Option<&str>) -> Markup {
                     p class="error" { (error) }
                 }
                 form class="stack" method="post" action="/new" {
+                    @if owners.len() > 1 {
+                        div {
+                            label for="owner" { "Owner" }
+                            select id="owner" name="owner" {
+                                @for owner in owners {
+                                    option value=(owner) selected[owner == chosen] { (owner) }
+                                }
+                            }
+                            p class="hint" { "Yours, or an organisation you belong to. The address is the owner's name, then this one." }
+                        }
+                    } @else {
+                        input type="hidden" name="owner" value=(chosen);
+                    }
                     div {
                         label for="name" { "Name" }
                         input id="name" name="name" type="text" autofocus autocomplete="off"
                               placeholder="lowercase, digits and hyphens" required;
+                        p class="hint" { "It will live at /" (chosen) "/…" }
                     }
                     div {
                         label for="default_branch" { "Default branch" }
@@ -1959,6 +1983,74 @@ pub fn teams(
                     input id="display" name="display" type="text" autocomplete="off";
                 }
                 button class="btn" type="submit" { "Add a team" }
+            }
+        },
+    )
+}
+
+/// An owner's page: who they are, and every repository of theirs the
+/// reader may see. A person or an organisation; for an organisation,
+/// its members too.
+pub fn owner(
+    theme: Theme,
+    who: Reading<'_>,
+    owner: &cairn_core::Principal,
+    repos: &[cairn_core::Repo],
+    members: &[cairn_core::PrincipalId],
+    may_create: bool,
+) -> Markup {
+    let organisation = owner.kind == cairn_core::PrincipalKind::Team;
+    layout_reading(
+        theme,
+        who,
+        None,
+        None,
+        owner.id.as_str(),
+        html! {
+            div class="owner" {
+                header class="owner-head" {
+                    h1 { (owner.display) }
+                    p class="sec2" {
+                        code { (owner.id.as_str()) }
+                        " · "
+                        @if organisation { "organisation" } @else if owner.kind == cairn_core::PrincipalKind::Agent { "agent" } @else { "person" }
+                        @if !owner.active { " · deactivated" }
+                    }
+                }
+                div class="sechead" {
+                    b { "Repositories" } span { (repos.len()) }
+                    @if may_create {
+                        a class="btn" href={ "/new?owner=" (owner.id.as_str()) } { "New" }
+                    }
+                }
+                @if repos.is_empty() {
+                    p class="empty" { "Nothing here yet." }
+                }
+                div class="ftable" {
+                    @for repo in repos {
+                        @let short = cairn_core::split_repo_name(&repo.name).map(|(_, s)| s).unwrap_or(&repo.name);
+                        div class="trow link" {
+                            a class="fname" href={ "/" (repo.name) } { (short) }
+                            span class="last sec2" { (repo.description) }
+                            span class="sec3 r" {
+                                @if repo.visibility == cairn_core::Visibility::Public { "public" } @else { "private" }
+                                @if repo.archived { " · archived" }
+                            }
+                        }
+                    }
+                }
+                @if organisation {
+                    div class="sechead" { b { "Members" } span { (members.len()) } }
+                    @if members.is_empty() { p class="empty" { "Nobody yet." } }
+                    div class="ftable" {
+                        @for member in members {
+                            div class="trow link" {
+                                a class="fname" href={ "/" (member.as_str()) } { (member.as_str()) }
+                                span {} span {}
+                            }
+                        }
+                    }
+                }
             }
         },
     )

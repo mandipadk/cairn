@@ -66,7 +66,7 @@ async fn two_attempts_are_revisions_of_one_change_and_a_reviewer_compares() {
         "/api/tasks",
         "ada",
         Some(json!({
-            "repo": "demo", "title": "Name the files in a conflict",
+            "repo": "ada/demo", "title": "Name the files in a conflict",
             "spec": "The dequeue reason should list the paths.", "attempts": 2
         })),
     )
@@ -140,7 +140,7 @@ async fn two_attempts_are_revisions_of_one_change_and_a_reviewer_compares() {
         &[
             "clone",
             "-q",
-            &format!("http://scout:x@{addr}/git/demo"),
+            &format!("http://scout:x@{addr}/git/ada/demo"),
             "scout",
         ],
     );
@@ -150,7 +150,7 @@ async fn two_attempts_are_revisions_of_one_change_and_a_reviewer_compares() {
         "queue.rs",
         &format!("Read the paths from the rebase result\n\nChange-Id: Iscout\nTask: {task}"),
     );
-    let changes = ok(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let changes = ok(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     assert_eq!(changes.as_array().unwrap().len(), 1);
     let change = changes[0]["id"].as_str().unwrap().to_owned();
     assert_eq!(changes[0]["task"], task);
@@ -162,7 +162,7 @@ async fn two_attempts_are_revisions_of_one_change_and_a_reviewer_compares() {
         &[
             "clone",
             "-q",
-            &format!("http://arbiter:x@{addr}/git/demo"),
+            &format!("http://arbiter:x@{addr}/git/ada/demo"),
             "arbiter",
         ],
     );
@@ -172,7 +172,7 @@ async fn two_attempts_are_revisions_of_one_change_and_a_reviewer_compares() {
         "stderr.rs",
         &format!("Parse the paths out of git's stderr\n\nChange-Id: Iarbiter\nTask: {task}"),
     );
-    let changes = ok(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let changes = ok(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     assert_eq!(
         changes.as_array().unwrap().len(),
         1,
@@ -204,7 +204,7 @@ async fn two_attempts_are_revisions_of_one_change_and_a_reviewer_compares() {
         "POST",
         "/api/changes",
         "arbiter",
-        Some(json!({ "repo": "demo", "target": "main", "title": "Another go", "task": task })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "Another go", "task": task })),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
@@ -313,7 +313,7 @@ async fn two_attempts_are_revisions_of_one_change_and_a_reviewer_compares() {
             "--token",
             &runner_token,
             "--repo",
-            "demo",
+            "ada/demo",
             "--workdir",
             workspace.to_str().unwrap(),
             "--checkout",
@@ -346,7 +346,7 @@ async fn two_attempts_are_revisions_of_one_change_and_a_reviewer_compares() {
     );
     assert_eq!(verifications[0]["by"], "runner");
     // The page opens on the judged revision: r3 carries the claim, r4 none.
-    let (status, page) = page_with_cookie(app, "/demo/changes/1", "cairn_dev=ada").await;
+    let (status, page) = page_with_cookie(app, "/ada/demo/changes/1", "cairn_dev=ada").await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         page.contains("green"),
@@ -414,7 +414,7 @@ async fn a_task_of_one_attempt_is_exclusive_as_before() {
         "POST",
         "/api/tasks",
         "ada",
-        Some(json!({ "repo": "demo", "title": "Solo", "spec": "One agent's work." })),
+        Some(json!({ "repo": "ada/demo", "title": "Solo", "spec": "One agent's work." })),
     )
     .await["id"]
         .as_str()
@@ -457,7 +457,7 @@ async fn a_task_of_one_attempt_is_exclusive_as_before() {
         "POST",
         "/api/changes",
         "scout",
-        Some(json!({ "repo": "demo", "target": "main", "title": "Solo change", "task": task })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "Solo change", "task": task })),
     )
     .await["id"]
         .as_str()

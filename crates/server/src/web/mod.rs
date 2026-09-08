@@ -14,6 +14,7 @@ mod diff;
 mod views;
 
 use crate::auth::resolve_bearer;
+use crate::repo_path::RepoName;
 use crate::state::AppState;
 use axum::Router;
 use axum::extract::{Form, FromRequestParts, Path, Query, State};
@@ -84,44 +85,66 @@ pub fn routes() -> Router<AppState> {
         .route("/tasks", get(tasks_page))
         .route("/tasks/{id}", get(task_page).post(task_action))
         .route("/log", get(forge_log_page))
-        .route("/{repo}/settings/policy", post(repo_policy))
-        .route("/{repo}/settings/mirror", post(repo_mirror))
+        .route("/{owner}/{repo}/settings/policy", post(repo_policy))
+        .route("/{owner}/{repo}/settings/mirror", post(repo_mirror))
         .route("/people", get(people_page).post(people_action))
         .route("/teams", get(teams_page).post(teams_action))
         .route("/join", get(join))
-        .route("/{repo}", get(repo_page))
-        .route("/{repo}/tree/{*path}", get(tree_page))
-        .route("/{repo}/blame/{*path}", get(blame_page))
-        .route("/{repo}/changes", get(changes_page))
-        .route("/{repo}/changes/{number}", get(change_page))
-        .route("/{repo}/changes/{number}/verdict", post(submit_verdict))
-        .route("/{repo}/changes/{number}/prefer", post(submit_prefer))
-        .route("/{repo}/changes/{number}/threads", post(submit_thread))
+        .route("/{owner}", get(owner_page))
+        .route("/{owner}/{repo}", get(repo_page))
+        .route("/{owner}/{repo}/tree/{*path}", get(tree_page))
+        .route("/{owner}/{repo}/blame/{*path}", get(blame_page))
+        .route("/{owner}/{repo}/changes", get(changes_page))
+        .route("/{owner}/{repo}/changes/{number}", get(change_page))
         .route(
-            "/{repo}/changes/{number}/threads/{thread}/reply",
+            "/{owner}/{repo}/changes/{number}/verdict",
+            post(submit_verdict),
+        )
+        .route(
+            "/{owner}/{repo}/changes/{number}/prefer",
+            post(submit_prefer),
+        )
+        .route(
+            "/{owner}/{repo}/changes/{number}/threads",
+            post(submit_thread),
+        )
+        .route(
+            "/{owner}/{repo}/changes/{number}/threads/{thread}/reply",
             post(submit_reply),
         )
         .route(
-            "/{repo}/changes/{number}/threads/{thread}/resolve",
+            "/{owner}/{repo}/changes/{number}/threads/{thread}/resolve",
             post(submit_resolve),
         )
-        .route("/{repo}/changes/{number}/claim", post(submit_claim))
-        .route("/{repo}/changes/{number}/enqueue", post(submit_enqueue))
-        .route("/{repo}/changes/{number}/dequeue", post(submit_dequeue))
-        .route("/{repo}/changes/{number}/abandon", post(submit_abandon))
-        .route("/{repo}/landing", get(landing_page))
-        .route("/{repo}/debt", get(debt_page))
-        .route("/{repo}/debt/tasks", post(debt_tasks_action))
-        .route("/{repo}/log", get(log_page))
-        .route("/{repo}/settings", get(repo_settings_page))
-        .route("/{repo}/settings/visibility", post(repo_visibility))
-        .route("/{repo}/settings/rename", post(repo_rename))
-        .route("/{repo}/settings/description", post(repo_describe))
-        .route("/{repo}/settings/archive", post(repo_archive))
-        .route("/{repo}/settings/delete", post(repo_delete))
-        .route("/{repo}/settings/transfer", post(repo_transfer))
-        .route("/{repo}/transfer", get(transfer_page).post(transfer_answer))
-        .route("/{repo}/lessons", get(lessons_page))
+        .route("/{owner}/{repo}/changes/{number}/claim", post(submit_claim))
+        .route(
+            "/{owner}/{repo}/changes/{number}/enqueue",
+            post(submit_enqueue),
+        )
+        .route(
+            "/{owner}/{repo}/changes/{number}/dequeue",
+            post(submit_dequeue),
+        )
+        .route(
+            "/{owner}/{repo}/changes/{number}/abandon",
+            post(submit_abandon),
+        )
+        .route("/{owner}/{repo}/landing", get(landing_page))
+        .route("/{owner}/{repo}/debt", get(debt_page))
+        .route("/{owner}/{repo}/debt/tasks", post(debt_tasks_action))
+        .route("/{owner}/{repo}/log", get(log_page))
+        .route("/{owner}/{repo}/settings", get(repo_settings_page))
+        .route("/{owner}/{repo}/settings/visibility", post(repo_visibility))
+        .route("/{owner}/{repo}/settings/rename", post(repo_rename))
+        .route("/{owner}/{repo}/settings/description", post(repo_describe))
+        .route("/{owner}/{repo}/settings/archive", post(repo_archive))
+        .route("/{owner}/{repo}/settings/delete", post(repo_delete))
+        .route("/{owner}/{repo}/settings/transfer", post(repo_transfer))
+        .route(
+            "/{owner}/{repo}/transfer",
+            get(transfer_page).post(transfer_answer),
+        )
+        .route("/{owner}/{repo}/lessons", get(lessons_page))
 }
 
 /// The stylesheet's content hash, fixed for the life of the binary.
@@ -256,12 +279,39 @@ async fn search_page(
     }
 }
 
-async fn new_page(Palette(theme): Palette, viewer: Viewer) -> Response {
-    views::new_repo(theme, &viewer, None).into_response()
+#[derive(Deserialize)]
+struct NewQuery {
+    #[serde(default)]
+    owner: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+async fn new_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    viewer: Viewer,
+    Query(query): Query<NewQuery>,
+) -> Response {
+    let mut owners = vec![viewer.0.to_string()];
+    owners.extend(
+        app.with_store(|s| s.teams_of(&viewer.0))
+            .unwrap_or_default(),
+    );
+    views::new_repo(
+        theme,
+        &viewer,
+        &owners,
+        query.owner.as_deref(),
+        query.error.as_deref(),
+    )
+    .into_response()
 }
 
 #[derive(Deserialize)]
 struct NewRepoForm {
+    #[serde(default)]
+    owner: String,
     #[serde(default)]
     name: String,
     #[serde(default)]
@@ -280,6 +330,22 @@ async fn create_from_form(
     Form(form): Form<NewRepoForm>,
 ) -> Response {
     let name = form.name.trim().to_owned();
+    let owner = match form.owner.trim() {
+        "" => None,
+        given => match cairn_core::PrincipalId::new(given) {
+            Some(id) => Some(id),
+            None => {
+                return Redirect::to("/new?error=That+owner+is+not+a+valid+name").into_response();
+            }
+        },
+    };
+    let full = format!("{}/{name}", owner.as_ref().unwrap_or(&viewer.0));
+    let mut owners = vec![viewer.0.to_string()];
+    owners.extend(
+        app.with_store(|s| s.teams_of(&viewer.0))
+            .unwrap_or_default(),
+    );
+    let chosen = owner.as_ref().map(|o| o.as_str());
     let branch = match form.default_branch.trim() {
         "" => "main".to_owned(),
         given => given.to_owned(),
@@ -287,32 +353,44 @@ async fn create_from_form(
     let source = form.source.trim().to_owned();
 
     let created = app.with_store(|store| {
-        store.check_new_repo(&viewer.0, &name, &branch)?;
+        store.check_new_repo(&viewer.0, owner.as_ref(), &name, &branch)?;
         Ok::<_, cairn_core::CoreError>(())
     });
     if let Err(err) = created {
-        return views::new_repo(theme, &viewer, Some(&humane(&err))).into_response();
+        return views::new_repo(theme, &viewer, &owners, chosen, Some(&humane(&err)))
+            .into_response();
     }
     if let Some(git) = app.git()
-        && let Err(err) = git.store.create_repo(&name, &branch, "sha1").await
+        && let Err(err) = git.store.create_repo(&full, &branch, "sha1").await
     {
-        return views::new_repo(theme, &viewer, Some(&err.to_string())).into_response();
+        return views::new_repo(theme, &viewer, &owners, chosen, Some(&err.to_string()))
+            .into_response();
     }
     let env = app.with_store(|store| {
-        store.create_repo(&viewer.0, &name, &branch, cairn_core::ObjectFormat::Sha1)
+        store.create_repo(
+            &viewer.0,
+            owner.as_ref(),
+            &name,
+            &branch,
+            cairn_core::ObjectFormat::Sha1,
+        )
     });
     match env {
         Ok(env) => app.publish(&env),
-        Err(err) => return views::new_repo(theme, &viewer, Some(&humane(&err))).into_response(),
+        Err(err) => {
+            return views::new_repo(theme, &viewer, &owners, chosen, Some(&humane(&err)))
+                .into_response();
+        }
     }
 
     if !source.is_empty() {
-        let outcome = import_into(&app, &viewer.0, &name, &branch, &source).await;
+        let outcome = import_into(&app, &viewer.0, &full, &branch, &source).await;
         if let Err(message) = outcome {
-            return views::new_repo(theme, &viewer, Some(&message)).into_response();
+            return views::new_repo(theme, &viewer, &owners, chosen, Some(&message))
+                .into_response();
         }
     }
-    Redirect::to(&format!("/{name}")).into_response()
+    Redirect::to(&format!("/{full}")).into_response()
 }
 
 /// Bring existing history in. Same path the API takes, so the import is
@@ -1782,6 +1860,70 @@ fn chrome_public(app: &AppState) -> Result<Chrome, cairn_core::CoreError> {
     })
 }
 
+/// An owner's page: a person or an organisation and what they own, as
+/// far as the reader may see. An old repository address that begins
+/// here is sent on by the old-names middleware, not by this handler.
+async fn owner_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    reader: Reader,
+    Path(owner): Path<String>,
+) -> Response {
+    let Some(owner_id) = PrincipalId::new(&owner) else {
+        return not_found();
+    };
+    let principal = match app.with_store(|s| s.principal(&owner_id)) {
+        Ok(Some(principal)) => principal,
+        Ok(None) => return not_found(),
+        Err(err) => return oops(err),
+    };
+    let who = match reader.0 {
+        Some(viewer) => Who::Signed(viewer),
+        None => match chrome_public(&app) {
+            Ok(chrome) => Who::Anonymous(chrome),
+            Err(err) => return oops(err),
+        },
+    };
+    let owned = match app.with_store(|s| s.repos_of_owner(&owner_id)) {
+        Ok(repos) => repos,
+        Err(err) => return oops(err),
+    };
+    let repos: Vec<Repo> = owned
+        .into_iter()
+        .filter(|repo| match &who {
+            Who::Anonymous(_) => repo.visibility == cairn_core::Visibility::Public,
+            Who::Signed(viewer) => readable(&app, viewer, &repo.name).is_ok(),
+        })
+        .collect();
+    let organisation = principal.kind == cairn_core::PrincipalKind::Team;
+    let members = if organisation {
+        app.with_store(|s| s.members_of(&owner_id))
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let may_create = match &who {
+        Who::Signed(viewer) => {
+            viewer.0 == owner_id
+                || viewer.1.admin
+                || (organisation
+                    && app
+                        .with_store(|s| s.is_team_member(&owner_id, &viewer.0))
+                        .unwrap_or(false))
+        }
+        Who::Anonymous(_) => false,
+    };
+    views::owner(
+        theme,
+        who.reading(),
+        &principal,
+        &repos,
+        &members,
+        may_create,
+    )
+    .into_response()
+}
+
 /// Who a repository page renders for, once the boundary has been checked.
 pub enum Who {
     Signed(Viewer),
@@ -2408,9 +2550,121 @@ pub(crate) fn humane(err: &cairn_core::CoreError) -> String {
     }
 }
 
+/// A repository's old address, from before it was renamed or before it
+/// carried its owner's name, says where it went: a request that found
+/// nothing and begins with a name the graph remembers is sent to the
+/// current name, with the rest of the path intact. Pages, the API and
+/// git all take the same turn, and git follows it on clone.
+pub(crate) async fn old_names(
+    State(app): State<AppState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let path = request.uri().path().to_owned();
+    let query = request.uri().query().map(|q| format!("?{q}"));
+    let headers = request.headers().clone();
+    let response = next.run(request).await;
+    let (prefix, rest) = ["/api/repos/", "/git/", "/"]
+        .into_iter()
+        .find_map(|prefix| path.strip_prefix(prefix).map(|rest| (prefix, rest)))
+        .unwrap_or(("/", path.as_str()));
+    // A page sends a stranger to sign in rather than say whether a
+    // repository exists; for a public repository's old name that stranger
+    // is better sent where it went.
+    let sent_to_sign_in = prefix == "/"
+        && response.status() == StatusCode::SEE_OTHER
+        && response
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|to| to.starts_with("/login"));
+    if response.status() != StatusCode::NOT_FOUND && !sent_to_sign_in {
+        return response;
+    }
+    let parts: Vec<&str> = rest.splitn(3, '/').collect();
+    let bare = |segment: &str| segment.strip_suffix(".git").unwrap_or(segment).to_owned();
+    // A former name is `owner/name`, or a single word from before owners.
+    let mut candidates: Vec<(String, &str)> = Vec::new();
+    if let [owner, name, ..] = parts[..]
+        && !owner.is_empty()
+        && !name.is_empty()
+    {
+        candidates.push((
+            format!("{owner}/{}", bare(name)),
+            parts.get(2).copied().unwrap_or(""),
+        ));
+    }
+    if let Some(first) = parts.first().filter(|first| !first.is_empty()) {
+        candidates.push((
+            bare(first),
+            rest.split_once('/').map_or("", |(_, tail)| tail),
+        ));
+    }
+    let suffix = if prefix == "/git/" && (path.contains(".git/") || path.ends_with(".git")) {
+        ".git"
+    } else {
+        ""
+    };
+    for (old, tail) in candidates {
+        let Ok(Some(current)) = app.with_store(|s| s.current_name_for(&old)) else {
+            continue;
+        };
+        // Where a repository went is known to whoever may read it there;
+        // to anyone else the old name is as empty as it was a moment ago.
+        let may_read = match requester(&app, prefix, &headers) {
+            Some(who) => app
+                .with_store(|s| s.readable(&who, &current))
+                .ok()
+                .flatten()
+                .is_some(),
+            None => app
+                .with_store(|s| s.repo(&current))
+                .ok()
+                .flatten()
+                .is_some_and(|repo| repo.visibility == cairn_core::Visibility::Public),
+        };
+        if !may_read {
+            return response;
+        }
+        let target = if tail.is_empty() {
+            format!("{prefix}{current}{suffix}")
+        } else {
+            format!("{prefix}{current}{suffix}/{tail}")
+        };
+        return Redirect::permanent(&format!("{target}{}", query.unwrap_or_default()))
+            .into_response();
+    }
+    response
+}
+
+/// Whoever is asking at this door, resolved the way the door resolves
+/// identity: the session cookie on the pages, the bearer token on the
+/// API, basic auth over git. `None` is a stranger.
+fn requester(app: &AppState, prefix: &str, headers: &HeaderMap) -> Option<PrincipalId> {
+    match prefix {
+        "/git/" => crate::git_http::reader(app, headers)
+            .ok()
+            .map(|(who, _)| who),
+        "/api/repos/" => headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .and_then(|token| resolve_bearer(app, token).ok())
+            .map(|(who, _)| who)
+            .or_else(|| {
+                app.dev_identity()
+                    .then(|| headers.get(crate::auth::PRINCIPAL_HEADER))
+                    .flatten()
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(PrincipalId::new)
+            }),
+        _ => viewer_from(headers, app).map(|viewer| viewer.0),
+    }
+}
+
 /// Rendered before the theme is known; `themed_fallbacks` re-renders it
 /// with the viewer's theme on the way out.
-fn not_found() -> Response {
+pub(crate) fn not_found() -> Response {
     (
         StatusCode::NOT_FOUND,
         [(FALLBACK, "not-found")],
@@ -2458,7 +2712,7 @@ async fn repo_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
     reader: Reader,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
 ) -> Response {
     render_tree(app, theme, reader, repo, String::new()).await
 }
@@ -2467,7 +2721,8 @@ async fn tree_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
     reader: Reader,
-    Path((repo, path)): Path<(String, String)>,
+    RepoName(repo): RepoName,
+    Path((_, _, path)): Path<(String, String, String)>,
 ) -> Response {
     render_tree(app, theme, reader, repo, path).await
 }
@@ -2666,7 +2921,8 @@ async fn blame_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
     reader: Reader,
-    Path((repo, path)): Path<(String, String)>,
+    RepoName(repo): RepoName,
+    Path((_, _, path)): Path<(String, String, String)>,
 ) -> Response {
     let Some(git) = app.git() else {
         return not_found();
@@ -2733,7 +2989,7 @@ async fn changes_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
     reader: Reader,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Query(query): Query<ChangesListQuery>,
 ) -> Response {
     let who = match read_repo(&app, reader, &repo) {
@@ -2778,7 +3034,8 @@ async fn change_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
     reader: Reader,
-    Path((repo, number)): Path<(String, i64)>,
+    RepoName(repo): RepoName,
+    Path((_, _, number)): Path<(String, String, i64)>,
     Query(query): Query<ChangeQuery>,
 ) -> Response {
     let who = match read_repo(&app, reader, &repo) {
@@ -2900,7 +3157,8 @@ struct ClaimForm {
 async fn submit_claim(
     State(app): State<AppState>,
     viewer: Viewer,
-    Path((repo, number)): Path<(String, i64)>,
+    RepoName(repo): RepoName,
+    Path((_, _, number)): Path<(String, String, i64)>,
     Form(form): Form<ClaimForm>,
 ) -> Response {
     let back = format!("/{repo}/changes/{number}");
@@ -2955,7 +3213,8 @@ struct VerdictForm {
 async fn submit_verdict(
     State(app): State<AppState>,
     viewer: Viewer,
-    Path((repo, number)): Path<(String, i64)>,
+    RepoName(repo): RepoName,
+    Path((_, _, number)): Path<(String, String, i64)>,
     Form(form): Form<VerdictForm>,
 ) -> Response {
     let back = format!("/{repo}/changes/{number}");
@@ -3002,7 +3261,8 @@ struct PreferForm {
 async fn submit_prefer(
     State(app): State<AppState>,
     viewer: Viewer,
-    Path((repo, number)): Path<(String, i64)>,
+    RepoName(repo): RepoName,
+    Path((_, _, number)): Path<(String, String, i64)>,
     Form(form): Form<PreferForm>,
 ) -> Response {
     let back = format!("/{repo}/changes/{number}");
@@ -3052,7 +3312,8 @@ struct ThreadForm {
 async fn submit_thread(
     State(app): State<AppState>,
     viewer: Viewer,
-    Path((repo, number)): Path<(String, i64)>,
+    RepoName(repo): RepoName,
+    Path((_, _, number)): Path<(String, String, i64)>,
     Form(form): Form<ThreadForm>,
 ) -> Response {
     let back = format!("/{repo}/changes/{number}");
@@ -3121,7 +3382,8 @@ struct ReplyForm {
 async fn submit_reply(
     State(app): State<AppState>,
     viewer: Viewer,
-    Path((repo, number, thread)): Path<(String, i64, String)>,
+    RepoName(repo): RepoName,
+    Path((_, _, number, thread)): Path<(String, String, i64, String)>,
     Form(form): Form<ReplyForm>,
 ) -> Response {
     let back = format!("/{repo}/changes/{number}");
@@ -3150,7 +3412,8 @@ struct ResolveForm {
 async fn submit_resolve(
     State(app): State<AppState>,
     viewer: Viewer,
-    Path((repo, number, thread)): Path<(String, i64, String)>,
+    RepoName(repo): RepoName,
+    Path((_, _, number, thread)): Path<(String, String, i64, String)>,
     Form(form): Form<ResolveForm>,
 ) -> Response {
     let back = format!("/{repo}/changes/{number}");
@@ -3186,7 +3449,8 @@ struct ReasonForm {
 async fn submit_dequeue(
     State(app): State<AppState>,
     viewer: Viewer,
-    Path((repo, number)): Path<(String, i64)>,
+    RepoName(repo): RepoName,
+    Path((_, _, number)): Path<(String, String, i64)>,
     Form(form): Form<ReasonForm>,
 ) -> Response {
     let back = format!("/{repo}/changes/{number}");
@@ -3215,7 +3479,8 @@ async fn submit_dequeue(
 async fn submit_abandon(
     State(app): State<AppState>,
     viewer: Viewer,
-    Path((repo, number)): Path<(String, i64)>,
+    RepoName(repo): RepoName,
+    Path((_, _, number)): Path<(String, String, i64)>,
     Form(form): Form<ReasonForm>,
 ) -> Response {
     let back = format!("/{repo}/changes/{number}");
@@ -3245,7 +3510,7 @@ struct DescribeForm {
 async fn repo_describe(
     State(app): State<AppState>,
     viewer: Viewer,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Form(form): Form<DescribeForm>,
 ) -> Response {
     let back = format!("/{repo}/settings");
@@ -3261,7 +3526,8 @@ async fn repo_describe(
 async fn submit_enqueue(
     State(app): State<AppState>,
     viewer: Viewer,
-    Path((repo, number)): Path<(String, i64)>,
+    RepoName(repo): RepoName,
+    Path((_, _, number)): Path<(String, String, i64)>,
 ) -> Response {
     let back = format!("/{repo}/changes/{number}");
     if let Err(response) = readable(&app, &viewer, &repo) {
@@ -3297,7 +3563,7 @@ async fn debt_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
     reader: Reader,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
 ) -> Response {
     let (record, who) = match read_repo(&app, reader, &repo) {
         Ok(found) => found,
@@ -3329,7 +3595,7 @@ struct PayDownForm {
 async fn debt_tasks_action(
     State(app): State<AppState>,
     viewer: Viewer,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Form(form): Form<PayDownForm>,
 ) -> Response {
     let back = format!("/{repo}/debt");
@@ -3345,7 +3611,7 @@ async fn landing_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
     reader: Reader,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
 ) -> Response {
     let (record, who) = match read_repo(&app, reader, &repo) {
         Ok(found) => found,
@@ -3467,7 +3733,7 @@ async fn lessons_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
     reader: Reader,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Query(query): Query<LessonQuery>,
 ) -> Response {
     let who = match read_repo(&app, reader, &repo) {
@@ -3495,7 +3761,7 @@ async fn repo_settings_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
     viewer: Viewer,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Query(flash): Query<Flash>,
 ) -> Response {
     let record = match readable(&app, &viewer, &repo) {
@@ -3904,7 +4170,7 @@ async fn repo_policy(
     State(app): State<AppState>,
     Palette(theme): Palette,
     viewer: Viewer,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     body: String,
 ) -> Response {
     let back = format!("/{repo}/settings");
@@ -3971,7 +4237,7 @@ struct MirrorForm {
 async fn repo_mirror(
     State(app): State<AppState>,
     viewer: Viewer,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Form(form): Form<MirrorForm>,
 ) -> Response {
     let back = format!("/{repo}/settings");
@@ -3991,7 +4257,7 @@ async fn repo_mirror(
 async fn repo_visibility(
     State(app): State<AppState>,
     viewer: Viewer,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Form(form): Form<VisibilityForm>,
 ) -> Response {
     let back = format!("/{repo}/settings");
@@ -4024,27 +4290,32 @@ struct RenameForm {
 async fn repo_rename(
     State(app): State<AppState>,
     viewer: Viewer,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Form(form): Form<RenameForm>,
 ) -> Response {
     let back = format!("/{repo}/settings");
     let to = form.to.trim().to_owned();
+    let full_to = match app.with_store(|s| s.repo(&repo)) {
+        Ok(Some(record)) => format!("{}/{to}", record.owner),
+        Ok(None) => return not_found(),
+        Err(err) => return oops(err),
+    };
     if let Err(err) = app.with_store(|s| s.check_rename(&viewer.0, &repo, &to)) {
         return flash(&back, &humane(&err));
     }
     if let Some(git) = app.git()
-        && let Err(err) = git.store.rename_repo(&repo, &to).await
+        && let Err(err) = git.store.rename_repo(&repo, &full_to).await
     {
         return flash(&back, &err.to_string());
     }
     match app.with_store(|s| s.rename_repo(&viewer.0, &repo, &to)) {
         Ok(env) => {
             app.publish(&env);
-            Redirect::to(&format!("/{to}/settings?done=1")).into_response()
+            Redirect::to(&format!("/{full_to}/settings?done=1")).into_response()
         }
         Err(err) => {
             if let Some(git) = app.git() {
-                let _ = git.store.rename_repo(&to, &repo).await;
+                let _ = git.store.rename_repo(&full_to, &repo).await;
             }
             flash(&back, &humane(&err))
         }
@@ -4059,7 +4330,7 @@ struct ArchiveForm {
 async fn repo_archive(
     State(app): State<AppState>,
     viewer: Viewer,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Form(form): Form<ArchiveForm>,
 ) -> Response {
     let back = format!("/{repo}/settings");
@@ -4080,7 +4351,7 @@ struct DeleteForm {
 async fn repo_delete(
     State(app): State<AppState>,
     viewer: Viewer,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Form(form): Form<DeleteForm>,
 ) -> Response {
     let back = format!("/{repo}/settings");
@@ -4099,7 +4370,7 @@ async fn repo_delete(
 async fn repo_transfer(
     State(app): State<AppState>,
     viewer: Viewer,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Form(form): Form<TransferForm>,
 ) -> Response {
     let back = format!("/{repo}/settings");
@@ -4128,7 +4399,7 @@ async fn transfer_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
     viewer: Viewer,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Query(flash): Query<Flash>,
 ) -> Response {
     let record = match app.with_store(|s| s.repo(&repo)) {
@@ -4148,26 +4419,56 @@ struct AnswerForm {
 async fn transfer_answer(
     State(app): State<AppState>,
     viewer: Viewer,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Form(form): Form<AnswerForm>,
 ) -> Response {
-    let result = match form.action.as_str() {
-        "accept" => app.with_store(|s| s.accept_transfer(&viewer.0, &repo)),
-        "decline" => app.with_store(|s| s.decline_transfer(&viewer.0, &repo)),
-        _ => return flash(&format!("/{repo}/transfer"), "Unknown action"),
-    };
-    match result {
-        Ok(env) => {
-            app.publish(&env);
-            let to = if form.action == "accept" {
-                format!("/{repo}")
-            } else {
-                "/inbox".to_owned()
+    match form.action.as_str() {
+        "accept" => {
+            // The repository takes its new owner's name: the directory
+            // moves first, and moves back if the graph refuses.
+            let record = match app.with_store(|s| s.repo(&repo)) {
+                Ok(Some(record)) => record,
+                Ok(None) => return not_found(),
+                Err(err) => return oops(err),
             };
-            Redirect::to(&to).into_response()
+            let Some(new_name) = crate::routes::accepted_name(&record) else {
+                return flash(
+                    &format!("/{repo}/transfer"),
+                    "This repository is not on offer",
+                );
+            };
+            if let Some(git) = app.git()
+                && let Err(err) = git.store.rename_repo(&repo, &new_name).await
+            {
+                return oops(err);
+            }
+            match app.with_store(|s| s.accept_transfer(&viewer.0, &repo)) {
+                Ok(envs) => {
+                    for env in &envs {
+                        app.publish(env);
+                    }
+                    Redirect::to(&format!("/{new_name}")).into_response()
+                }
+                Err(err) => {
+                    if let Some(git) = app.git() {
+                        let _ = git.store.rename_repo(&new_name, &repo).await;
+                    }
+                    match err {
+                        cairn_core::CoreError::NotFound(_) => not_found(),
+                        err => flash(&format!("/{repo}/transfer"), &humane(&err)),
+                    }
+                }
+            }
         }
-        Err(cairn_core::CoreError::NotFound(_)) => not_found(),
-        Err(err) => flash(&format!("/{repo}/transfer"), &humane(&err)),
+        "decline" => match app.with_store(|s| s.decline_transfer(&viewer.0, &repo)) {
+            Ok(env) => {
+                app.publish(&env);
+                Redirect::to("/inbox").into_response()
+            }
+            Err(cairn_core::CoreError::NotFound(_)) => not_found(),
+            Err(err) => flash(&format!("/{repo}/transfer"), &humane(&err)),
+        },
+        _ => flash(&format!("/{repo}/transfer"), "Unknown action"),
     }
 }
 
@@ -4175,7 +4476,7 @@ async fn log_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
     reader: Reader,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Query(query): Query<LogQuery>,
 ) -> Response {
     let who = match read_repo(&app, reader, &repo) {

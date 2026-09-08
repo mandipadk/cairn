@@ -15,7 +15,7 @@ async fn open_changes(forge: &Forge, n: usize) -> Vec<String> {
             "POST",
             "/api/changes",
             &forge.scout_token,
-            Some(json!({ "repo": "demo", "target": "main", "title": format!("Change {i}") })),
+            Some(json!({ "repo": "ada/demo", "target": "main", "title": format!("Change {i}") })),
         )
         .await;
         ids.push(change["id"].as_str().unwrap().to_owned());
@@ -50,9 +50,16 @@ async fn changes_say_when_and_the_list_filters_and_pages() {
     .await;
 
     // Whole list, as before; pages, newest first, with a cursor.
-    let (_, all) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, all) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     assert_eq!(all.as_array().unwrap().len(), 5);
-    let (_, page) = api(app, "GET", "/api/repos/demo/changes?limit=2", "ada", None).await;
+    let (_, page) = api(
+        app,
+        "GET",
+        "/api/repos/ada/demo/changes?limit=2",
+        "ada",
+        None,
+    )
+    .await;
     let numbers: Vec<i64> = page["changes"]
         .as_array()
         .unwrap()
@@ -64,7 +71,7 @@ async fn changes_say_when_and_the_list_filters_and_pages() {
     let (_, next) = api(
         app,
         "GET",
-        "/api/repos/demo/changes?limit=2&before=4",
+        "/api/repos/ada/demo/changes?limit=2&before=4",
         "ada",
         None,
     )
@@ -79,7 +86,7 @@ async fn changes_say_when_and_the_list_filters_and_pages() {
     let (_, last) = api(
         app,
         "GET",
-        "/api/repos/demo/changes?limit=2&before=2",
+        "/api/repos/ada/demo/changes?limit=2&before=2",
         "ada",
         None,
     )
@@ -89,7 +96,7 @@ async fn changes_say_when_and_the_list_filters_and_pages() {
     let (_, open_only) = api(
         app,
         "GET",
-        "/api/repos/demo/changes?limit=10&state=open",
+        "/api/repos/ada/demo/changes?limit=10&state=open",
         "ada",
         None,
     )
@@ -98,18 +105,18 @@ async fn changes_say_when_and_the_list_filters_and_pages() {
 
     // The page: filters, when, and the message.
     let (_, cookie) = sign_in_as(&forge, "ada").await;
-    let (_, list) = page_with_cookie(app, "/demo/changes", &cookie).await;
+    let (_, list) = page_with_cookie(app, "/ada/demo/changes", &cookie).await;
     assert!(
-        list.contains(r#"href="/demo/changes?state=open""#),
+        list.contains(r#"href="/ada/demo/changes?state=open""#),
         "{list}"
     );
     assert!(list.contains("opened "), "{list}");
-    let (_, abandoned) = page_with_cookie(app, "/demo/changes?state=abandoned", &cookie).await;
+    let (_, abandoned) = page_with_cookie(app, "/ada/demo/changes?state=abandoned", &cookie).await;
     assert!(
         abandoned.contains("Change 4") && !abandoned.contains("Change 3"),
         "{abandoned}"
     );
-    let (_, page) = page_with_cookie(app, "/demo/changes/1", &cookie).await;
+    let (_, page) = page_with_cookie(app, "/ada/demo/changes/1", &cookie).await;
     assert!(page.contains("Why this exists, in a paragraph."), "{page}");
     assert!(page.contains("moved "), "{page}");
 }
@@ -123,7 +130,7 @@ async fn the_interdiff_shows_only_what_moved_between_revisions() {
         &[
             "clone",
             "-q",
-            &format!("http://scout:{}@{addr}/git/demo", forge.scout_token),
+            &format!("http://scout:{}@{addr}/git/ada/demo", forge.scout_token),
             "wc",
         ],
     );
@@ -135,14 +142,14 @@ async fn the_interdiff_shows_only_what_moved_between_revisions() {
     git(&wc, &["commit", "-q", "--amend", "--no-edit"]);
     git(&wc, &["push", "-q", "origin", "HEAD:refs/for/main"]);
     let (_, cookie) = sign_in_as(&forge, "ada").await;
-    let (status, full) = page_with_cookie(app, "/demo/changes/1?r=2", &cookie).await;
+    let (status, full) = page_with_cookie(app, "/ada/demo/changes/1?r=2", &cookie).await;
     assert_eq!(status, StatusCode::OK);
     assert!(full.contains("a.txt") && full.contains("b.txt"), "{full}");
     assert!(
         full.contains("?r=2&amp;vs=1"),
         "the page offers the interdiff: {full}"
     );
-    let (_, inter) = page_with_cookie(app, "/demo/changes/1?r=2&vs=1", &cookie).await;
+    let (_, inter) = page_with_cookie(app, "/ada/demo/changes/1?r=2&vs=1", &cookie).await;
     assert!(
         inter.contains("b.txt") && !inter.contains("alpha"),
         "{inter}"
@@ -167,16 +174,16 @@ async fn the_page_can_dequeue_and_abandon_and_a_repository_can_say_what_it_is_fo
     let (_, cookie) = sign_in_as(&forge, "ada").await;
     let (status, location) = post_form(
         app,
-        "/demo/changes/1/abandon",
+        "/ada/demo/changes/1/abandon",
         &cookie,
         "reason=Superseded+by+%232",
     )
     .await;
     assert_eq!(status, StatusCode::SEE_OTHER, "{location}");
-    assert_eq!(location, "/demo/changes/1");
+    assert_eq!(location, "/ada/demo/changes/1");
     let (_, change) = api(app, "GET", &format!("/api/changes/{id}"), "ada", None).await;
     assert_eq!(change["state"], "abandoned");
-    let (_, page) = page_with_cookie(app, "/demo/changes/1", &cookie).await;
+    let (_, page) = page_with_cookie(app, "/ada/demo/changes/1", &cookie).await;
     assert!(
         !page.contains("Abandon this change"),
         "no way out of a closed change: {page}"
@@ -184,20 +191,20 @@ async fn the_page_can_dequeue_and_abandon_and_a_repository_can_say_what_it_is_fo
 
     let (status, location) = post_form(
         app,
-        "/demo/settings/description",
+        "/ada/demo/settings/description",
         &cookie,
         "description=The+forge+that+hosts+itself.",
     )
     .await;
     assert_eq!(status, StatusCode::SEE_OTHER, "{location}");
-    let (_, repo) = api(app, "GET", "/api/repos/demo", "ada", None).await;
+    let (_, repo) = api(app, "GET", "/api/repos/ada/demo", "ada", None).await;
     assert_eq!(repo["description"], "The forge that hosts itself.");
-    let (_, home) = page_with_cookie(app, "/demo", &cookie).await;
+    let (_, home) = page_with_cookie(app, "/ada/demo", &cookie).await;
     assert!(home.contains("The forge that hosts itself."), "{home}");
     let (status, _) = api_with_token(
         app,
         "POST",
-        "/api/repos/demo/description",
+        "/api/repos/ada/demo/description",
         &forge.scout_token,
         Some(json!({ "description": "mine now" })),
     )

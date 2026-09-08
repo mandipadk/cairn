@@ -14,7 +14,7 @@ async fn open_session(forge: &Forge) -> (String, String) {
         "POST",
         "/api/tasks",
         &forge.ada_token,
-        Some(json!({ "title": "Broker work", "spec": "Do the work in demo.", "repo": "demo" })),
+        Some(json!({ "title": "Broker work", "spec": "Do the work in demo.", "repo": "ada/demo" })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{task}");
@@ -60,7 +60,7 @@ async fn a_session_credential_carries_its_scope_and_dies_with_the_session() {
     let (status, drawn) = credential(&forge, &session, json!({ "minutes": 30 })).await;
     assert_eq!(status, StatusCode::OK, "{drawn}");
     let token = drawn["token"].as_str().unwrap().to_owned();
-    assert_eq!(drawn["scope"]["repo"], "demo");
+    assert_eq!(drawn["scope"]["repo"], "ada/demo");
     assert_eq!(drawn["scope"]["session"], session);
     let actions = drawn["scope"]["actions"].as_array().unwrap();
     assert!(
@@ -78,7 +78,9 @@ async fn a_session_credential_carries_its_scope_and_dies_with_the_session() {
         "POST",
         "/api/changes",
         &token,
-        Some(json!({ "repo": "demo", "target": "main", "title": "Under a session credential" })),
+        Some(
+            json!({ "repo": "ada/demo", "target": "main", "title": "Under a session credential" }),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{change}");
@@ -90,7 +92,7 @@ async fn a_session_credential_carries_its_scope_and_dies_with_the_session() {
         "POST",
         "/api/changes",
         &forge.scout_token,
-        Some(json!({ "repo": "demo", "target": "main", "title": "Under the standing token" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "Under the standing token" })),
     )
     .await;
     assert!(plain["event"].get("via").is_none(), "{plain}");
@@ -110,7 +112,7 @@ async fn a_session_credential_carries_its_scope_and_dies_with_the_session() {
         "POST",
         "/api/changes",
         &token,
-        Some(json!({ "repo": "other", "target": "main", "title": "Reaching" })),
+        Some(json!({ "repo": "ada/other", "target": "main", "title": "Reaching" })),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
@@ -118,14 +120,14 @@ async fn a_session_credential_carries_its_scope_and_dies_with_the_session() {
         refused["error"].as_str().unwrap().contains("outside it"),
         "{refused}"
     );
-    let (status, _) = api_with_token(app, "GET", "/api/repos/other", &token, None).await;
+    let (status, _) = api_with_token(app, "GET", "/api/repos/ada/other", &token, None).await;
     assert_eq!(
         status,
         StatusCode::NOT_FOUND,
         "a scoped credential cannot even see other repositories"
     );
     let (status, _) =
-        api_with_token(app, "GET", "/api/repos/other", &forge.scout_token, None).await;
+        api_with_token(app, "GET", "/api/repos/ada/other", &forge.scout_token, None).await;
     assert_eq!(status, StatusCode::OK, "the standing token still can");
     // A verb it does not carry is refused before grants are consulted.
     let change_id = change["id"].as_str().unwrap();
@@ -149,16 +151,17 @@ async fn a_session_credential_carries_its_scope_and_dies_with_the_session() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{ended}");
-    let (status, _) = api_with_token(app, "GET", "/api/repos/demo", &token, None).await;
+    let (status, _) = api_with_token(app, "GET", "/api/repos/ada/demo", &token, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    let (status, _) = api_with_token(app, "GET", "/api/repos/demo", &forge.scout_token, None).await;
+    let (status, _) =
+        api_with_token(app, "GET", "/api/repos/ada/demo", &forge.scout_token, None).await;
     assert_eq!(status, StatusCode::OK);
     let (status, _) = credential(&forge, &session, json!({})).await;
     assert_eq!(status, StatusCode::CONFLICT, "a dead session draws nothing");
 
     // The log says what was drawn and that it died, and never the secret.
     let (_, cookie) = sign_in_as(&forge, "ada").await;
-    let (_, log) = page_with_cookie(app, "/demo/log", &cookie).await;
+    let (_, log) = page_with_cookie(app, "/ada/demo/log", &cookie).await;
     assert!(log.contains("drew a credential from session"), "{log}");
     assert!(log.contains("credential died with it"), "{log}");
     assert!(!log.contains(&token), "{log}");
@@ -203,7 +206,7 @@ async fn a_repository_can_insist_that_agents_act_inside_sessions() {
     let (status, body) = api(
         app,
         "POST",
-        "/api/repos/demo/policy",
+        "/api/repos/ada/demo/policy",
         "ada",
         Some(json!({
             "require_executed_check": true,
@@ -221,7 +224,7 @@ async fn a_repository_can_insist_that_agents_act_inside_sessions() {
         "POST",
         "/api/changes",
         &forge.scout_token,
-        Some(json!({ "repo": "demo", "target": "main", "title": "Standing" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "Standing" })),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
@@ -241,7 +244,7 @@ async fn a_repository_can_insist_that_agents_act_inside_sessions() {
         "POST",
         "/api/changes",
         drawn["token"].as_str().unwrap(),
-        Some(json!({ "repo": "demo", "target": "main", "title": "In session" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "In session" })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{opened}");
@@ -251,7 +254,7 @@ async fn a_repository_can_insist_that_agents_act_inside_sessions() {
         "POST",
         "/api/changes",
         "ada",
-        Some(json!({ "repo": "demo", "target": "main", "title": "By hand" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "By hand" })),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -271,7 +274,7 @@ async fn git_takes_a_session_credential_and_refuses_it_after_the_session() {
         &forge.work,
         &[
             "clone",
-            &format!("http://scout:{token}@{addr}/git/demo"),
+            &format!("http://scout:{token}@{addr}/git/ada/demo"),
             "wc",
         ],
     );
@@ -281,7 +284,7 @@ async fn git_takes_a_session_credential_and_refuses_it_after_the_session() {
     let (_, changes) = api_with_token(
         &forge.app,
         "GET",
-        "/api/repos/demo/changes",
+        "/api/repos/ada/demo/changes",
         &forge.ada_token,
         None,
     )

@@ -70,6 +70,22 @@ pub(crate) mod raw {
         .transpose()
     }
 
+    /// Whether `member` is on the team `team`.
+    pub fn is_team_member(conn: &Connection, team: &str, member: &str) -> CoreResult<bool> {
+        Ok(conn
+            .prepare_cached("SELECT 1 FROM team_members WHERE team = ?1 AND member = ?2")?
+            .exists(rusqlite::params![team, member])?)
+    }
+
+    /// What a repository once called `old` is called now, if it was renamed.
+    pub fn current_name_for(conn: &Connection, old: &str) -> CoreResult<Option<String>> {
+        use rusqlite::OptionalExtension;
+        Ok(conn
+            .prepare_cached("SELECT repo FROM former_names WHERE name = ?1")?
+            .query_row(rusqlite::params![old], |row| row.get(0))
+            .optional()?)
+    }
+
     pub fn repos(conn: &Connection) -> CoreResult<Vec<Repo>> {
         let rows = conn
             .prepare_cached(
@@ -1365,6 +1381,25 @@ pub(crate) mod raw {
 impl Store {
     pub fn principal(&self, id: &PrincipalId) -> CoreResult<Option<Principal>> {
         raw::principal(&self.conn, id.as_str())
+    }
+
+    /// Everything `owner` owns, by name.
+    pub fn repos_of_owner(&self, owner: &PrincipalId) -> CoreResult<Vec<Repo>> {
+        let mut repos: Vec<Repo> = raw::repos(&self.conn)?
+            .into_iter()
+            .filter(|r| r.owner == *owner)
+            .collect();
+        repos.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(repos)
+    }
+
+    /// What a repository once called `old` is called now, if it was renamed.
+    pub fn current_name_for(&self, old: &str) -> CoreResult<Option<String>> {
+        raw::current_name_for(&self.conn, old)
+    }
+
+    pub fn is_team_member(&self, team: &PrincipalId, member: &PrincipalId) -> CoreResult<bool> {
+        raw::is_team_member(&self.conn, team.as_str(), member.as_str())
     }
 
     pub fn repo(&self, name: &str) -> CoreResult<Option<Repo>> {

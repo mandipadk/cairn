@@ -100,7 +100,7 @@ async fn web_ui_full_journey() {
 
     // Signed out, every page is one redirect from the door.
     let mut browser = Browser::new(base.clone());
-    let (status, _, location) = browser.get("/demo");
+    let (status, _, location) = browser.get("/ada/demo");
     assert_eq!(status, 303);
     assert_eq!(location.as_deref(), Some("/login"));
     let (_, body, _) = browser.get("/login");
@@ -140,7 +140,7 @@ async fn web_ui_full_journey() {
         "and the repositories are still there"
     );
 
-    let (_, body, _) = ada.get("/demo");
+    let (_, body, _) = ada.get("/ada/demo");
     assert!(body.contains("Empty repository"));
 
     // Push a change whose title is actively hostile.
@@ -148,7 +148,7 @@ async fn web_ui_full_journey() {
         &forge.work,
         &[
             "clone",
-            &format!("http://scout:x@{}/git/demo", forge.addr),
+            &format!("http://scout:x@{}/git/ada/demo", forge.addr),
             "wc",
         ],
     );
@@ -162,17 +162,17 @@ async fn web_ui_full_journey() {
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
 
     // The list and the change page render it inert.
-    let (_, body, _) = ada.get("/demo/changes");
+    let (_, body, _) = ada.get("/ada/demo/changes");
     assert!(body.contains("&lt;script&gt;"));
     assert!(!body.contains("<script>alert"));
-    let (_, body, _) = ada.get("/demo/changes/1");
+    let (_, body, _) = ada.get("/ada/demo/changes/1");
     assert!(body.contains("Not ready"));
     assert!(body.contains("passing test claim"));
     assert!(body.contains("greeting.txt"), "diff should show the file");
 
     // Judgment through the form; the claim arrives over the API.
     let (status, _) = ada.post_form(
-        "/demo/changes/1/verdict",
+        "/ada/demo/changes/1/verdict",
         &[
             ("revision", "1"),
             ("domain", "correctness"),
@@ -181,9 +181,9 @@ async fn web_ui_full_journey() {
         ],
     );
     assert_eq!(status, 303);
-    let (_, body, _) = ada.get("/demo/changes/1");
+    let (_, body, _) = ada.get("/ada/demo/changes/1");
     assert!(body.contains("Readable and inert."));
-    let (status, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (status, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     assert_eq!(status, StatusCode::OK);
     let change_id = changes[0]["id"].as_str().unwrap().to_owned();
     let (status, _) = api(
@@ -202,35 +202,35 @@ async fn web_ui_full_journey() {
 
     // While it is open, the landing page ranks it by the attention
     // engine and says what the ranking is made of.
-    let (_, body, _) = ada.get("/demo/landing");
+    let (_, body, _) = ada.get("/ada/demo/landing");
     assert!(
         body.contains("nobody re-ran") && body.contains("declared gap"),
         "needs-you should explain itself with signals"
     );
 
     // Ready — enqueue from the page, and the train lands it.
-    let (_, body, _) = ada.get("/demo/changes/1");
+    let (_, body, _) = ada.get("/ada/demo/changes/1");
     assert!(body.contains("Ready"));
-    let (status, _) = ada.post_form("/demo/changes/1/enqueue", &[]);
+    let (status, _) = ada.post_form("/ada/demo/changes/1/enqueue", &[]);
     assert_eq!(status, 303);
     wait_for(app, "the enqueued change to land", async |app: &Router| {
-        let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+        let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
         changes[0]["state"] == "merged"
     })
     .await;
 
     // The whole app agrees: change merged, landing tells the story,
     // the tree now exists, and the file renders escaped.
-    let (_, body, _) = ada.get("/demo/changes/1");
+    let (_, body, _) = ada.get("/ada/demo/changes/1");
     assert!(body.contains("merged"));
-    let (_, body, _) = ada.get("/demo/landing");
+    let (_, body, _) = ada.get("/ada/demo/landing");
     assert!(body.contains("landed"));
-    let (_, body, _) = ada.get("/demo");
+    let (_, body, _) = ada.get("/ada/demo");
     assert!(body.contains("greeting.txt"));
     assert!(!body.contains("Empty repository"));
-    let (_, body, _) = ada.get("/demo/tree/greeting.txt");
+    let (_, body, _) = ada.get("/ada/demo/tree/greeting.txt");
     assert!(body.contains("hello"));
-    let (_, body, _) = ada.get("/demo/log");
+    let (_, body, _) = ada.get("/ada/demo/log");
     assert!(
         body.contains("landed"),
         "the log says what happened in words: {body}"
@@ -241,13 +241,13 @@ async fn web_ui_full_journey() {
     );
 
     // Unknown paths are a page, not a stack trace.
-    let (status, _, _) = ada.get("/demo/changes/999");
+    let (status, _, _) = ada.get("/ada/demo/changes/999");
     assert_eq!(status, 404);
     let (status, _, _) = ada.get("/nosuchrepo");
     assert_eq!(status, 404);
 
     // Dark is what a fresh viewer gets; the toggle switches and sticks.
-    let (_, body, _) = ada.get("/demo");
+    let (_, body, _) = ada.get("/ada/demo");
     assert!(
         body.contains(r#"data-theme="dark""#),
         "dark must be the default palette"
@@ -256,18 +256,18 @@ async fn web_ui_full_journey() {
         body.contains(">Light<"),
         "the switch offers the other palette"
     );
-    let (status, _) = ada.post_form("/theme", &[("to", "light"), ("back", "/demo")]);
+    let (status, _) = ada.post_form("/theme", &[("to", "light"), ("back", "/ada/demo")]);
     assert_eq!(status, 303);
-    let (_, body, _) = ada.get("/demo");
+    let (_, body, _) = ada.get("/ada/demo");
     assert!(
         body.contains(r#"data-theme="light""#),
         "the choice must persist"
     );
     assert!(body.contains(">Dark<"));
-    ada.post_form("/theme", &[("to", "dark"), ("back", "/demo")]);
+    ada.post_form("/theme", &[("to", "dark"), ("back", "/ada/demo")]);
 
     // The file view numbers its lines and names the change that landed it.
-    let (_, body, _) = ada.get("/demo/tree/greeting.txt");
+    let (_, body, _) = ada.get("/ada/demo/tree/greeting.txt");
     assert!(body.contains("1 lines") || body.contains("2 lines"));
     assert!(
         body.contains("last landed by"),
@@ -276,16 +276,16 @@ async fn web_ui_full_journey() {
     assert!(body.contains(r#"class="cline""#), "lines are numbered rows");
 
     // Once it lands there is genuinely nothing for a human to do here.
-    let (status, body, _) = ada.get("/demo/landing");
+    let (status, body, _) = ada.get("/ada/demo/landing");
     assert_eq!(status, 200);
     assert!(body.contains("Nothing is waiting on a human."));
 
     // The brief counts what happened; the lessons page keeps what
     // attempts learned, and both are searchable from the page.
-    let (status, body, _) = ada.get("/demo/lessons");
+    let (status, body, _) = ada.get("/ada/demo/lessons");
     assert_eq!(status, 200);
     assert!(body.contains("Has anyone tried this before?"));
-    let (_, body, _) = ada.get("/demo/landing");
+    let (_, body, _) = ada.get("/ada/demo/landing");
     assert!(
         body.contains("counted from the log"),
         "the brief should say where its numbers come from"
@@ -293,12 +293,12 @@ async fn web_ui_full_journey() {
     assert!(body.contains("The train landed") || body.contains("Nothing has landed"));
 
     // A change nobody argues about shows no disagreement section.
-    let (_, body, _) = ada.get("/demo/changes/1");
+    let (_, body, _) = ada.get("/ada/demo/changes/1");
     assert!(!body.contains("Reviewers disagree"));
 
     // Blame answers what was known, not just who typed: the line's
     // change, and the gap its claim declared.
-    let (status, body, _) = ada.get("/demo/blame/greeting.txt");
+    let (status, body, _) = ada.get("/ada/demo/blame/greeting.txt");
     assert_eq!(status, 200);
     assert!(body.contains("Declared gaps"), "gaps section should render");
     assert!(
@@ -306,7 +306,7 @@ async fn web_ui_full_journey() {
         "the gap a claim declared should surface on the file that inherited it"
     );
     assert!(
-        body.contains("/demo/changes/1"),
+        body.contains("/ada/demo/changes/1"),
         "each line links to its change"
     );
 
@@ -337,7 +337,7 @@ async fn web_ui_full_journey() {
     let (status, _) = ada.post_form("/logout", &[]);
     assert_eq!(status, 303);
     let signed_out = Browser::new(base);
-    let (status, _, location) = signed_out.get("/demo");
+    let (status, _, location) = signed_out.get("/ada/demo");
     assert_eq!(status, 303);
     assert_eq!(location.as_deref(), Some("/login"));
 }

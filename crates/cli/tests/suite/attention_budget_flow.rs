@@ -10,7 +10,7 @@ async fn set_budget(forge: &Forge, budget: Value) {
     let (status, body) = api(
         &forge.app,
         "POST",
-        "/api/repos/demo/policy",
+        "/api/repos/ada/demo/policy",
         "ada",
         Some(json!({
             "require_executed_check": false,
@@ -31,7 +31,7 @@ async fn argued_change(forge: &Forge, title: &str) -> String {
         "POST",
         "/api/changes",
         &forge.scout_token,
-        Some(json!({ "repo": "demo", "target": "main", "title": title })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": title })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{change}");
@@ -59,7 +59,7 @@ async fn draw(forge: &Forge, day: &str) -> Value {
     let (status, body) = api(
         &forge.app,
         "POST",
-        &format!("/api/repos/demo/attention/draw?day={day}"),
+        &format!("/api/repos/ada/demo/attention/draw?day={day}"),
         "ada",
         None,
     )
@@ -84,18 +84,25 @@ async fn the_budget_draws_the_top_change_a_day_and_the_draw_waits_for_a_human() 
     let second = argued_change(&forge, "Second argued").await;
 
     // Without a budget nothing is drawn, whatever wants attention.
-    let (status, nothing) = api(app, "POST", "/api/repos/demo/attention/draw", "ada", None).await;
+    let (status, nothing) = api(
+        app,
+        "POST",
+        "/api/repos/ada/demo/attention/draw",
+        "ada",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(nothing["drawn"].as_array().unwrap().len(), 0);
 
     set_budget(&forge, json!(1)).await;
-    let (_, before) = api(app, "GET", "/api/repos/demo/attention", "ada", None).await;
+    let (_, before) = api(app, "GET", "/api/repos/ada/demo/attention", "ada", None).await;
     assert_eq!(
         before.as_array().unwrap().len(),
         2,
         "both argued changes want attention: {before}"
     );
-    let (_, policy) = api(app, "GET", "/api/repos/demo/policy", "ada", None).await;
+    let (_, policy) = api(app, "GET", "/api/repos/ada/demo/policy", "ada", None).await;
     assert_eq!(policy["attention_budget"], 1, "{policy}");
     let today = draw(&forge, "2031-01-01").await;
     let drawn = today["drawn"].as_array().unwrap();
@@ -120,7 +127,7 @@ async fn the_budget_draws_the_top_change_a_day_and_the_draw_waits_for_a_human() 
     );
 
     // The draw shows where attention is listed, and holds the change.
-    let (_, items) = api(app, "GET", "/api/repos/demo/attention", "ada", None).await;
+    let (_, items) = api(app, "GET", "/api/repos/ada/demo/attention", "ada", None).await;
     let item = items
         .as_array()
         .unwrap()
@@ -216,7 +223,7 @@ async fn the_budget_draws_the_top_change_a_day_and_the_draw_waits_for_a_human() 
     let (_, cookie) = sign_in_as(&forge, "ada").await;
     let (_, inbox) = page_with_cookie(app, "/inbox", &cookie).await;
     assert!(inbox.contains("was drawn for your look"), "{inbox}");
-    let (_, log) = page_with_cookie(app, "/demo/log", &cookie).await;
+    let (_, log) = page_with_cookie(app, "/ada/demo/log", &cookie).await;
     assert!(log.contains("the policy drew"), "{log}");
     assert!(log.contains("for a human look"), "{log}");
     let (_, home) = page_with_cookie(app, "/", &cookie).await;
@@ -231,7 +238,7 @@ async fn drawing_takes_landing_authority() {
     let (status, _) = api_with_token(
         &forge.app,
         "POST",
-        "/api/repos/demo/attention/draw",
+        "/api/repos/ada/demo/attention/draw",
         &forge.scout_token,
         None,
     )
@@ -250,7 +257,7 @@ async fn the_train_spends_the_budget_for_today_on_its_own() {
         app,
         "the train to draw today's look",
         async |app: &axum::Router| {
-            let (_, items) = api(app, "GET", "/api/repos/demo/attention", "ada", None).await;
+            let (_, items) = api(app, "GET", "/api/repos/ada/demo/attention", "ada", None).await;
             items
                 .as_array()
                 .unwrap()

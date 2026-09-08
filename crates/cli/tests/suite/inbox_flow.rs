@@ -17,7 +17,7 @@ async fn work_on_your_change_lands_in_your_inbox_and_yours_alone() {
         "POST",
         "/api/changes",
         &forge.scout_token,
-        Some(json!({ "repo": "demo", "target": "main", "title": "Scout's change" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "Scout's change" })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{change}");
@@ -129,7 +129,7 @@ async fn the_page_shows_the_count_and_the_words() {
         "POST",
         "/api/changes",
         &forge.scout_token,
-        Some(json!({ "repo": "demo", "target": "main", "title": "Scout's change" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "Scout's change" })),
     )
     .await;
 
@@ -137,7 +137,7 @@ async fn the_page_shows_the_count_and_the_words() {
     let (status, page) = page_with_cookie(app, "/inbox", &cookie).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
-        page.contains("scout opened #1 in demo"),
+        page.contains("scout opened #1 in ada/demo"),
         "the notice reads as a sentence"
     );
     assert!(page.contains("1 unread"));
@@ -146,7 +146,7 @@ async fn the_page_shows_the_count_and_the_words() {
         "a section page is not a repository"
     );
     assert!(
-        page.contains(r#"href="/demo/changes/1""#),
+        page.contains(r#"href="/ada/demo/changes/1""#),
         "a notice links to its subject"
     );
     // The sidebar count is the same number, everywhere.

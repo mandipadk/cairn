@@ -10,17 +10,17 @@ use serde_json::json;
 /// and a session, filled in for `demo` once the fixture exists.
 fn read_paths(change: &str, task: &str, session: &str) -> Vec<String> {
     [
-        "/api/repos/demo".to_owned(),
-        "/api/repos/demo/changes".to_owned(),
-        "/api/repos/demo/changes/1".to_owned(),
-        "/api/repos/demo/queue".to_owned(),
-        "/api/repos/demo/attention".to_owned(),
-        "/api/repos/demo/awaiting-verification".to_owned(),
-        "/api/repos/demo/conflicts?paths=src".to_owned(),
-        "/api/repos/demo/leases".to_owned(),
-        "/api/repos/demo/policy".to_owned(),
-        "/api/repos/demo/mirror".to_owned(),
-        "/api/lessons?repo=demo".to_owned(),
+        "/api/repos/ada/demo".to_owned(),
+        "/api/repos/ada/demo/changes".to_owned(),
+        "/api/repos/ada/demo/changes/1".to_owned(),
+        "/api/repos/ada/demo/queue".to_owned(),
+        "/api/repos/ada/demo/attention".to_owned(),
+        "/api/repos/ada/demo/awaiting-verification".to_owned(),
+        "/api/repos/ada/demo/conflicts?paths=src".to_owned(),
+        "/api/repos/ada/demo/leases".to_owned(),
+        "/api/repos/ada/demo/policy".to_owned(),
+        "/api/repos/ada/demo/mirror".to_owned(),
+        "/api/lessons?repo=ada/demo".to_owned(),
         format!("/api/changes/{change}"),
         format!("/api/changes/{change}/revisions"),
         format!("/api/changes/{change}/claims"),
@@ -64,7 +64,7 @@ async fn populate(forge: &Forge) -> (String, String, String) {
         "POST",
         "/api/tasks",
         &forge.ada_token,
-        Some(json!({ "repo": "demo", "title": "Private work", "spec": "quietly" })),
+        Some(json!({ "repo": "ada/demo", "title": "Private work", "spec": "quietly" })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{task}");
@@ -103,7 +103,7 @@ async fn populate(forge: &Forge) -> (String, String, String) {
         "POST",
         "/api/changes",
         &forge.ada_token,
-        Some(json!({ "repo": "demo", "target": "main", "title": "Private change" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "Private change" })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{change}");
@@ -119,7 +119,7 @@ async fn every_read_path_answers_a_stranger_as_if_nothing_were_there() {
 
     // Whatever a missing repository answers is what a private one must
     // answer too - byte for byte, so nothing in the body tells them apart.
-    let (_, missing) = api_with_token(app, "GET", "/api/repos/no-such-repo", &bee, None).await;
+    let (_, missing) = api_with_token(app, "GET", "/api/repos/ada/no-such-repo", &bee, None).await;
     for path in read_paths(&change, &task, &session) {
         let (theirs, body) = api_with_token(app, "GET", &path, &forge.ada_token, None).await;
         assert_eq!(theirs, StatusCode::OK, "owner reading {path}: {body}");
@@ -129,7 +129,7 @@ async fn every_read_path_answers_a_stranger_as_if_nothing_were_there() {
             StatusCode::NOT_FOUND,
             "stranger reading {path}: {body}"
         );
-        if path == "/api/repos/demo" {
+        if path == "/api/repos/ada/demo" {
             assert_eq!(
                 body, missing,
                 "private must be indistinguishable from missing"
@@ -147,7 +147,7 @@ async fn every_read_path_answers_a_stranger_as_if_nothing_were_there() {
     api_with_token(
         app,
         "POST",
-        "/api/repos/demo/visibility",
+        "/api/repos/ada/demo/visibility",
         &forge.ada_token,
         Some(json!({ "visibility": "public" })),
     )
@@ -173,13 +173,13 @@ async fn the_pages_keep_the_same_boundary() {
     let (_, cookie) = sign_in_as(&forge, "bee").await;
 
     for path in [
-        "/demo",
-        "/demo/tree/",
-        "/demo/changes",
-        "/demo/changes/1",
-        "/demo/log",
-        "/demo/lessons",
-        "/demo/landing",
+        "/ada/demo",
+        "/ada/demo/tree/",
+        "/ada/demo/changes",
+        "/ada/demo/changes/1",
+        "/ada/demo/log",
+        "/ada/demo/lessons",
+        "/ada/demo/landing",
     ] {
         assert_eq!(
             get_with_cookie(app, path, &cookie).await,
@@ -206,7 +206,7 @@ async fn the_changes_list_honours_its_state_filter() {
     let (_, open) = api_with_token(
         app,
         "GET",
-        "/api/repos/demo/changes?state=open",
+        "/api/repos/ada/demo/changes?state=open",
         &forge.ada_token,
         None,
     )
@@ -215,7 +215,7 @@ async fn the_changes_list_honours_its_state_filter() {
     let (_, gone) = api_with_token(
         app,
         "GET",
-        "/api/repos/demo/changes?state=abandoned",
+        "/api/repos/ada/demo/changes?state=abandoned",
         &forge.ada_token,
         None,
     )
@@ -224,7 +224,7 @@ async fn the_changes_list_honours_its_state_filter() {
     let (_, all) = api_with_token(
         app,
         "GET",
-        "/api/repos/demo/changes",
+        "/api/repos/ada/demo/changes",
         &forge.ada_token,
         None,
     )

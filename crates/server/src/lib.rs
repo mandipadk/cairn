@@ -22,6 +22,7 @@ pub mod oidc;
 pub mod passkeys;
 mod queue;
 pub mod receipts;
+pub mod repo_path;
 mod routes;
 mod sse;
 mod state;
@@ -59,26 +60,53 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/identity/exchange", post(oidc::exchange))
         .route("/api/repos", post(routes::create_repo))
-        .route("/api/repos/{name}", get(routes::get_repo))
-        .route("/api/repos/{name}/import", post(routes::import_history))
-        .route("/api/repos/{name}/visibility", post(routes::set_visibility))
-        .route("/api/repos/{name}/rename", post(routes::rename_repo))
-        .route("/api/repos/{name}/description", post(routes::describe_repo))
-        .route("/api/repos/{name}/archive", post(routes::archive_repo))
-        .route("/api/repos/{name}/unarchive", post(routes::unarchive_repo))
-        .route("/api/repos/{name}/delete", post(routes::delete_repo))
-        .route("/api/repos/{name}/transfer", post(routes::offer_transfer))
+        .route("/api/repos/{owner}/{name}", get(routes::get_repo))
         .route(
-            "/api/repos/{name}/transfer/accept",
+            "/api/repos/{owner}/{name}/import",
+            post(routes::import_history),
+        )
+        .route(
+            "/api/repos/{owner}/{name}/visibility",
+            post(routes::set_visibility),
+        )
+        .route(
+            "/api/repos/{owner}/{name}/rename",
+            post(routes::rename_repo),
+        )
+        .route(
+            "/api/repos/{owner}/{name}/description",
+            post(routes::describe_repo),
+        )
+        .route(
+            "/api/repos/{owner}/{name}/archive",
+            post(routes::archive_repo),
+        )
+        .route(
+            "/api/repos/{owner}/{name}/unarchive",
+            post(routes::unarchive_repo),
+        )
+        .route(
+            "/api/repos/{owner}/{name}/delete",
+            post(routes::delete_repo),
+        )
+        .route(
+            "/api/repos/{owner}/{name}/transfer",
+            post(routes::offer_transfer),
+        )
+        .route(
+            "/api/repos/{owner}/{name}/transfer/accept",
             post(routes::accept_transfer),
         )
         .route(
-            "/api/repos/{name}/transfer/decline",
+            "/api/repos/{owner}/{name}/transfer/decline",
             post(routes::decline_transfer),
         )
-        .route("/api/repos/{name}/changes", get(routes::list_changes))
         .route(
-            "/api/repos/{name}/changes/{number}",
+            "/api/repos/{owner}/{name}/changes",
+            get(routes::list_changes),
+        )
+        .route(
+            "/api/repos/{owner}/{name}/changes/{number}",
             get(routes::get_change_by_number),
         )
         .route(
@@ -124,37 +152,49 @@ pub fn router(state: AppState) -> Router {
         .route("/api/changes/{id}/readiness", get(routes::merge_readiness))
         .route("/api/changes/{id}/prefer", post(routes::prefer_revision))
         .route("/api/changes/{id}/receipt", get(receipts::change_receipt))
-        .route("/api/repos/{name}/receipts", get(receipts::repo_receipts))
+        .route(
+            "/api/repos/{owner}/{name}/receipts",
+            get(receipts::repo_receipts),
+        )
         .route("/api/forge/key", get(receipts::forge_key))
         .route("/api/changes/{id}/merge", post(routes::merge_change))
         .route("/api/changes/{id}/enqueue", post(routes::enqueue_change))
         .route("/api/changes/{id}/dequeue", post(routes::dequeue_change))
-        .route("/api/repos/{name}/queue", get(routes::list_queue))
-        .route("/api/repos/{name}/attention", get(routes::attention))
+        .route("/api/repos/{owner}/{name}/queue", get(routes::list_queue))
         .route(
-            "/api/repos/{name}/attention/draw",
+            "/api/repos/{owner}/{name}/attention",
+            get(routes::attention),
+        )
+        .route(
+            "/api/repos/{owner}/{name}/attention/draw",
             post(routes::draw_attention),
         )
         .route(
-            "/api/repos/{name}/awaiting-verification",
+            "/api/repos/{owner}/{name}/awaiting-verification",
             get(routes::awaiting_verification),
         )
         .route(
-            "/api/repos/{name}/policy",
+            "/api/repos/{owner}/{name}/policy",
             get(routes::get_policy).post(routes::set_policy),
         )
         .route(
-            "/api/repos/{name}/policy/simulate",
+            "/api/repos/{owner}/{name}/policy/simulate",
             post(routes::simulate_policy),
         )
-        .route("/api/repos/{name}/policy/pack", get(routes::policy_pack))
+        .route(
+            "/api/repos/{owner}/{name}/policy/pack",
+            get(routes::policy_pack),
+        )
         .route("/api/policy/packs", get(routes::policy_packs))
         .route(
-            "/api/repos/{name}/mirror",
+            "/api/repos/{owner}/{name}/mirror",
             get(routes::get_mirror).post(routes::set_mirror),
         )
-        .route("/api/repos/{name}/leases", get(routes::list_leases))
-        .route("/api/repos/{name}/conflicts", get(routes::path_conflicts))
+        .route("/api/repos/{owner}/{name}/leases", get(routes::list_leases))
+        .route(
+            "/api/repos/{owner}/{name}/conflicts",
+            get(routes::path_conflicts),
+        )
         .route("/api/sessions/{id}/paths", post(routes::declare_paths))
         .route("/api/changes/{id}/abandon", post(routes::abandon_change))
         .route(
@@ -184,18 +224,18 @@ pub fn router(state: AppState) -> Router {
         .route("/api/events/stream", get(sse::stream))
         .route("/api/git/pushes", post(git_http::record_push))
         .route("/api/git/tags", post(git_http::record_tag))
-        .route("/api/repos/{name}/tags", get(routes::tags))
-        .route("/api/repos/{name}/blame", get(git_http::blame))
-        .route("/api/repos/{name}/debt", get(debt::debt))
-        .route("/api/repos/{name}/debt/history", get(debt::history))
-        .route("/api/repos/{name}/debt/tasks", post(debt::pay_down))
-        .route("/git/{repo}/info/refs", get(git_http::info_refs))
+        .route("/api/repos/{owner}/{name}/tags", get(routes::tags))
+        .route("/api/repos/{owner}/{name}/blame", get(git_http::blame))
+        .route("/api/repos/{owner}/{name}/debt", get(debt::debt))
+        .route("/api/repos/{owner}/{name}/debt/history", get(debt::history))
+        .route("/api/repos/{owner}/{name}/debt/tasks", post(debt::pay_down))
+        .route("/git/{owner}/{repo}/info/refs", get(git_http::info_refs))
         .route(
-            "/git/{repo}/git-upload-pack",
+            "/git/{owner}/{repo}/git-upload-pack",
             post(git_http::upload_pack).layer(axum::extract::DefaultBodyLimit::max(GIT_BODY_LIMIT)),
         )
         .route(
-            "/git/{repo}/git-receive-pack",
+            "/git/{owner}/{repo}/git-receive-pack",
             post(git_http::receive_pack)
                 .layer(axum::extract::DefaultBodyLimit::max(GIT_BODY_LIMIT)),
         )
@@ -209,5 +249,9 @@ pub fn router(state: AppState) -> Router {
         .layer(axum::middleware::from_fn(guard::security_headers))
         .layer(axum::middleware::from_fn(guard::same_origin_writes))
         .layer(axum::middleware::from_fn(web::themed_fallbacks))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            web::old_names,
+        ))
         .with_state(state)
 }

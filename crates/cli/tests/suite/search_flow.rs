@@ -15,7 +15,7 @@ async fn the_page_and_the_api_answer_the_same_question() {
             "POST",
             "/api/changes",
             &forge.scout_token,
-            Some(json!({ "repo": "demo", "target": "main", "title": title })),
+            Some(json!({ "repo": "ada/demo", "target": "main", "title": title })),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{body}");
@@ -35,12 +35,12 @@ async fn the_page_and_the_api_answer_the_same_question() {
 
     // A number opens one change; a person leads to their work.
     let (_, page) = page_with_cookie(app, "/search?q=%232", &cookie).await;
-    assert!(page.contains(r#"href="/demo/changes/2""#), "{page}");
-    assert!(!page.contains(r#"href="/demo/changes/1""#));
+    assert!(page.contains(r#"href="/ada/demo/changes/2""#), "{page}");
+    assert!(!page.contains(r#"href="/ada/demo/changes/1""#));
     let (_, page) = page_with_cookie(app, "/search?q=scout+kind:person", &cookie).await;
     assert!(page.contains(r#"href="/search?q=by:scout""#), "{page}");
     let (_, page) = page_with_cookie(app, "/search?q=by:scout+kind:change", &cookie).await;
-    assert!(page.contains("/demo/changes/1") && page.contains("/demo/changes/2"));
+    assert!(page.contains("/ada/demo/changes/1") && page.contains("/ada/demo/changes/2"));
 
     // The API sees the same ranking, with its reasons.
     let (status, body) = api_with_token(

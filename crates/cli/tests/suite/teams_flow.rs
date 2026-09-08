@@ -43,14 +43,17 @@ async fn a_team_is_made_staffed_and_granted_from_the_page() {
         app,
         "/teams",
         &ada,
-        "action=grant&team=crew&repo=demo&push=1&task=1",
+        "action=grant&team=crew&repo=ada/demo&push=1&task=1",
     )
     .await;
     assert_eq!(location, "/teams");
 
     let (_, page) = page_with_cookie(app, "/teams", &ada).await;
     assert!(page.contains("crew") && page.contains("bee"), "{page}");
-    assert!(page.contains("on demo") && page.contains("push"), "{page}");
+    assert!(
+        page.contains("on ada/demo") && page.contains("push"),
+        "{page}"
+    );
     assert!(
         !page.contains(r#"class="repohead""#),
         "a section page is not a repository"
@@ -62,7 +65,7 @@ async fn a_team_is_made_staffed_and_granted_from_the_page() {
         "POST",
         "/api/changes",
         &bee_token,
-        Some(json!({ "repo": "demo", "target": "main", "title": "Crew work" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "Crew work" })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -77,7 +80,7 @@ async fn a_team_is_made_staffed_and_granted_from_the_page() {
         "POST",
         "/api/changes",
         &bee_token,
-        Some(json!({ "repo": "demo", "target": "main", "title": "More" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "More" })),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);

@@ -249,13 +249,21 @@ impl GitStore {
         &self.hook_bin
     }
 
-    /// Defense in depth: the core validates repo slugs, but path
-    /// construction re-checks so this layer is safe on its own.
+    /// Defense in depth: the core validates repo names, but path
+    /// construction re-checks so this layer is safe on its own. A name
+    /// is `owner/short`, two slugs, and lives at `<root>/<owner>/<short>.git`;
+    /// a name with no owner, from before owners, lives at `<root>/<name>.git`
+    /// until it is adopted.
     fn repo_path(&self, name: &str) -> GitResult<PathBuf> {
-        let valid = !name.is_empty()
-            && name
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        let slug = |s: &str| {
+            !s.is_empty()
+                && s.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        };
+        let valid = match name.split_once('/') {
+            Some((owner, short)) => slug(owner) && slug(short),
+            None => slug(name),
+        };
         if !valid {
             return Err(GitError::InvalidRepoName(name.to_owned()));
         }
@@ -310,7 +318,7 @@ impl GitStore {
         object_format: &str,
     ) -> GitResult<()> {
         let path = self.repo_path(name)?;
-        tokio::fs::create_dir_all(&self.root).await?;
+        tokio::fs::create_dir_all(path.parent().unwrap_or(&self.root)).await?;
         self.run(
             None,
             &[
@@ -365,17 +373,25 @@ impl GitStore {
     /// Move a repository's directory to a new name. The graph decides
     /// the name; this only follows it.
     pub async fn rename_repo(&self, from: &str, to: &str) -> GitResult<()> {
-        let src = self.root.join(format!("{from}.git"));
-        let dst = self.root.join(format!("{to}.git"));
+        let src = self.existing_repo_path(from)?;
+        let dst = self.repo_path(to)?;
+        if let Some(parent) = dst.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
         tokio::fs::rename(&src, &dst).await?;
         Ok(())
+    }
+
+    /// Whether a repository's directory exists where its name says.
+    pub fn has_repo_dir(&self, name: &str) -> bool {
+        self.repo_path(name).map(|p| p.is_dir()).unwrap_or(false)
     }
 
     /// Remove a repository's directory. Nothing serves a repository the
     /// graph has forgotten, so a directory that lingers is harmless and
     /// one that is gone is what the graph already says.
     pub async fn remove_repo(&self, name: &str) -> GitResult<()> {
-        let dir = self.root.join(format!("{name}.git"));
+        let dir = self.repo_path(name)?;
         if tokio::fs::try_exists(&dir).await? {
             tokio::fs::remove_dir_all(&dir).await?;
         }

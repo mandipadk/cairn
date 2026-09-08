@@ -281,6 +281,33 @@ fn valid_commit_oid(oid: &str) -> bool {
 /// label an administrator assigns. An agent needs an admin grant,
 /// because an agent creating repositories on its own initiative is not
 /// something to allow by default.
+/// Whether `actor` may act as `owner` when making or taking a repository:
+/// themselves, an organisation they belong to, or anyone at all for
+/// whoever runs the forge.
+fn may_act_for(
+    tx: &Transaction,
+    acting: Option<&Scope>,
+    actor: &PrincipalId,
+    owner: &PrincipalId,
+) -> CoreResult<()> {
+    if owner == actor {
+        return Ok(());
+    }
+    let record = raw::principal(tx, owner.as_str())?
+        .ok_or_else(|| CoreError::NotFound(format!("principal {owner}")))?;
+    match record.kind {
+        PrincipalKind::Team if raw::is_team_member(tx, owner.as_str(), actor.as_str())? => Ok(()),
+        PrincipalKind::Agent => Err(CoreError::Invalid(format!(
+            "{owner} is an agent; a person or an organisation owns a repository"
+        ))),
+        _ => authorize(tx, acting, actor, Capability::Admin, None).map(|_| ()).map_err(|_| {
+            CoreError::Forbidden(format!(
+                "{actor} may not make repositories for {owner}: not a member, and not running the forge"
+            ))
+        }),
+    }
+}
+
 fn may_create_repo(tx: &Transaction, actor: &PrincipalId) -> CoreResult<()> {
     let principal = ensure_actor(tx, actor)?;
     if principal.kind == PrincipalKind::Human {
@@ -300,12 +327,8 @@ fn may_create_repo(tx: &Transaction, actor: &PrincipalId) -> CoreResult<()> {
 /// both to answer "may this be created?" and to enforce it at creation,
 /// so the two can never disagree.
 fn new_repo_is_allowed(tx: &Transaction, name: &str, default_branch: &str) -> CoreResult<()> {
-    const RESERVED: &[&str] = &["api", "git", "login", "logout", "assets", "ui"];
-    require(validate_slug(name), || {
-        format!("repo name {name:?} is not a valid slug")
-    })?;
-    require(!RESERVED.contains(&name), || {
-        format!("repo name {name:?} is reserved")
+    require(crate::id::validate_repo_name(name), || {
+        format!("repo name {name:?} is not owner/name, both lowercase slugs")
     })?;
     require(valid_branch(default_branch), || {
         format!("{default_branch:?} is not a valid branch name")
@@ -370,6 +393,9 @@ impl Store {
         harness: Option<&str>,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
+        require(!crate::id::RESERVED_IDS.contains(&id.as_str()), || {
+            format!("{id} is reserved: the pages live at that address")
+        })?;
         require(validate_slug(id.as_str()), || {
             format!("principal id {id:?} is not a valid slug")
         })?;
@@ -1319,37 +1345,79 @@ impl Store {
     pub fn check_new_repo(
         &mut self,
         actor: &PrincipalId,
-        name: &str,
+        owner: Option<&PrincipalId>,
+        short: &str,
         default_branch: &str,
     ) -> CoreResult<()> {
         let tx = self.conn.transaction()?;
         may_create_repo(&tx, actor)?;
-        new_repo_is_allowed(&tx, name, default_branch)
+        let owner = owner.unwrap_or(actor);
+        may_act_for(&tx, self.acting.as_ref(), actor, owner)?;
+        new_repo_is_allowed(&tx, &format!("{owner}/{short}"), default_branch)
         // The transaction is dropped, so nothing here is kept.
     }
 
+    /// Make a repository named `short` under `owner`, who is the actor
+    /// unless said otherwise. Under an organisation, any member may;
+    /// under another person, only whoever runs the forge.
     pub fn create_repo(
         &mut self,
         actor: &PrincipalId,
-        name: &str,
+        owner: Option<&PrincipalId>,
+        short: &str,
         default_branch: &str,
         object_format: ObjectFormat,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
         may_create_repo(&tx, actor)?;
-        new_repo_is_allowed(&tx, name, default_branch)?;
+        let owner = owner.unwrap_or(actor);
+        may_act_for(&tx, self.acting.as_ref(), actor, owner)?;
+        let name = format!("{owner}/{short}");
+        new_repo_is_allowed(&tx, &name, default_branch)?;
         let env = append(
             &tx,
             actor,
             self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::RepoCreated {
-                repo: name.to_owned(),
+                repo: name,
                 default_branch: default_branch.to_owned(),
                 object_format,
+                owner: (owner != actor).then(|| owner.clone()),
             },
         )?;
         tx.commit()?;
         Ok(env)
+    }
+
+    /// Give every repository still named the old way, without an owner
+    /// in its name, its owner's name in front. Run once by whoever runs
+    /// the forge when upgrading to the binary that expects it; the
+    /// renames are ordinary events, so the log says what happened and
+    /// the old addresses redirect.
+    pub fn adopt_owners(&mut self, actor: &PrincipalId) -> CoreResult<Vec<Envelope>> {
+        let tx = self.conn.transaction()?;
+        authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
+        let mut renamed = Vec::new();
+        for record in raw::repos(&tx)? {
+            if record.name.contains('/') {
+                continue;
+            }
+            let to = format!("{}/{}", record.owner, record.name);
+            require(raw::repo(&tx, &to)?.is_none(), || {
+                format!("{} cannot become {to}: that name is taken", record.name)
+            })?;
+            renamed.push(append(
+                &tx,
+                actor,
+                None,
+                Event::RepoRenamed {
+                    repo: record.name.clone(),
+                    to,
+                },
+            )?);
+        }
+        tx.commit()?;
+        Ok(renamed)
     }
 
     /// Check an import source before anyone connects to it. The command
@@ -1554,8 +1622,9 @@ impl Store {
         require(record.owner != *to, || "they already own it".to_owned())?;
         let recipient = raw::principal(&tx, to.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("principal {to}")))?;
-        require(recipient.kind == PrincipalKind::Human, || {
-            "only a person can own a repository; grant an agent what it needs instead".to_owned()
+        require(recipient.kind != PrincipalKind::Agent, || {
+            "a person or an organisation can own a repository; grant an agent what it needs instead"
+                .to_owned()
         })?;
         let env = append(
             &tx,
@@ -1570,25 +1639,52 @@ impl Store {
         Ok(env)
     }
 
-    /// Take up an offer. Only the person it was made to can.
-    pub fn accept_transfer(&mut self, actor: &PrincipalId, repo: &str) -> CoreResult<Envelope> {
+    /// Take up an offer: the person it was made to, or a member of the
+    /// organisation it was made to. The repository takes its new owner's
+    /// name in front, so acceptance is two events: accepted, then renamed.
+    pub fn accept_transfer(
+        &mut self,
+        actor: &PrincipalId,
+        repo: &str,
+    ) -> CoreResult<Vec<Envelope>> {
         let tx = self.conn.transaction()?;
         ensure_actor(&tx, actor)?;
         let record =
             raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
-        require(record.pending_owner.as_ref() == Some(actor), || {
+        let Some(to) = record.pending_owner.clone() else {
+            return Err(CoreError::Invalid(format!("{repo} is not on offer")));
+        };
+        let may_accept = to == *actor || raw::is_team_member(&tx, to.as_str(), actor.as_str())?;
+        require(may_accept, || {
             format!("{repo} has not been offered to {actor}")
         })?;
-        let env = append(
+        let short = crate::id::split_repo_name(repo)
+            .map(|(_, short)| short.to_owned())
+            .unwrap_or_else(|| repo.to_owned());
+        let new_name = format!("{to}/{short}");
+        require(raw::repo(&tx, &new_name)?.is_none(), || {
+            format!("{to} already has a repository named {short}")
+        })?;
+        let via = self.acting.as_ref().and_then(|s| s.session.as_ref());
+        let accepted = append(
             &tx,
             actor,
-            self.acting.as_ref().and_then(|s| s.session.as_ref()),
+            via,
             Event::RepoTransferAccepted {
                 repo: repo.to_owned(),
             },
         )?;
+        let renamed = append(
+            &tx,
+            actor,
+            via,
+            Event::RepoRenamed {
+                repo: repo.to_owned(),
+                to: new_name,
+            },
+        )?;
         tx.commit()?;
-        Ok(env)
+        Ok(vec![accepted, renamed])
     }
 
     /// Turn an offer down, or take it back: the offeree may decline, and
@@ -1869,12 +1965,14 @@ impl Store {
             Capability::Admin,
             Some(repo),
         )?;
-        raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
+        let record =
+            raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
         require(validate_slug(to), || {
             format!("{to:?} is not a valid name: lowercase letters, digits and hyphens")
         })?;
+        let to = format!("{}/{to}", record.owner);
         require(to != repo, || "that is already its name".into())?;
-        require(raw::repo(&tx, to)?.is_none(), || {
+        require(raw::repo(&tx, &to)?.is_none(), || {
             format!("a repository named {to} already exists")
         })?;
         Ok(())
@@ -1897,12 +1995,15 @@ impl Store {
             Capability::Admin,
             Some(repo),
         )?;
-        raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
+        let record =
+            raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
         require(validate_slug(to), || {
             format!("{to:?} is not a valid name: lowercase letters, digits and hyphens")
         })?;
+        // The owner's name stays in front; a rename changes only what is theirs.
+        let to = format!("{}/{to}", record.owner);
         require(to != repo, || "that is already its name".into())?;
-        require(raw::repo(&tx, to)?.is_none(), || {
+        require(raw::repo(&tx, &to)?.is_none(), || {
             format!("a repository named {to} already exists")
         })?;
         let env = append(
@@ -1911,7 +2012,7 @@ impl Store {
             self.acting.as_ref().and_then(|s| s.session.as_ref()),
             Event::RepoRenamed {
                 repo: repo.to_owned(),
-                to: to.to_owned(),
+                to,
             },
         )?;
         tx.commit()?;

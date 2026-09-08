@@ -25,14 +25,14 @@ async fn land_one(forge: &Forge, name: &str, key: &str) -> String {
             &[
                 "clone",
                 "-q",
-                &format!("http://scout:x@{addr}/git/demo"),
+                &format!("http://scout:x@{addr}/git/ada/demo"),
                 "wc",
             ],
         );
     }
     commit_file(&wc, name, "x\n", &format!("Add {name}\n\nChange-Id: {key}"));
     git(&wc, &["push", "-q", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let id = changes
         .as_array()
         .unwrap()
@@ -111,7 +111,7 @@ async fn a_branch_left_behind_by_a_crash_is_restored() {
     let landed = land_one(&forge, "one.txt", "Ione").await;
 
     // Die between the two writes.
-    rewind_branch(&forge, "demo", "main", None);
+    rewind_branch(&forge, "ada/demo", "main", None);
     assert!(
         !forge
             .state
@@ -139,7 +139,7 @@ async fn a_branch_left_behind_by_a_crash_is_restored() {
         &wc,
         &[
             "ls-remote",
-            &format!("http://scout:x@{}/git/demo", forge.addr),
+            &format!("http://scout:x@{}/git/ada/demo", forge.addr),
             "refs/heads/main",
         ],
     );
@@ -166,7 +166,7 @@ async fn recovery_is_idempotent_and_does_nothing_when_healthy() {
         &wc,
         &[
             "ls-remote",
-            &format!("http://scout:x@{}/git/demo", forge.addr),
+            &format!("http://scout:x@{}/git/ada/demo", forge.addr),
             "refs/heads/main",
         ],
     );
@@ -207,7 +207,7 @@ async fn a_branch_that_moved_elsewhere_is_reported_not_overwritten() {
     // as landed, and the branch is now behind it — but crucially the
     // *first* change's commit is not an ancestor of nothing; rewind
     // further so the tip is unrelated to what the log expects.
-    rewind_branch(&forge, "demo", "main", Some(&first));
+    rewind_branch(&forge, "ada/demo", "main", Some(&first));
     let stuck = cairn_server::reconcile_branches(&forge.state).await;
     // Being behind is repairable: this is a fast-forward.
     assert!(
@@ -228,13 +228,17 @@ async fn a_branch_that_moved_elsewhere_is_reported_not_overwritten() {
     // branch, so the recorded commit is neither reachable from it nor
     // behind it, and advancing would throw that work away. Build it
     // inside the bare repo, since that is where the ref must resolve.
-    let tree = bare_git(&forge, "demo", &["rev-parse", &format!("{first}^{{tree}}")]);
+    let tree = bare_git(
+        &forge,
+        "ada/demo",
+        &["rev-parse", &format!("{first}^{{tree}}")],
+    );
     let unrelated = bare_git(
         &forge,
-        "demo",
+        "ada/demo",
         &["commit-tree", &tree, "-p", &first, "-m", "Unrelated work"],
     );
-    rewind_branch(&forge, "demo", "main", Some(&unrelated));
+    rewind_branch(&forge, "ada/demo", "main", Some(&unrelated));
 
     let stuck = cairn_server::reconcile_branches(&forge.state).await;
     assert!(
@@ -248,7 +252,7 @@ async fn a_branch_that_moved_elsewhere_is_reported_not_overwritten() {
         &wc,
         &[
             "ls-remote",
-            &format!("http://scout:x@{}/git/demo", forge.addr),
+            &format!("http://scout:x@{}/git/ada/demo", forge.addr),
             "refs/heads/main",
         ],
     );

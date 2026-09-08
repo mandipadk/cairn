@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 25;
+const SCHEMA_VERSION: i64 = 26;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -243,6 +243,14 @@ CREATE TABLE IF NOT EXISTS repos (
   archived       INTEGER NOT NULL DEFAULT 0,
   description    TEXT NOT NULL DEFAULT ''
 ) STRICT;
+
+-- Names a repository used to have, so an old address can say where it
+-- went. Filled from RepoRenamed; a projection, rebuilt with the rest.
+CREATE TABLE IF NOT EXISTS former_names (
+  name TEXT PRIMARY KEY,
+  repo TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_former_names_repo ON former_names (repo);
 
 CREATE TABLE IF NOT EXISTS imports (
   repo    TEXT NOT NULL,
@@ -1834,10 +1842,11 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             repo,
             default_branch,
             object_format,
+            owner,
         } => {
-            // Ownership is not a field on the event: whoever created a
-            // repository is already recorded as the envelope's actor, and
-            // deriving it keeps one fact in one place.
+            // Whoever created a repository owns it, unless the event names
+            // an owner: an organisation, or somebody an admin made it for.
+            let owner = owner.as_ref().map_or(actor, |o| o.as_str());
             tx.execute(
                 "INSERT INTO repos (name, default_branch, object_format, policy, owner)
                  VALUES (?, ?, ?, ?, ?)",
@@ -1846,7 +1855,7 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                     default_branch,
                     object_format.as_str(),
                     serde_json::to_string(&Policy::default()).expect("policy serializes"),
-                    actor
+                    owner
                 ],
             )?;
         }
@@ -1881,6 +1890,15 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                     params![to, repo],
                 )?;
             }
+            // Operational tables follow the name too, where they exist:
+            // fsck replays the log into projections alone, which have
+            // no debt snapshots.
+            if table_exists(tx, "debt_snapshots")? {
+                tx.execute(
+                    "UPDATE debt_snapshots SET repo = ? WHERE repo = ?",
+                    params![to, repo],
+                )?;
+            }
             tx.execute(
                 "UPDATE tokens SET scope = json_set(scope, '$.repo', ?)
                   WHERE scope IS NOT NULL AND json_extract(scope, '$.repo') = ?",
@@ -1890,6 +1908,17 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                 "UPDATE repos SET name = ? WHERE name = ?",
                 params![to, repo],
             )?;
+            // Every name it ever had now points at the new one, and the
+            // name it just left is remembered too.
+            tx.execute(
+                "UPDATE former_names SET repo = ? WHERE repo = ?",
+                params![to, repo],
+            )?;
+            tx.execute(
+                "INSERT OR REPLACE INTO former_names (name, repo) VALUES (?, ?)",
+                params![repo, to],
+            )?;
+            tx.execute("DELETE FROM former_names WHERE name = ?", params![to])?;
         }
         Event::RepoDescribed { repo, description } => {
             tx.execute(
@@ -1923,6 +1952,7 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                 "DELETE FROM attention_draws WHERE repo = ?",
                 "DELETE FROM merge_queue WHERE repo = ?",
                 "DELETE FROM tags WHERE repo = ?",
+                "DELETE FROM former_names WHERE repo = ?",
                 "DELETE FROM changes WHERE repo = ?",
                 "DELETE FROM leases WHERE repo = ?",
                 "DELETE FROM imports WHERE repo = ?",
@@ -1948,9 +1978,12 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             )?;
         }
         Event::RepoTransferAccepted { repo } => {
+            // The new owner is whoever it was offered to, which may be an
+            // organisation the accepting actor belongs to.
             tx.execute(
-                "UPDATE repos SET owner = ?, pending_owner = NULL WHERE name = ?",
-                params![actor, repo],
+                "UPDATE repos SET owner = pending_owner, pending_owner = NULL
+                  WHERE name = ? AND pending_owner IS NOT NULL",
+                params![repo],
             )?;
         }
         Event::RepoTransferDeclined { repo } => {
@@ -2379,7 +2412,7 @@ mod tests {
             .register_principal(&ada, &ada, PrincipalKind::Human, "Ada", None, None)
             .unwrap();
         store
-            .create_repo(&ada, "demo", "main", Default::default())
+            .create_repo(&ada, None, "demo", "main", Default::default())
             .unwrap();
         assert!(
             store.fsck().unwrap().is_empty(),
@@ -2410,12 +2443,12 @@ mod tests {
             .register_principal(&ada, &ada, PrincipalKind::Human, "Ada", None, None)
             .unwrap();
         store
-            .create_repo(&ada, "demo", "main", Default::default())
+            .create_repo(&ada, None, "demo", "main", Default::default())
             .unwrap();
         store
             .conn
             .execute(
-                "UPDATE repos SET default_branch = 'trunk' WHERE name = 'demo'",
+                "UPDATE repos SET default_branch = 'trunk' WHERE name = 'ada/demo'",
                 [],
             )
             .unwrap();
@@ -2437,7 +2470,7 @@ mod tests {
             .unwrap();
         for name in ["one", "two", "three"] {
             store
-                .create_repo(&ada, name, "main", Default::default())
+                .create_repo(&ada, None, name, "main", Default::default())
                 .unwrap();
         }
         let before: Vec<Vec<String>> = PROJECTION_TABLES
@@ -2469,14 +2502,14 @@ mod concurrency_tests {
             .register_principal(&ada, &ada, PrincipalKind::Human, "Ada", None, None)
             .unwrap();
         store
-            .create_repo(&ada, "demo", "main", Default::default())
+            .create_repo(&ada, None, "demo", "main", Default::default())
             .unwrap();
         // Isolate the question: policy is satisfied, so the only thing
         // that can stop a second merge is the concurrency guard.
         store
             .set_policy(
                 &ada,
-                "demo",
+                "ada/demo",
                 Policy {
                     require_executed_check: false,
                     require_runner_verification: false,
@@ -2494,7 +2527,7 @@ mod concurrency_tests {
             .open_change(
                 &ada,
                 ChangeSpec {
-                    repo: "demo".into(),
+                    repo: "ada/demo".into(),
                     target: "main".into(),
                     title: "Racy".into(),
                     task: None,
@@ -2606,7 +2639,7 @@ mod exhaustion_tests {
             .register_principal(&ada, &ada, PrincipalKind::Human, "Ada", None, None)
             .unwrap();
         store
-            .create_repo(&ada, "demo", "main", Default::default())
+            .create_repo(&ada, None, "demo", "main", Default::default())
             .unwrap();
 
         let used: i64 = store
@@ -2623,7 +2656,7 @@ mod exhaustion_tests {
         for n in 0..2_000 {
             // Bounded but not tiny, so the file has to grow.
             let title = format!("task {n} {}", "x".repeat(200));
-            match store.create_task(&ada, Some("demo"), &title, "spec", None) {
+            match store.create_task(&ada, Some("ada/demo"), &title, "spec", None) {
                 Ok(_) => continue,
                 Err(err) => {
                     refused = Some(err);
@@ -2651,7 +2684,7 @@ mod exhaustion_tests {
 
         // And the forge keeps working once there is room.
         store
-            .create_task(&ada, Some("demo"), "after", "spec", None)
+            .create_task(&ada, Some("ada/demo"), "after", "spec", None)
             .expect("writes resume once the database has room");
         assert!(store.fsck().unwrap().is_empty());
     }
@@ -2868,6 +2901,12 @@ fn ensure_contact_email_optional(conn: &Connection) -> CoreResult<()> {
     Ok(())
 }
 
+fn table_exists(conn: &Connection, table: &str) -> CoreResult<bool> {
+    Ok(conn
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")?
+        .exists([table])?)
+}
+
 /// Add a column to an operational table if it is not there yet.
 fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> CoreResult<()> {
     let present = conn
@@ -2897,7 +2936,7 @@ mod projection_shape {
         assert_eq!(
             (super::SCHEMA_VERSION, shape.as_str()),
             (
-                25,
+                26,
                 r#"{"require_executed_check":true,"independence":"human_or_two_models","require_runner_verification":false,"runner_quorum":1,"required_domains":[],"require_concerns_resolved":true,"attention_budget":null,"agents_act_in_sessions":false,"trust":null}"#
             ),
             "the policy's stored shape changed: bump SCHEMA_VERSION and pin the new shape here"

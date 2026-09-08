@@ -27,7 +27,7 @@ async fn a_full_flow_leaves_state_the_log_can_reproduce() {
     let (status, _) = api(
         app,
         "POST",
-        "/api/repos/demo/policy",
+        "/api/repos/ada/demo/policy",
         "ada",
         Some(json!({
             "require_executed_check": false,
@@ -70,7 +70,7 @@ async fn a_full_flow_leaves_state_the_log_can_reproduce() {
         "POST",
         &format!("/api/sessions/{session_id}/paths"),
         "scout",
-        Some(json!({ "repo": "demo", "paths": ["src/**"] })),
+        Some(json!({ "repo": "ada/demo", "paths": ["src/**"] })),
     )
     .await;
 
@@ -79,7 +79,7 @@ async fn a_full_flow_leaves_state_the_log_can_reproduce() {
         &[
             "clone",
             "-q",
-            &format!("http://scout:x@{addr}/git/demo"),
+            &format!("http://scout:x@{addr}/git/ada/demo"),
             "wc",
         ],
     );
@@ -87,7 +87,7 @@ async fn a_full_flow_leaves_state_the_log_can_reproduce() {
     commit_file(&wc, "src/a.txt", "one\n", "First\n\nChange-Id: Ifsck1");
     git(&wc, &["push", "-q", "origin", "HEAD:refs/for/main"]);
 
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let change = changes[0]["id"].as_str().unwrap().to_owned();
     let (_, claim) = api(
         app,
@@ -161,7 +161,7 @@ async fn a_full_flow_leaves_state_the_log_can_reproduce() {
     let (status, _) = api(
         app,
         "POST",
-        "/api/repos/brought-in/import",
+        "/api/repos/ada/brought-in/import",
         "ada",
         Some(json!({ "source": format!("file://{}", elsewhere.display()) })),
     )

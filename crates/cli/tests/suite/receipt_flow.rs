@@ -34,14 +34,14 @@ async fn a_landing_leaves_a_signed_receipt_on_the_commit() {
         &[
             "clone",
             "-q",
-            &format!("http://scout:x@{addr}/git/demo"),
+            &format!("http://scout:x@{addr}/git/ada/demo"),
             "wc",
         ],
     );
     let wc = forge.work.join("wc");
     commit_file(&wc, "docs/a.md", "# A\n", "Write A\n\nChange-Id: Ireceipt");
     git(&wc, &["push", "-q", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let id = changes[0]["id"].as_str().unwrap().to_owned();
 
     // Nothing to certify until it lands.
@@ -73,7 +73,7 @@ async fn a_landing_leaves_a_signed_receipt_on_the_commit() {
     .await;
     assert_eq!(status, StatusCode::OK, "{signed}");
     let receipt = &signed["receipt"];
-    assert_eq!(receipt["repo"], "demo");
+    assert_eq!(receipt["repo"], "ada/demo");
     assert_eq!(receipt["change"]["id"], id);
     assert_eq!(receipt["change"]["number"], 1);
     assert_eq!(receipt["trace"]["satisfied"], true, "{receipt}");
@@ -100,7 +100,7 @@ async fn a_landing_leaves_a_signed_receipt_on_the_commit() {
     std::fs::write(&file, serde_json::to_string_pretty(&signed).unwrap()).unwrap();
     let (ok, said) = verify(&file, None);
     assert!(ok, "{said}");
-    assert!(said.contains("verified · demo #1 landed as"), "{said}");
+    assert!(said.contains("verified · ada/demo #1 landed as"), "{said}");
     assert!(said.contains("policy satisfied"), "{said}");
     let (ok, _) = verify(&file, Some(&fingerprint));
     assert!(ok, "the expected key is the signing key");
@@ -117,7 +117,7 @@ async fn a_landing_leaves_a_signed_receipt_on_the_commit() {
 
     // The same document sits on the commit as a note, and travels.
     let landed = receipt["landed_as"].as_str().unwrap().to_owned();
-    let bare = forge._tmp.path().join("repos/demo.git");
+    let bare = forge._tmp.path().join("repos/ada/demo.git");
     wait_for(app, "the note to be written", async |_: &axum::Router| {
         git_raw(&bare, &["notes", "--ref=refs/notes/cairn", "show", &landed])
             .status
@@ -133,7 +133,14 @@ async fn a_landing_leaves_a_signed_receipt_on_the_commit() {
     );
 
     // The audit, as a query.
-    let (status, list) = api(app, "GET", "/api/repos/demo/receipts?limit=5", "ada", None).await;
+    let (status, list) = api(
+        app,
+        "GET",
+        "/api/repos/ada/demo/receipts?limit=5",
+        "ada",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{list}");
     assert_eq!(list["receipts"].as_array().unwrap().len(), 1);
     assert_eq!(list["receipts"][0]["receipt"]["change"]["id"], id);
@@ -149,14 +156,14 @@ async fn a_direct_merge_is_receipted_too() {
         &[
             "clone",
             "-q",
-            &format!("http://scout:x@{addr}/git/demo"),
+            &format!("http://scout:x@{addr}/git/ada/demo"),
             "wc",
         ],
     );
     let wc = forge.work.join("wc");
     commit_file(&wc, "b.txt", "b\n", "Add b\n\nChange-Id: Idirect");
     git(&wc, &["push", "-q", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let id = changes[0]["id"].as_str().unwrap().to_owned();
     approve_and_merge(app, &id).await;
 
@@ -170,7 +177,7 @@ async fn a_direct_merge_is_receipted_too() {
     .await;
     assert_eq!(status, StatusCode::OK, "{signed}");
     let landed = signed["receipt"]["landed_as"].as_str().unwrap().to_owned();
-    let bare = forge._tmp.path().join("repos/demo.git");
+    let bare = forge._tmp.path().join("repos/ada/demo.git");
     let note = git(&bare, &["notes", "--ref=refs/notes/cairn", "show", &landed]);
     let noted: Value = serde_json::from_str(note.trim()).unwrap();
     assert_eq!(

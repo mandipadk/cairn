@@ -73,7 +73,8 @@ curl -X POST localhost:6160/api/principals/scout/tokens \
   -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   -d '{"label": "laptop"}'
 
-# a repository, private until its settings say otherwise
+# a repository, private until its settings say otherwise; yours, at
+# ada/demo, unless "owner" names an organisation you belong to
 curl -X POST localhost:6160/api/repos \
   -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   -d '{"name": "demo"}'
@@ -98,9 +99,9 @@ told the repository exists. Give git a username and let it ask, or keep
 the token in a credential helper:
 
 ```sh
-git clone http://scout@127.0.0.1:6160/git/demo
+git clone http://scout@127.0.0.1:6160/git/ada/demo
 git commit -m $'Do the thing\n\nChange-Id: I8f3a1c2e'
-git push http://scout@127.0.0.1:6160/git/demo HEAD:refs/for/main
+git push http://scout@127.0.0.1:6160/git/ada/demo HEAD:refs/for/main
 ```
 
 Add `--dev` to accept asserted identity via the `x-cairn-principal`
@@ -231,11 +232,25 @@ public URL as its audience unless `--workload-audience` says otherwise.
 
 ### Repositories
 
+A repository belongs to an owner, a person or an organisation, and its
+address says so: `/ada/demo` on the pages, `/api/repos/ada/demo` on the
+API, `/git/ada/demo` for git. Names are unique per owner, not per forge.
+An organisation is a team that can own: any member may create a
+repository under it, accept one offered to it, and act as its owner;
+membership is whoever runs the forge's to change. Every owner has a page
+at `/{owner}` listing what the reader may see of theirs.
+
 An owner, or whoever runs the forge, can rename, archive and delete a
 repository from its settings page or over the API
-(`POST /api/repos/{name}/rename {"to": ..}`, `/archive`, `/unarchive`,
-`/delete {"confirm": "<name>"}`). A rename moves everything, including the
-git directory; the old name answers not found. An archived repository is
+(`POST /api/repos/{owner}/{name}/rename {"to": ..}`, `/archive`,
+`/unarchive`, `/delete {"confirm": "<name>"}`). A rename changes only the
+part after the owner and moves everything, including the git directory.
+Transferring a repository to another owner renames it under that owner's
+name once they accept. Every address a repository ever had redirects to
+its current one, on the pages, on the API and for git, so an old clone
+URL still clones; the redirect is for whoever may read the repository
+where it is now, and to anyone else an old name is as empty as any
+other. An archived repository is
 read-only: clones and reads go on, pushes, new changes and new tasks are
 refused with a message that says so. Deleting needs the name typed out
 and nothing waiting in the landing queue; the repository's changes,
@@ -249,14 +264,14 @@ v0.1.0` — and the forge takes it from whoever holds `merge` on the
 repository, for a commit that is on one of its branches, under a name it
 has not used before. Tags are never moved or deleted: a later tag is a
 new statement, not a correction. Each is recorded as a `tag_pushed` event
-with who set it, listed at `GET /api/repos/{name}/tags` and on the
+with who set it, listed at `GET /api/repos/{owner}/{name}/tags` and on the
 repository's page, and copied to the mirror along with the branches.
 
 ### Mirroring
 
 ```sh
 cairn serve --db forge.db --mirror-token $GITHUB_TOKEN   # or CAIRN_MIRROR_TOKEN
-curl -X POST localhost:6160/api/repos/demo/mirror \
+curl -X POST localhost:6160/api/repos/ada/demo/mirror \
   -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   -d '{"mirror": {"url": "https://github.com/you/demo.git", "enabled": true}}'
 ```
@@ -391,7 +406,13 @@ does exactly that on every change to these documents.
 
 ### Upgrade
 
-Stop the service, take a backup, install the new binary, start it. The
+Stop the service, take a backup, install the new binary, start it.
+Upgrading a forge made before repositories carried their owner's name
+needs one more step, once: `cairn admin adopt-owners --db <db> --repos
+<dir> --as <admin>` renames every repository from `demo` to
+`ada/demo`, as ordinary rename events, and moves its directory; `serve`
+refuses to start until it has run, and the old addresses redirect
+afterwards. The
 first open after an upgrade that changed the schema rebuilds every
 projection from the log — the tree, the queue, blame, the rankings — and
 the forge serves only once that is done; the log itself, tokens, sessions

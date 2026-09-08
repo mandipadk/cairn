@@ -52,12 +52,12 @@ async fn imported_code_is_paid_down_by_reproduced_covering_claims() {
     ok(
         app,
         "POST",
-        "/api/repos/demo/import",
+        "/api/repos/ada/demo/import",
         "ada",
         Some(json!({ "source": format!("file://{}", source.display()), "branch": "main" })),
     )
     .await;
-    let map = ok(app, "GET", "/api/repos/demo/debt", "ada", None).await;
+    let map = ok(app, "GET", "/api/repos/ada/demo/debt", "ada", None).await;
     assert_eq!(map["counts"]["imported"], 15, "{map}");
     assert_eq!(map["counts"]["reproduced"], 0);
     assert!(map["paid_down"].as_array().unwrap().is_empty());
@@ -69,7 +69,7 @@ async fn imported_code_is_paid_down_by_reproduced_covering_claims() {
         &[
             "clone",
             "-q",
-            &format!("http://scout:x@{addr}/git/demo"),
+            &format!("http://scout:x@{addr}/git/ada/demo"),
             "wc",
         ],
     );
@@ -81,7 +81,7 @@ async fn imported_code_is_paid_down_by_reproduced_covering_claims() {
         "Test the library\n\nChange-Id: Icover",
     );
     git(&wc, &["push", "-q", "origin", "HEAD:refs/for/main"]);
-    let changes = ok(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let changes = ok(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let change = changes[0]["id"].as_str().unwrap().to_owned();
     let claim = ok(
         app,
@@ -122,7 +122,7 @@ async fn imported_code_is_paid_down_by_reproduced_covering_claims() {
     )
     .await;
 
-    let map = ok(app, "GET", "/api/repos/demo/debt", "ada", None).await;
+    let map = ok(app, "GET", "/api/repos/ada/demo/debt", "ada", None).await;
     let lib = file(&map, "src/lib.rs");
     assert_eq!(lib["counts"]["reproduced"], 10, "{lib}");
     assert_eq!(lib["covered_by"][0]["change"], 1);
@@ -137,7 +137,7 @@ async fn imported_code_is_paid_down_by_reproduced_covering_claims() {
     assert_eq!(map["paid_down"][0]["files"], 1);
 
     // The map kept its history: two tips, imported fell.
-    let history = ok(app, "GET", "/api/repos/demo/debt/history", "ada", None).await;
+    let history = ok(app, "GET", "/api/repos/ada/demo/debt/history", "ada", None).await;
     let points = history.as_array().unwrap();
     assert!(points.len() >= 2, "{history}");
     assert_eq!(points[0]["imported"], 15);
@@ -164,7 +164,7 @@ async fn imported_code_is_paid_down_by_reproduced_covering_claims() {
         "Check the docs\n\nChange-Id: Idocs",
     );
     git(&wc, &["push", "-q", "origin", "HEAD:refs/for/main"]);
-    let changes = ok(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let changes = ok(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let second = changes.as_array().unwrap().last().unwrap()["id"]
         .as_str()
         .unwrap()
@@ -193,7 +193,7 @@ async fn imported_code_is_paid_down_by_reproduced_covering_claims() {
         None,
     )
     .await;
-    let map = ok(app, "GET", "/api/repos/demo/debt", "ada", None).await;
+    let map = ok(app, "GET", "/api/repos/ada/demo/debt", "ada", None).await;
     let docs = file(&map, "docs/a.md");
     assert_eq!(docs["counts"]["imported"], 5, "{docs}");
     assert_eq!(docs["covered_by"][0]["reproduced"], false);
@@ -202,7 +202,7 @@ async fn imported_code_is_paid_down_by_reproduced_covering_claims() {
     let (status, refused) = api(
         app,
         "POST",
-        "/api/repos/demo/debt/tasks",
+        "/api/repos/ada/demo/debt/tasks",
         "scout",
         Some(json!({ "count": 1 })),
     )
@@ -211,7 +211,7 @@ async fn imported_code_is_paid_down_by_reproduced_covering_claims() {
     let created = ok(
         app,
         "POST",
-        "/api/repos/demo/debt/tasks",
+        "/api/repos/ada/demo/debt/tasks",
         "ada",
         Some(json!({ "count": 1 })),
     )
@@ -233,12 +233,12 @@ async fn imported_code_is_paid_down_by_reproduced_covering_claims() {
     let again = ok(
         app,
         "POST",
-        "/api/repos/demo/debt/tasks",
+        "/api/repos/ada/demo/debt/tasks",
         "ada",
         Some(json!({ "count": 1 })),
     )
     .await;
-    let map = ok(app, "GET", "/api/repos/demo/debt", "ada", None).await;
+    let map = ok(app, "GET", "/api/repos/ada/demo/debt", "ada", None).await;
     assert_eq!(file(&map, "docs/a.md")["task"][0], "docs/a.md", "{map}");
     assert!(
         again["tasks"]
@@ -251,7 +251,7 @@ async fn imported_code_is_paid_down_by_reproduced_covering_claims() {
 
     // The tab shows the burndown, who paid, and the button.
     let (_, ada) = sign_in_as(&forge, "ada").await;
-    let (status, page) = page_with_cookie(app, "/demo/debt", &ada).await;
+    let (status, page) = page_with_cookie(app, "/ada/demo/debt", &ada).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         page.contains("Burndown") && page.contains("class=\"burndown\""),

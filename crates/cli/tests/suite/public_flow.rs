@@ -11,7 +11,7 @@ async fn public_demo_with_a_change(forge: &Forge) -> String {
     let (status, body) = api(
         app,
         "POST",
-        "/api/repos/demo/visibility",
+        "/api/repos/ada/demo/visibility",
         "ada",
         Some(json!({ "visibility": "public" })),
     )
@@ -22,7 +22,7 @@ async fn public_demo_with_a_change(forge: &Forge) -> String {
         "POST",
         "/api/changes",
         &forge.scout_token,
-        Some(json!({ "repo": "demo", "target": "main", "title": "Seen by anyone" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "Seen by anyone" })),
     )
     .await;
     let id = change["id"].as_str().unwrap().to_owned();
@@ -44,12 +44,12 @@ async fn a_public_repository_reads_without_signing_in_and_offers_nothing_to_do()
     let id = public_demo_with_a_change(&forge).await;
 
     for path in [
-        "/demo",
-        "/demo/changes",
-        "/demo/changes/1",
-        "/demo/log",
-        "/demo/landing",
-        "/demo/lessons",
+        "/ada/demo",
+        "/ada/demo/changes",
+        "/ada/demo/changes/1",
+        "/ada/demo/log",
+        "/ada/demo/landing",
+        "/ada/demo/lessons",
     ] {
         let (status, page) = page_with_cookie(app, path, "").await;
         assert_eq!(status, StatusCode::OK, "{path}");
@@ -67,7 +67,7 @@ async fn a_public_repository_reads_without_signing_in_and_offers_nothing_to_do()
             "{path}"
         );
     }
-    let (_, change_page) = page_with_cookie(app, "/demo/changes/1", "").await;
+    let (_, change_page) = page_with_cookie(app, "/ada/demo/changes/1", "").await;
     assert!(
         !change_page.contains("Approve"),
         "no verdict form for a stranger: {change_page}"
@@ -80,13 +80,13 @@ async fn a_public_repository_reads_without_signing_in_and_offers_nothing_to_do()
 
     // The read-only API answers without a token, exactly as it would with one.
     for path in [
-        "/api/repos/demo".to_owned(),
-        "/api/repos/demo/changes".to_owned(),
+        "/api/repos/ada/demo".to_owned(),
+        "/api/repos/ada/demo/changes".to_owned(),
         format!("/api/changes/{id}"),
         format!("/api/changes/{id}/readiness"),
         format!("/api/changes/{id}/threads"),
-        "/api/repos/demo/policy".to_owned(),
-        "/api/repos/demo/attention".to_owned(),
+        "/api/repos/ada/demo/policy".to_owned(),
+        "/api/repos/ada/demo/attention".to_owned(),
     ] {
         let (status, body) = api_anonymous(app, "GET", &path, None).await;
         assert_eq!(status, StatusCode::OK, "{path}: {body}");
@@ -96,13 +96,13 @@ async fn a_public_repository_reads_without_signing_in_and_offers_nothing_to_do()
         app,
         "POST",
         "/api/changes",
-        Some(json!({ "repo": "demo", "target": "main", "title": "Nope" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "Nope" })),
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     let (status, location) = post_form(
         app,
-        "/demo/changes/1/threads",
+        "/ada/demo/changes/1/threads",
         "",
         "revision=1&on=change&kind=note&body=hi",
     )
@@ -115,14 +115,14 @@ async fn a_public_repository_reads_without_signing_in_and_offers_nothing_to_do()
 async fn a_private_repository_still_answers_a_stranger_as_if_it_were_not_there() {
     let forge = boot().await;
     let app = &forge.app;
-    let (status, _) = api_anonymous(app, "GET", "/api/repos/demo", None).await;
+    let (status, _) = api_anonymous(app, "GET", "/api/repos/ada/demo", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    let (status, _) = api_anonymous(app, "GET", "/api/repos/nothing", None).await;
+    let (status, _) = api_anonymous(app, "GET", "/api/repos/ada/nothing", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    let (status, location) = get_redirect(app, "/demo", "").await;
+    let (status, location) = get_redirect(app, "/ada/demo", "").await;
     assert_eq!(status, StatusCode::SEE_OTHER);
     assert_eq!(location, "/login");
     // A bad token is refused, not downgraded to a stranger.
-    let (status, _) = api_with_token(app, "GET", "/api/repos/demo", "cairn_nope", None).await;
+    let (status, _) = api_with_token(app, "GET", "/api/repos/ada/demo", "cairn_nope", None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }

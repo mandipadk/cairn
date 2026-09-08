@@ -38,7 +38,7 @@ async fn a_private_repository_cannot_be_read_by_a_stranger() {
         &[
             "clone",
             "-q",
-            &format!("http://scout:x@{addr}/git/demo"),
+            &format!("http://scout:x@{addr}/git/ada/demo"),
             "wc",
         ],
     );
@@ -50,7 +50,7 @@ async fn a_private_repository_cannot_be_read_by_a_stranger() {
         "Secret\n\nChange-Id: Isecret",
     );
     git(&wc, &["push", "-q", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let id = changes[0]["id"].as_str().unwrap().to_owned();
     approve_and_enqueue(app, &id).await;
     wait_for(app, "the change to land", async |app: &axum::Router| {
@@ -60,14 +60,14 @@ async fn a_private_repository_cannot_be_read_by_a_stranger() {
     .await;
 
     // Private is the default: nobody said otherwise, so nobody gets in.
-    let (_, repo) = api(app, "GET", "/api/repos/demo", "ada", None).await;
+    let (_, repo) = api(app, "GET", "/api/repos/ada/demo", "ada", None).await;
     assert_eq!(
         repo["visibility"], "private",
         "a repository defaults to private"
     );
 
     assert!(
-        !anonymous_clone(&forge.work, addr, "demo", "stolen"),
+        !anonymous_clone(&forge.work, addr, "ada/demo", "stolen"),
         "a stranger must not be able to clone a private repository"
     );
     assert!(
@@ -82,7 +82,7 @@ async fn a_private_repository_cannot_be_read_by_a_stranger() {
             &[
                 "clone",
                 "-q",
-                &format!("http://token:{}@{addr}/git/demo", forge.scout_token),
+                &format!("http://token:{}@{addr}/git/ada/demo", forge.scout_token),
                 "allowed"
             ],
         )
@@ -100,7 +100,7 @@ async fn a_public_repository_can_be_read_by_anyone() {
     let (status, body) = api(
         app,
         "POST",
-        "/api/repos/demo/visibility",
+        "/api/repos/ada/demo/visibility",
         "ada",
         Some(json!({ "visibility": "public" })),
     )
@@ -109,7 +109,7 @@ async fn a_public_repository_can_be_read_by_anyone() {
     assert_eq!(body["event"]["kind"], "visibility_set");
 
     assert!(
-        anonymous_clone(&forge.work, addr, "demo", "open"),
+        anonymous_clone(&forge.work, addr, "ada/demo", "open"),
         "a public repository should need no credential"
     );
 
@@ -117,13 +117,13 @@ async fn a_public_repository_can_be_read_by_anyone() {
     api(
         app,
         "POST",
-        "/api/repos/demo/visibility",
+        "/api/repos/ada/demo/visibility",
         "ada",
         Some(json!({ "visibility": "private" })),
     )
     .await;
     assert!(
-        !anonymous_clone(&forge.work, addr, "demo", "closed-again"),
+        !anonymous_clone(&forge.work, addr, "ada/demo", "closed-again"),
         "making a repository private again must close it immediately"
     );
 }
@@ -137,11 +137,11 @@ async fn a_stranger_cannot_tell_a_private_repository_from_a_missing_one() {
 
     let private = git_expect_fail(
         &forge.work,
-        &["ls-remote", &format!("http://{addr}/git/demo")],
+        &["ls-remote", &format!("http://{addr}/git/ada/demo")],
     );
     let missing = git_expect_fail(
         &forge.work,
-        &["ls-remote", &format!("http://{addr}/git/no-such-repo")],
+        &["ls-remote", &format!("http://{addr}/git/ada/no-such-repo")],
     );
     // The strongest form of the property: not merely similar, identical.
     // A stranger learns nothing about which repositories are here.
@@ -162,7 +162,7 @@ async fn making_a_repository_public_takes_authority() {
     let (status, body) = api_with_token(
         &forge.app,
         "POST",
-        "/api/repos/demo/visibility",
+        "/api/repos/ada/demo/visibility",
         &forge.scout_token,
         Some(json!({ "visibility": "public" })),
     )
@@ -201,7 +201,7 @@ async fn one_person_cannot_read_another_persons_private_repository() {
     let bee = minted["token"].as_str().unwrap().to_owned();
 
     // `demo` belongs to ada, who created it when the forge was seeded.
-    let (_, repo) = api_with_token(app, "GET", "/api/repos/demo", &forge.ada_token, None).await;
+    let (_, repo) = api_with_token(app, "GET", "/api/repos/ada/demo", &forge.ada_token, None).await;
     assert_eq!(
         repo["owner"], "ada",
         "creating something makes you its owner"
@@ -215,7 +215,7 @@ async fn one_person_cannot_read_another_persons_private_repository() {
             &[
                 "clone",
                 "-q",
-                &format!("http://token:{bee}@{addr}/git/demo"),
+                &format!("http://token:{bee}@{addr}/git/ada/demo"),
                 "not-yours"
             ],
         )
@@ -230,7 +230,7 @@ async fn one_person_cannot_read_another_persons_private_repository() {
         "POST",
         "/api/grants",
         &forge.ada_token,
-        Some(json!({ "grantee": "bee", "repo": "demo", "actions": ["review"] })),
+        Some(json!({ "grantee": "bee", "repo": "ada/demo", "actions": ["review"] })),
     )
     .await;
     assert!(
@@ -239,7 +239,7 @@ async fn one_person_cannot_read_another_persons_private_repository() {
             &[
                 "clone",
                 "-q",
-                &format!("http://token:{bee}@{addr}/git/demo"),
+                &format!("http://token:{bee}@{addr}/git/ada/demo"),
                 "now-mine"
             ],
         )
@@ -284,14 +284,14 @@ async fn a_second_human_owns_what_they_create() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let (_, repo) = api_with_token(app, "GET", "/api/repos/bees-work", &bee, None).await;
+    let (_, repo) = api_with_token(app, "GET", "/api/repos/bee/bees-work", &bee, None).await;
     assert_eq!(repo["owner"], "bee");
 
     // Bee decides its policy, because bee owns it.
     let (status, _) = api_with_token(
         app,
         "POST",
-        "/api/repos/bees-work/visibility",
+        "/api/repos/bee/bees-work/visibility",
         &bee,
         Some(json!({ "visibility": "public" })),
     )

@@ -22,7 +22,7 @@ async fn a_large_file_is_described_rather_than_rendered() {
         &[
             "clone",
             "-q",
-            &format!("http://scout:x@{addr}/git/demo"),
+            &format!("http://scout:x@{addr}/git/ada/demo"),
             "wc",
         ],
     );
@@ -40,7 +40,7 @@ async fn a_large_file_is_described_rather_than_rendered() {
         &["commit", "-q", "-m", "Add big things\n\nChange-Id: Ibig"],
     );
     git(&wc, &["push", "-q", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let id = changes[0]["id"].as_str().unwrap().to_owned();
     approve_and_enqueue(app, &id).await;
     wait_for(app, "the change to land", async |app: &axum::Router| {
@@ -49,7 +49,7 @@ async fn a_large_file_is_described_rather_than_rendered() {
     })
     .await;
 
-    let (status, body) = page_with_cookie(app, "/demo/tree/big.txt", "cairn_dev=ada").await;
+    let (status, body) = page_with_cookie(app, "/ada/demo/tree/big.txt", "cairn_dev=ada").await;
     assert_eq!(status, StatusCode::OK, "the page should still render");
     assert!(
         !body.contains("CANARY-"),
@@ -67,7 +67,7 @@ async fn a_large_file_is_described_rather_than_rendered() {
         body.len()
     );
 
-    let (status, body) = page_with_cookie(app, "/demo/tree/blob.bin", "cairn_dev=ada").await;
+    let (status, body) = page_with_cookie(app, "/ada/demo/tree/blob.bin", "cairn_dev=ada").await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         body.contains("Binary file"),
@@ -87,7 +87,7 @@ async fn an_enormous_readme_does_not_load_the_repository_page() {
         &[
             "clone",
             "-q",
-            &format!("http://scout:x@{addr}/git/demo"),
+            &format!("http://scout:x@{addr}/git/ada/demo"),
             "wc",
         ],
     );
@@ -99,7 +99,7 @@ async fn an_enormous_readme_does_not_load_the_repository_page() {
         &["commit", "-q", "-m", "Huge readme\n\nChange-Id: Iread"],
     );
     git(&wc, &["push", "-q", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let id = changes[0]["id"].as_str().unwrap().to_owned();
     approve_and_enqueue(app, &id).await;
     wait_for(app, "the change to land", async |app: &axum::Router| {
@@ -108,7 +108,7 @@ async fn an_enormous_readme_does_not_load_the_repository_page() {
     })
     .await;
 
-    let (status, body) = page_with_cookie(app, "/demo", "cairn_dev=ada").await;
+    let (status, body) = page_with_cookie(app, "/ada/demo", "cairn_dev=ada").await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         !body.contains("CANARY-"),
@@ -129,7 +129,7 @@ async fn a_push_carrying_history_is_refused_with_a_reason() {
         &[
             "clone",
             "-q",
-            &format!("http://scout:x@{addr}/git/demo"),
+            &format!("http://scout:x@{addr}/git/ada/demo"),
             "wc",
         ],
     );
@@ -148,7 +148,7 @@ async fn a_push_carrying_history_is_refused_with_a_reason() {
         "the pusher should be told what went wrong: {refusal}"
     );
 
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     assert!(
         changes.as_array().map(|c| c.is_empty()).unwrap_or(true),
         "a refused push must open no changes: {changes}"

@@ -10,6 +10,7 @@
 
 use crate::auth::MaybeActor;
 use crate::error::{ApiError, ApiResult};
+use crate::repo_path::RepoName;
 use crate::routes::{readable_change_by, readable_repo_by};
 use crate::state::AppState;
 use axum::Json;
@@ -195,7 +196,7 @@ pub struct ReceiptsQuery {
 pub async fn repo_receipts(
     State(app): State<AppState>,
     who: MaybeActor,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Query(query): Query<ReceiptsQuery>,
 ) -> ApiResult<Json<Value>> {
     readable_repo_by(&app, &who, &repo)?;

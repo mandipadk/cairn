@@ -272,7 +272,7 @@ async fn a_workload_token_becomes_a_credential_that_can_only_begin_work() {
         "POST",
         "/api/tasks",
         "ada",
-        Some(json!({ "title": "For the workload", "spec": "Do it.", "repo": "demo" })),
+        Some(json!({ "title": "For the workload", "spec": "Do it.", "repo": "ada/demo" })),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -300,7 +300,7 @@ async fn a_workload_token_becomes_a_credential_that_can_only_begin_work() {
         "POST",
         "/api/changes",
         &credential,
-        Some(json!({ "repo": "demo", "target": "main", "title": "Not with this" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "Not with this" })),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
@@ -322,7 +322,7 @@ async fn a_workload_token_becomes_a_credential_that_can_only_begin_work() {
         "POST",
         "/api/changes",
         scoped["token"].as_str().unwrap(),
-        Some(json!({ "repo": "demo", "target": "main", "title": "With this" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "With this" })),
     )
     .await;
     assert_eq!(status, StatusCode::OK);

@@ -61,7 +61,7 @@ async fn history_from_elsewhere_arrives_and_is_recorded_as_unreviewed() {
     let (status, refused) = api(
         app,
         "POST",
-        "/api/repos/imported/import",
+        "/api/repos/ada/imported/import",
         "ada",
         Some(json!({ "source": "https://token@example.test/x.git" })),
     )
@@ -76,7 +76,7 @@ async fn history_from_elsewhere_arrives_and_is_recorded_as_unreviewed() {
     let (status, body) = api(
         app,
         "POST",
-        "/api/repos/imported/import",
+        "/api/repos/ada/imported/import",
         "ada",
         Some(json!({ "source": format!("file://{}", elsewhere.display()) })),
     )
@@ -111,7 +111,7 @@ async fn history_from_elsewhere_arrives_and_is_recorded_as_unreviewed() {
         &[
             "clone",
             "-q",
-            &format!("http://ada:{}@{addr}/git/imported", forge.ada_token),
+            &format!("http://ada:{}@{addr}/git/ada/imported", forge.ada_token),
             "check",
         ],
     );
@@ -132,7 +132,7 @@ async fn an_import_cannot_overwrite_a_branch_the_log_already_vouched_for() {
         &[
             "clone",
             "-q",
-            &format!("http://scout:x@{addr}/git/demo"),
+            &format!("http://scout:x@{addr}/git/ada/demo"),
             "wc",
         ],
     );
@@ -144,7 +144,7 @@ async fn an_import_cannot_overwrite_a_branch_the_log_already_vouched_for() {
         "Real work\n\nChange-Id: Ireal",
     );
     git(&wc, &["push", "-q", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let change = changes[0]["id"].as_str().unwrap().to_owned();
     approve_and_enqueue(app, &change).await;
     wait_for(app, "the change to land", async |app: &axum::Router| {
@@ -176,7 +176,7 @@ async fn an_import_cannot_overwrite_a_branch_the_log_already_vouched_for() {
     let (status, body) = api(
         app,
         "POST",
-        "/api/repos/demo/import",
+        "/api/repos/ada/demo/import",
         "ada",
         Some(json!({ "source": format!("file://{}", elsewhere.display()) })),
     )

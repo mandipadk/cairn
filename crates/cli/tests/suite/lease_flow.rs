@@ -14,7 +14,7 @@ async fn session_for(app: &axum::Router, agent: &str, title: &str) -> String {
         "POST",
         "/api/tasks",
         agent,
-        Some(json!({ "repo": "demo", "title": title, "spec": "spec" })),
+        Some(json!({ "repo": "ada/demo", "title": title, "spec": "spec" })),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -65,7 +65,7 @@ async fn declared_paths_warn_before_the_tokens_are_spent() {
         "POST",
         &format!("/api/sessions/{scout_session}/paths"),
         "scout",
-        Some(json!({ "repo": "demo", "paths": ["crates/core/src/parser.rs", "docs/"] })),
+        Some(json!({ "repo": "ada/demo", "paths": ["crates/core/src/parser.rs", "docs/"] })),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -77,7 +77,7 @@ async fn declared_paths_warn_before_the_tokens_are_spent() {
         "POST",
         &format!("/api/sessions/{arbiter_session}/paths"),
         "arbiter",
-        Some(json!({ "repo": "demo", "paths": ["crates/core/"] })),
+        Some(json!({ "repo": "ada/demo", "paths": ["crates/core/"] })),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -94,7 +94,7 @@ async fn declared_paths_warn_before_the_tokens_are_spent() {
     let (status, ahead) = api(
         app,
         "GET",
-        "/api/repos/demo/conflicts?paths=crates/core/src/parser.rs,README.md",
+        "/api/repos/ada/demo/conflicts?paths=crates/core/src/parser.rs,README.md",
         "ada",
         None,
     )
@@ -113,7 +113,7 @@ async fn declared_paths_warn_before_the_tokens_are_spent() {
         &forge.work,
         &[
             "clone",
-            &format!("http://scout:x@{}/git/demo", forge.addr),
+            &format!("http://scout:x@{}/git/ada/demo", forge.addr),
             "wc",
         ],
     );
@@ -125,7 +125,7 @@ async fn declared_paths_warn_before_the_tokens_are_spent() {
         "Parser\n\nChange-Id: Iparser",
     );
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let change = changes[0]["id"].as_str().unwrap().to_owned();
     let (status, _) = api(
         app,
@@ -144,7 +144,7 @@ async fn declared_paths_warn_before_the_tokens_are_spent() {
     let (_, ahead) = api(
         app,
         "GET",
-        "/api/repos/demo/conflicts?paths=crates/core/src/parser.rs",
+        "/api/repos/ada/demo/conflicts?paths=crates/core/src/parser.rs",
         "ada",
         None,
     )
@@ -173,7 +173,7 @@ async fn declared_paths_warn_before_the_tokens_are_spent() {
     let (_, after) = api(
         app,
         "GET",
-        "/api/repos/demo/conflicts?paths=crates/core/src/parser.rs",
+        "/api/repos/ada/demo/conflicts?paths=crates/core/src/parser.rs",
         "ada",
         None,
     )
@@ -188,7 +188,7 @@ async fn declared_paths_warn_before_the_tokens_are_spent() {
     );
 
     // The repository page shows the fleet by what it is working on.
-    let (_, leases) = api(app, "GET", "/api/repos/demo/leases", "ada", None).await;
+    let (_, leases) = api(app, "GET", "/api/repos/ada/demo/leases", "ada", None).await;
     let held: Vec<&str> = leases
         .as_array()
         .unwrap()
@@ -208,7 +208,11 @@ async fn conflicting_verdicts_are_shown_side_by_side() {
 
     git(
         &forge.work,
-        &["clone", &format!("http://scout:x@{addr}/git/demo"), "wc"],
+        &[
+            "clone",
+            &format!("http://scout:x@{addr}/git/ada/demo"),
+            "wc",
+        ],
     );
     let wc = forge.work.join("wc");
     commit_file(
@@ -218,7 +222,7 @@ async fn conflicting_verdicts_are_shown_side_by_side() {
         "Risky\n\nChange-Id: Irisky",
     );
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let change = changes[0]["id"].as_str().unwrap().to_owned();
 
     // Both sides review here, so both need the capability to.
@@ -260,14 +264,14 @@ async fn conflicting_verdicts_are_shown_side_by_side() {
         assert_eq!(status, StatusCode::OK);
     }
 
-    let page = fetch_page(addr, "demo/changes/1").await;
+    let page = fetch_page(addr, "ada/demo/changes/1").await;
     assert!(page.contains("Reviewers disagree"));
     assert!(page.contains("In favour") && page.contains("Against"));
     assert!(page.contains("Logic is sound on every path I traced."));
     assert!(page.contains("Unbounded input reaches the parser here."));
 
     // And the attention engine leads with it.
-    let (_, ranked) = api(app, "GET", "/api/repos/demo/attention", "ada", None).await;
+    let (_, ranked) = api(app, "GET", "/api/repos/ada/demo/attention", "ada", None).await;
     assert_eq!(ranked[0]["signals"][0]["kind"], "reviewers_disagree");
 }
 

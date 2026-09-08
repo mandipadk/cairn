@@ -35,7 +35,7 @@ echo "operating.md: the binary names its version and build"
 "$BIN" --version | grep -qE '^cairn [0-9]+\.[0-9]+\.[0-9]+.* \(.+\)$' || { echo "!! --version did not name a version and a build: $("$BIN" --version)"; exit 1; }
 
 echo "README: bootstrap, then serve"
-TOKEN=$("$BIN" admin bootstrap --db forge.db you --display "You" | grep -oE 'cairn_[A-Za-z0-9_-]+' | head -1)
+TOKEN=$("$BIN" admin bootstrap --db forge.db ada --display "Ada" | grep -oE 'cairn_[A-Za-z0-9_-]+' | head -1)
 [ -n "$TOKEN" ] || { echo "!! bootstrap printed no token"; exit 1; }
 "$BIN" serve --db forge.db --listen "127.0.0.1:$PORT" >serve.log 2>&1 &
 SERVE=$!
@@ -52,18 +52,18 @@ AGENT=$(api principals/scout/tokens "$TOKEN" '{"label": "first-run"}' | json "d[
 [ -n "$AGENT" ] || { echo "!! no agent token was minted"; exit 1; }
 
 echo "git: a private repository asks an anonymous clone for credentials; scout clones with the token"
-if GIT_TERMINAL_PROMPT=0 git -c credential.helper= clone -q "$URL/git/demo" anon 2>/dev/null; then
+if GIT_TERMINAL_PROMPT=0 git -c credential.helper= clone -q "$URL/git/ada/demo" anon 2>/dev/null; then
   echo "!! a private repository was cloned without a token"; exit 1
 fi
-as_scout clone -q "$URL/git/demo" wc 2>/dev/null
+as_scout clone -q "$URL/git/ada/demo" wc 2>/dev/null
 cd wc
 echo hello >hello.txt
 git add hello.txt
 git -c user.name=Scout -c user.email=scout@example.test commit -q -m $'Do the thing\n\nChange-Id: I8f3a1c2e'
 as_scout push -q origin HEAD:refs/for/main 2>/dev/null
 cd ..
-CH=$(get repos/demo/changes "$TOKEN" | json "d[0]['id']")
-expect "$(get repos/demo/changes "$TOKEN" | json "(d[0]['number'], d[0]['title'], d[0]['owner'])")" "(1, 'Do the thing', 'scout')" "the push opened change 1 owned by scout"
+CH=$(get repos/ada/demo/changes "$TOKEN" | json "d[0]['id']")
+expect "$(get repos/ada/demo/changes "$TOKEN" | json "(d[0]['number'], d[0]['title'], d[0]['owner'])")" "(1, 'Do the thing', 'scout')" "the push opened change 1 owned by scout"
 
 echo "README: attach a claim, read the readiness, approve, merge"
 expect "$(api "changes/$CH/claims" "$AGENT" '{"kind": "test", "passed": true, "summary": "it says hello", "command": "test -f hello.txt"}' | json "d['id'][:3]")" "cl-" "scout attaches a claim"
@@ -75,8 +75,8 @@ echo "operating.md: the receipt verifies offline against the forge's key; the de
 get "changes/$CH/receipt" "$TOKEN" >receipt.json
 KEY=$(curl -sS "$URL/api/forge/key" | json "d['key']")
 "$BIN" receipt verify receipt.json --key "$KEY" >/dev/null || { echo "!! the receipt did not verify"; exit 1; }
-expect "$(get repos/demo/debt "$TOKEN" | json "d['counts']['claimed']")" 1 "the debt map counts one claimed line"
-for p in /demo /demo/changes/1 /demo/debt /tasks /agents /people; do
+expect "$(get repos/ada/demo/debt "$TOKEN" | json "d['counts']['claimed']")" 1 "the debt map counts one claimed line"
+for p in /ada/demo /ada/demo/changes/1 /ada/demo/debt /tasks /agents /people; do
   expect "$(status "$p")" 303 "a private page sends a stranger to sign in ($p)"
 done
 

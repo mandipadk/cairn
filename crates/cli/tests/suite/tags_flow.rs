@@ -13,7 +13,11 @@ async fn land_one(forge: &Forge) -> (PathBuf, String) {
     let (app, addr) = (&forge.app, forge.addr);
     git(
         &forge.work,
-        &["clone", &format!("http://scout:x@{addr}/git/demo"), "wc"],
+        &[
+            "clone",
+            &format!("http://scout:x@{addr}/git/ada/demo"),
+            "wc",
+        ],
     );
     let wc = forge.work.join("wc");
     commit_file(
@@ -22,10 +26,10 @@ async fn land_one(forge: &Forge) -> (PathBuf, String) {
         "hello\n",
         "Something worth naming\n\nChange-Id: Itag0001",
     );
-    let push_url = format!("http://scout:{}@{addr}/git/demo", forge.scout_token);
+    let push_url = format!("http://scout:{}@{addr}/git/ada/demo", forge.scout_token);
     git(&wc, &["remote", "set-url", "origin", &push_url]);
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let change = changes[0]["id"].as_str().unwrap().to_owned();
     approve_and_merge(app, &change).await;
     // What landed is what the forge put on main, which need not be the
@@ -48,7 +52,7 @@ async fn a_tag_names_landed_history_and_travels_to_the_mirror() {
     let (status, _) = api(
         app,
         "POST",
-        "/api/repos/demo/mirror",
+        "/api/repos/ada/demo/mirror",
         "ada",
         Some(json!({
             "mirror": { "url": format!("file://{}", elsewhere.display()), "enabled": true }
@@ -60,14 +64,14 @@ async fn a_tag_names_landed_history_and_travels_to_the_mirror() {
     let (wc, landed) = land_one(&forge).await;
 
     // ada may merge on demo, so ada may name what landed.
-    let ada_url = format!("http://ada:{}@{addr}/git/demo", forge.ada_token);
+    let ada_url = format!("http://ada:{}@{addr}/git/ada/demo", forge.ada_token);
     git(
         &wc,
         &["tag", "-a", "v0.1", "-m", "First named landing", &landed],
     );
     git(&wc, &["push", &ada_url, "refs/tags/v0.1"]);
 
-    let (status, tags) = api(app, "GET", "/api/repos/demo/tags", "ada", None).await;
+    let (status, tags) = api(app, "GET", "/api/repos/ada/demo/tags", "ada", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(tags.as_array().unwrap().len(), 1, "{tags}");
     assert_eq!(tags[0]["name"], "v0.1");
@@ -109,7 +113,7 @@ async fn a_tag_names_landed_history_and_travels_to_the_mirror() {
 
     // The repository page shows it.
     let (_, cookie) = sign_in_as(&forge, "ada").await;
-    let (status, page) = page_with_cookie(app, "/demo", &cookie).await;
+    let (status, page) = page_with_cookie(app, "/ada/demo", &cookie).await;
     assert_eq!(status, StatusCode::OK);
     assert!(page.contains("v0.1") && page.contains("Tags"), "{page}");
 
@@ -117,7 +121,7 @@ async fn a_tag_names_landed_history_and_travels_to_the_mirror() {
     // appears behind the forge's back, is a divergence.
     let clean = forge.state.branches_match_the_log().await.unwrap();
     assert!(clean.is_empty(), "{clean:?}");
-    let bare = forge._tmp.path().join("repos").join("demo.git");
+    let bare = forge._tmp.path().join("repos").join("ada/demo.git");
     assert!(bare.is_dir(), "{}", bare.display());
     git(&bare, &["update-ref", "-d", "refs/tags/v0.1"]);
     git(&bare, &["update-ref", "refs/tags/rogue", &landed]);
@@ -141,8 +145,8 @@ async fn a_tag_needs_merge_authority_a_landed_commit_and_a_new_name() {
     let forge = boot().await;
     let (app, addr) = (&forge.app, forge.addr);
     let (wc, landed) = land_one(&forge).await;
-    let ada_url = format!("http://ada:{}@{addr}/git/demo", forge.ada_token);
-    let scout_url = format!("http://scout:{}@{addr}/git/demo", forge.scout_token);
+    let ada_url = format!("http://ada:{}@{addr}/git/ada/demo", forge.ada_token);
+    let scout_url = format!("http://scout:{}@{addr}/git/ada/demo", forge.scout_token);
 
     // scout holds push, not merge.
     git(&wc, &["tag", "nope", &landed]);
@@ -170,7 +174,7 @@ async fn a_tag_needs_merge_authority_a_landed_commit_and_a_new_name() {
     assert!(refused.contains("deleting"), "{refused}");
 
     // None of the refusals left anything behind.
-    let (_, tags) = api(app, "GET", "/api/repos/demo/tags", "ada", None).await;
+    let (_, tags) = api(app, "GET", "/api/repos/ada/demo/tags", "ada", None).await;
     assert_eq!(tags.as_array().unwrap().len(), 1, "{tags}");
     assert_eq!(tags[0]["name"], "v1");
     let refs = git(&wc, &["ls-remote", &ada_url]);

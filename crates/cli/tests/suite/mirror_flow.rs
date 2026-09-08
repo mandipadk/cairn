@@ -27,7 +27,7 @@ async fn a_landed_branch_is_copied_outward_and_the_attempt_is_recorded() {
     let (status, refused) = api(
         app,
         "POST",
-        "/api/repos/demo/mirror",
+        "/api/repos/ada/demo/mirror",
         "ada",
         Some(json!({ "mirror": { "url": "https://token@example.test/x.git", "enabled": true } })),
     )
@@ -47,7 +47,7 @@ async fn a_landed_branch_is_copied_outward_and_the_attempt_is_recorded() {
     let (status, _) = api(
         app,
         "POST",
-        "/api/repos/demo/mirror",
+        "/api/repos/ada/demo/mirror",
         "ada",
         Some(json!({
             "mirror": { "url": format!("file://{}", elsewhere.display()), "enabled": true }
@@ -55,13 +55,17 @@ async fn a_landed_branch_is_copied_outward_and_the_attempt_is_recorded() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let (_, configured) = api(app, "GET", "/api/repos/demo/mirror", "ada", None).await;
+    let (_, configured) = api(app, "GET", "/api/repos/ada/demo/mirror", "ada", None).await;
     assert_eq!(configured["enabled"], true);
 
     // Land something.
     git(
         &forge.work,
-        &["clone", &format!("http://scout:x@{addr}/git/demo"), "wc"],
+        &[
+            "clone",
+            &format!("http://scout:x@{addr}/git/ada/demo"),
+            "wc",
+        ],
     );
     let wc = forge.work.join("wc");
     commit_file(
@@ -71,7 +75,7 @@ async fn a_landed_branch_is_copied_outward_and_the_attempt_is_recorded() {
         "Mirrored\n\nChange-Id: Imirror",
     );
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let change = changes[0]["id"].as_str().unwrap().to_owned();
     let landed = git(&wc, &["rev-parse", "HEAD"]).trim().to_owned();
     approve_and_enqueue(app, &change).await;
@@ -127,20 +131,20 @@ async fn a_landed_branch_is_copied_outward_and_the_attempt_is_recorded() {
     let (status, _) = api(
         app,
         "POST",
-        "/api/repos/demo/mirror",
+        "/api/repos/ada/demo/mirror",
         "ada",
         Some(json!({})),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let (_, configured) = api(app, "GET", "/api/repos/demo/mirror", "ada", None).await;
+    let (_, configured) = api(app, "GET", "/api/repos/ada/demo/mirror", "ada", None).await;
     assert!(configured.is_null());
 
     // A failing mirror is recorded rather than swallowed.
     let (status, _) = api(
         app,
         "POST",
-        "/api/repos/demo/mirror",
+        "/api/repos/ada/demo/mirror",
         "ada",
         Some(json!({
             "mirror": { "url": "file:///nowhere/that/exists.git", "enabled": true }
@@ -152,7 +156,7 @@ async fn a_landed_branch_is_copied_outward_and_the_attempt_is_recorded() {
     git(&wc, &["reset", "-q", "--hard", "FETCH_HEAD"]);
     commit_file(&wc, "second.txt", "again\n", "Second\n\nChange-Id: Isecond");
     git(&wc, &["push", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let second = changes
         .as_array()
         .unwrap()

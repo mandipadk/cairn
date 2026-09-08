@@ -211,7 +211,7 @@ async fn boot_core(
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(repos.join("demo.git").is_dir());
+    assert!(repos.join("ada/demo.git").is_dir());
 
     Forge {
         _tmp: tmp,

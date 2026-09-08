@@ -49,7 +49,7 @@ async fn a_stranger_reports_and_whoever_runs_the_forge_hears_of_it() {
         app,
         "/report",
         "",
-        "what=The+landing+page+said+nothing+after+I+pushed+a+stack.&place=%2Fdemo%2Flanding&contact=Someone%40Example.test",
+        "what=The+landing+page+said+nothing+after+I+pushed+a+stack.&place=%2Fada%2Fdemo%2Flanding&contact=Someone%40Example.test",
     )
     .await;
     assert_eq!(status, StatusCode::SEE_OTHER, "{location}");
@@ -70,7 +70,7 @@ async fn a_stranger_reports_and_whoever_runs_the_forge_hears_of_it() {
     assert_eq!(status, StatusCode::OK);
     assert!(page.contains("landing page said nothing"), "{page}");
     assert!(page.contains("someone@example.test"), "{page}");
-    assert!(page.contains("/demo/landing"), "{page}");
+    assert!(page.contains("/ada/demo/landing"), "{page}");
     assert_ne!(
         get_with_cookie(app, "/reports", "").await,
         StatusCode::OK,

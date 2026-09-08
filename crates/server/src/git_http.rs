@@ -12,11 +12,12 @@
 
 use crate::auth::{Actor, PRINCIPAL_HEADER};
 use crate::error::{ApiError, ApiResult};
+use crate::repo_path::RepoName;
 use crate::routes::committed;
 use crate::state::AppState;
 use axum::Json;
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use base64::prelude::*;
@@ -145,7 +146,7 @@ fn push_principal(
 /// because a mismatch there is usually somebody's mistake worth
 /// catching; refusing a *read* over it would only mean a valid
 /// credential is rejected for being labelled oddly.
-fn reader(
+pub(crate) fn reader(
     app: &AppState,
     headers: &HeaderMap,
 ) -> ApiResult<(PrincipalId, Option<cairn_core::Scope>)> {
@@ -233,7 +234,7 @@ pub struct InfoRefsQuery {
 
 pub async fn info_refs(
     State(app): State<AppState>,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Query(query): Query<InfoRefsQuery>,
     headers: HeaderMap,
 ) -> Response {
@@ -264,7 +265,7 @@ pub async fn info_refs(
 
 pub async fn upload_pack(
     State(app): State<AppState>,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -302,7 +303,7 @@ pub async fn upload_pack(
 
 pub async fn receive_pack(
     State(app): State<AppState>,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -740,7 +741,7 @@ pub struct BlameQuery {
 pub async fn blame(
     State(app): State<AppState>,
     actor: Actor,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     axum::extract::Query(query): axum::extract::Query<BlameQuery>,
 ) -> ApiResult<Json<Value>> {
     let git = git_enabled(&app)?;

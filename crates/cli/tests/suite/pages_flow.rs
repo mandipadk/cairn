@@ -54,22 +54,25 @@ async fn a_clone_address_is_one_you_can_paste_and_empty_lists_say_so() {
     let forge = boot_with_passkeys().await;
     let app = &forge.app;
     let (_, cookie) = sign_in_as(&forge, "ada").await;
-    let (_, repo) = page_with_cookie(app, "/demo", &cookie).await;
-    assert!(repo.contains("https://forge.example/git/demo"), "{repo}");
-    let (_, changes) = page_with_cookie(app, "/demo/changes", &cookie).await;
+    let (_, repo) = page_with_cookie(app, "/ada/demo", &cookie).await;
+    assert!(
+        repo.contains("https://forge.example/git/ada/demo"),
+        "{repo}"
+    );
+    let (_, changes) = page_with_cookie(app, "/ada/demo/changes", &cookie).await;
     assert!(changes.contains("No changes yet"), "{changes}");
-    let (_, log) = page_with_cookie(app, "/demo/log", &cookie).await;
+    let (_, log) = page_with_cookie(app, "/ada/demo/log", &cookie).await;
     // Rows say when and who and what; no sequence numbers or event kinds.
     assert!(!log.contains("repo_created"), "{log}");
-    assert!(log.contains("created demo"), "{log}");
+    assert!(log.contains("created ada/demo"), "{log}");
     api_with_token(
         app,
         "POST",
         "/api/changes",
         &forge.scout_token,
-        Some(json!({ "repo": "demo", "target": "main", "title": "Something" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "Something" })),
     )
     .await;
-    let (_, changes) = page_with_cookie(app, "/demo/changes", &cookie).await;
+    let (_, changes) = page_with_cookie(app, "/ada/demo/changes", &cookie).await;
     assert!(!changes.contains("No changes yet"));
 }

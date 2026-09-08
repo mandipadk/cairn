@@ -7,6 +7,9 @@ Cairn records the causal chain as structured, subscribable data.
 
 ## The objects
 
+- **Owners** — a repository belongs to a person or an organisation and
+  is addressed as `/owner/repo` everywhere; an organisation is a team
+  that can own, and names are unique per owner.
 - **Tasks** — durable statements of intent. A task may allow more than
   one attempt; the attempts arrive as revisions of one change and are
   compared, not merged separately.

@@ -30,7 +30,7 @@ async fn concurrent_revisions_get_distinct_numbers() {
         "POST",
         "/api/changes",
         "ada",
-        Some(json!({ "repo": "demo", "target": "main", "title": "Racy" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "Racy" })),
     )
     .await;
     let change_id = change["id"].as_str().unwrap().to_owned();
@@ -107,7 +107,7 @@ async fn a_change_enqueued_many_times_at_once_lands_once() {
         &[
             "clone",
             "-q",
-            &format!("http://scout:x@{addr}/git/demo"),
+            &format!("http://scout:x@{addr}/git/ada/demo"),
             "wc",
         ],
     );
@@ -115,7 +115,7 @@ async fn a_change_enqueued_many_times_at_once_lands_once() {
     commit_file(&wc, "one.txt", "1\n", "One\n\nChange-Id: Irace1");
     git(&wc, &["push", "-q", "origin", "HEAD:refs/for/main"]);
 
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let change_id = changes[0]["id"].as_str().unwrap().to_owned();
 
     // Satisfy policy first, so the only thing under test is the race.
@@ -201,7 +201,7 @@ async fn many_changes_landing_at_once_each_land_once_and_the_refs_agree() {
         &[
             "clone",
             "-q",
-            &format!("http://scout:x@{addr}/git/demo"),
+            &format!("http://scout:x@{addr}/git/ada/demo"),
             "wc",
         ],
     );
@@ -210,7 +210,7 @@ async fn many_changes_landing_at_once_each_land_once_and_the_refs_agree() {
     // Seed main so the branches have a base commit to fork from.
     commit_file(&wc, "base.txt", "base\n", "Base\n\nChange-Id: Ibase");
     git(&wc, &["push", "-q", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let base = changes[0]["id"].as_str().unwrap().to_owned();
     approve_and_enqueue(app, &base).await;
     wait_for(app, "the base to land", async |app: &axum::Router| {
@@ -241,7 +241,7 @@ async fn many_changes_landing_at_once_each_land_once_and_the_refs_agree() {
                 &format!("HEAD:refs/for/branch{lane}"),
             ],
         );
-        let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+        let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
         let id = changes
             .as_array()
             .unwrap()
@@ -331,7 +331,7 @@ async fn many_changes_landing_at_once_each_land_once_and_the_refs_agree() {
             &wc,
             &[
                 "ls-remote",
-                &format!("http://scout:x@{addr}/git/demo"),
+                &format!("http://scout:x@{addr}/git/ada/demo"),
                 &format!("refs/heads/branch{lane}"),
             ],
         );
@@ -362,14 +362,14 @@ async fn a_branch_that_lost_a_landed_change_is_reported() {
         &[
             "clone",
             "-q",
-            &format!("http://scout:x@{addr}/git/demo"),
+            &format!("http://scout:x@{addr}/git/ada/demo"),
             "wc",
         ],
     );
     let wc = forge.work.join("wc");
     commit_file(&wc, "first.txt", "1\n", "First\n\nChange-Id: Ifirst");
     git(&wc, &["push", "-q", "origin", "HEAD:refs/for/main"]);
-    let (_, changes) = api(app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     let first = changes[0]["id"].as_str().unwrap().to_owned();
     approve_and_enqueue(app, &first).await;
     wait_for(
@@ -409,7 +409,7 @@ async fn a_branch_that_lost_a_landed_change_is_reported() {
 
     // Now the failure this exists to catch: the graph still says merged,
     // the branch no longer contains it.
-    let bare = forge._tmp.path().join("repos").join("demo.git");
+    let bare = forge._tmp.path().join("repos").join("ada/demo.git");
     let landed = git(&wc, &["rev-parse", "HEAD"]).trim().to_owned();
     std::process::Command::new("git")
         .args([

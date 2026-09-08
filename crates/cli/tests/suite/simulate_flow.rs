@@ -22,7 +22,14 @@ async fn pushed(forge: &Forge, wc: &std::path::Path, file: &str, key: &str) -> (
         &format!("Change {file}\n\nChange-Id: {key}"),
     );
     git(wc, &["push", "-q", "origin", "HEAD:refs/for/main"]);
-    let changes = ok(&forge.app, "GET", "/api/repos/demo/changes", "ada", None).await;
+    let changes = ok(
+        &forge.app,
+        "GET",
+        "/api/repos/ada/demo/changes",
+        "ada",
+        None,
+    )
+    .await;
     let change = changes.as_array().unwrap().last().unwrap()["id"]
         .as_str()
         .unwrap()
@@ -91,7 +98,7 @@ async fn a_policy_is_judged_against_landings_as_of_their_merge() {
         &[
             "clone",
             "-q",
-            &format!("http://scout:x@{addr}/git/demo"),
+            &format!("http://scout:x@{addr}/git/ada/demo"),
             "wc",
         ],
     );
@@ -127,7 +134,7 @@ async fn a_policy_is_judged_against_landings_as_of_their_merge() {
     let (status, simulated) = api(
         app,
         "POST",
-        "/api/repos/demo/policy/simulate?since=2020-01-01",
+        "/api/repos/ada/demo/policy/simulate?since=2020-01-01",
         "ada",
         Some(requiring_a_runner()),
     )
@@ -164,11 +171,11 @@ async fn a_policy_is_judged_against_landings_as_of_their_merge() {
     );
 
     // The policy they actually landed under holds nothing.
-    let current = ok(app, "GET", "/api/repos/demo/policy", "ada", None).await;
+    let current = ok(app, "GET", "/api/repos/ada/demo/policy", "ada", None).await;
     let (_, unchanged) = api(
         app,
         "POST",
-        "/api/repos/demo/policy/simulate?since=2020-01-01",
+        "/api/repos/ada/demo/policy/simulate?since=2020-01-01",
         "ada",
         Some(current),
     )
@@ -180,7 +187,7 @@ async fn a_policy_is_judged_against_landings_as_of_their_merge() {
     ok(
         app,
         "POST",
-        "/api/repos/demo/visibility",
+        "/api/repos/ada/demo/visibility",
         "ada",
         Some(json!({ "visibility": "public" })),
     )
@@ -188,7 +195,7 @@ async fn a_policy_is_judged_against_landings_as_of_their_merge() {
     let (status, refused) = api_anonymous(
         app,
         "POST",
-        "/api/repos/demo/policy/simulate?since=2020-01-01",
+        "/api/repos/ada/demo/policy/simulate?since=2020-01-01",
         Some(requiring_a_runner()),
     )
     .await;
@@ -198,7 +205,7 @@ async fn a_policy_is_judged_against_landings_as_of_their_merge() {
     let (_, none) = api(
         app,
         "POST",
-        "/api/repos/demo/policy/simulate?since=2999-01-01",
+        "/api/repos/ada/demo/policy/simulate?since=2999-01-01",
         "ada",
         Some(requiring_a_runner()),
     )
@@ -207,7 +214,7 @@ async fn a_policy_is_judged_against_landings_as_of_their_merge() {
     let (status, refused) = api(
         app,
         "POST",
-        "/api/repos/demo/policy/simulate?since=yesterday",
+        "/api/repos/ada/demo/policy/simulate?since=yesterday",
         "ada",
         Some(requiring_a_runner()),
     )
@@ -218,7 +225,7 @@ async fn a_policy_is_judged_against_landings_as_of_their_merge() {
     let (_, ada) = sign_in_as(&forge, "ada").await;
     let (status, page) = post_form_page(
         app,
-        "/demo/settings/policy",
+        "/ada/demo/settings/policy",
         &ada,
         "action=simulate&since=2020-01-01&require_executed_check=on&require_runner_verification=on&runner_quorum=1&independence=none&attention_budget=",
     )
@@ -255,30 +262,30 @@ async fn a_policy_travels_as_a_pack() {
     ok(
         app,
         "POST",
-        "/api/repos/demo/description",
+        "/api/repos/ada/demo/description",
         "ada",
         Some(json!({ "description": "the demo" })),
     )
     .await;
-    let pack = ok(app, "GET", "/api/repos/demo/policy/pack", "ada", None).await;
+    let pack = ok(app, "GET", "/api/repos/ada/demo/policy/pack", "ada", None).await;
     assert_eq!(pack["pack"], 1);
-    assert_eq!(pack["name"], "demo");
+    assert_eq!(pack["name"], "ada/demo");
     assert_eq!(pack["description"], "the demo");
-    assert_eq!(pack["from"]["repo"], "demo");
-    let policy = ok(app, "GET", "/api/repos/demo/policy", "ada", None).await;
+    assert_eq!(pack["from"]["repo"], "ada/demo");
+    let policy = ok(app, "GET", "/api/repos/ada/demo/policy", "ada", None).await;
     assert_eq!(pack["policy"], policy);
 
     // The settings page starts from a shipped pack, or a pasted one.
     let (_, ada) = sign_in_as(&forge, "ada").await;
     let (status, _) = post_form(
         app,
-        "/demo/settings/policy",
+        "/ada/demo/settings/policy",
         &ada,
         "action=save&pack=agents-supervised&independence=none&attention_budget=",
     )
     .await;
     assert_eq!(status, StatusCode::SEE_OTHER);
-    let policy = ok(app, "GET", "/api/repos/demo/policy", "ada", None).await;
+    let policy = ok(app, "GET", "/api/repos/ada/demo/policy", "ada", None).await;
     assert_eq!(policy["agents_act_in_sessions"], true, "{policy}");
     assert_eq!(policy["independence"], "human_only");
     assert_eq!(policy["attention_budget"], 2);
@@ -291,9 +298,9 @@ async fn a_policy_travels_as_a_pack() {
         "action=save&pack_json={}&independence=none&attention_budget=",
         urlencoded(&pasted.to_string())
     );
-    let (status, _) = post_form(app, "/demo/settings/policy", &ada, &body).await;
+    let (status, _) = post_form(app, "/ada/demo/settings/policy", &ada, &body).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
-    let policy = ok(app, "GET", "/api/repos/demo/policy", "ada", None).await;
+    let policy = ok(app, "GET", "/api/repos/ada/demo/policy", "ada", None).await;
     assert_eq!(
         policy, packs[0]["policy"],
         "the pasted pack is the policy now"
@@ -302,7 +309,7 @@ async fn a_policy_travels_as_a_pack() {
     // Garbage is refused with a word, and changes nothing.
     let (status, location) = post_form(
         app,
-        "/demo/settings/policy",
+        "/ada/demo/settings/policy",
         &ada,
         "action=save&pack_json=%7Bnot+json&independence=none&attention_budget=",
     )

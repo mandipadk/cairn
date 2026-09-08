@@ -109,10 +109,15 @@ pub enum Event {
     },
 
     RepoCreated {
+        /// The full name, `owner/short`.
         repo: String,
         default_branch: String,
         #[serde(default)]
         object_format: ObjectFormat,
+        /// Who owns it when that is not the actor: an organisation, or
+        /// somebody an admin made it for. Absent, the actor owns it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner: Option<PrincipalId>,
     },
 
     /// History that predates this forge, brought in whole. Recorded as
@@ -538,9 +543,10 @@ mod tests {
     #[test]
     fn kind_matches_serde_tag() {
         let e = Event::RepoCreated {
-            repo: "demo".into(),
+            repo: "ada/demo".into(),
             default_branch: "main".into(),
             object_format: ObjectFormat::Sha1,
+            owner: None,
         };
         let v = serde_json::to_value(&e).unwrap();
         assert_eq!(v["kind"], e.kind());

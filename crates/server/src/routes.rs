@@ -7,6 +7,7 @@
 
 use crate::auth::{Actor, MaybeActor};
 use crate::error::{ApiError, ApiResult};
+use crate::repo_path::RepoName;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -188,7 +189,12 @@ pub async fn get_principal(
 
 #[derive(Deserialize)]
 pub struct CreateRepo {
+    /// The short name; the owner's name goes in front of it.
     pub name: String,
+    /// Who owns it: the caller unless said otherwise, an organisation
+    /// the caller belongs to, or anyone for whoever runs the forge.
+    #[serde(default)]
+    pub owner: Option<String>,
     #[serde(default = "default_branch")]
     pub default_branch: String,
     #[serde(default)]
@@ -210,10 +216,28 @@ pub async fn create_repo(
     // left a directory behind — a side effect ahead of the check that
     // should have prevented it. create_repo applies these same rules
     // again when it appends the event.
+    let owner = body
+        .owner
+        .as_deref()
+        .map(|o| {
+            PrincipalId::new(o).ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid",
+                    format!("{o:?} is not a valid owner"),
+                )
+            })
+        })
+        .transpose()?;
     app.with_store(|s| {
-        s.acting_as(actor.1.as_ref())
-            .check_new_repo(&actor.0, &body.name, &body.default_branch)
+        s.acting_as(actor.1.as_ref()).check_new_repo(
+            &actor.0,
+            owner.as_ref(),
+            &body.name,
+            &body.default_branch,
+        )
     })?;
+    let full_name = format!("{}/{}", owner.as_ref().unwrap_or(&actor.0), body.name);
     // Then the bare repo lands on disk before the graph event. An orphan
     // directory from a lost race is harmless — nothing serves a
     // repository the graph does not know about — whereas the reverse
@@ -221,7 +245,7 @@ pub async fn create_repo(
     if let Some(git) = app.git() {
         git.store
             .create_repo(
-                &body.name,
+                &full_name,
                 &body.default_branch,
                 body.object_format.as_str(),
             )
@@ -231,13 +255,14 @@ pub async fn create_repo(
         s.acting_as(actor.1.as_ref());
         s.create_repo(
             &actor.0,
+            owner.as_ref(),
             &body.name,
             &body.default_branch,
             body.object_format,
         )
     })?;
     app.publish(&env);
-    Ok(committed(Some(body.name), &env))
+    Ok(committed(Some(full_name), &env))
 }
 
 #[derive(Deserialize)]
@@ -258,7 +283,7 @@ pub struct ImportHistory {
 pub async fn import_history(
     State(app): State<AppState>,
     actor: Actor,
-    Path(name): Path<String>,
+    RepoName(name): RepoName,
     Json(body): Json<ImportHistory>,
 ) -> ApiResult<Json<Value>> {
     let git = app.git().ok_or_else(|| {
@@ -315,7 +340,7 @@ pub struct SetVisibility {
 pub async fn set_visibility(
     State(app): State<AppState>,
     actor: Actor,
-    Path(name): Path<String>,
+    RepoName(name): RepoName,
     Json(body): Json<SetVisibility>,
 ) -> ApiResult<Json<Value>> {
     let env = app.with_store(|s| {
@@ -335,7 +360,7 @@ pub struct TransferRepo {
 pub async fn offer_transfer(
     State(app): State<AppState>,
     actor: Actor,
-    Path(name): Path<String>,
+    RepoName(name): RepoName,
     Json(body): Json<TransferRepo>,
 ) -> ApiResult<Json<Value>> {
     let env = app.with_store(|s| {
@@ -346,23 +371,57 @@ pub async fn offer_transfer(
     Ok(committed(Some(name), &env))
 }
 
+/// Accepting moves the repository under its new owner's name, so the
+/// directory moves first, like a rename, and moves back if the graph
+/// refuses.
 pub async fn accept_transfer(
     State(app): State<AppState>,
     actor: Actor,
-    Path(name): Path<String>,
+    RepoName(name): RepoName,
 ) -> ApiResult<Json<Value>> {
-    let env = app.with_store(|s| {
+    let record = found(app.with_store(|s| s.repo(&name))?, "repo")?;
+    let new_name = accepted_name(&record).ok_or_else(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            "conflict",
+            format!("{name} is not on offer"),
+        )
+    })?;
+    if let Some(git) = app.git() {
+        git.store.rename_repo(&name, &new_name).await?;
+    }
+    let envs = match app.with_store(|s| {
         s.acting_as(actor.1.as_ref())
             .accept_transfer(&actor.0, &name)
-    })?;
-    app.publish(&env);
-    Ok(committed(Some(name), &env))
+    }) {
+        Ok(envs) => envs,
+        Err(err) => {
+            if let Some(git) = app.git() {
+                let _ = git.store.rename_repo(&new_name, &name).await;
+            }
+            return Err(err.into());
+        }
+    };
+    for env in &envs {
+        app.publish(env);
+    }
+    let last = envs.last().expect("acceptance records at least one event");
+    Ok(committed(Some(new_name), last))
+}
+
+/// The name a repository takes when its pending owner accepts it.
+pub(crate) fn accepted_name(record: &Repo) -> Option<String> {
+    let to = record.pending_owner.as_ref()?;
+    let short = cairn_core::split_repo_name(&record.name)
+        .map(|(_, short)| short.to_owned())
+        .unwrap_or_else(|| record.name.clone());
+    Some(format!("{to}/{short}"))
 }
 
 pub async fn decline_transfer(
     State(app): State<AppState>,
     actor: Actor,
-    Path(name): Path<String>,
+    RepoName(name): RepoName,
 ) -> ApiResult<Json<Value>> {
     let env = app.with_store(|s| {
         s.acting_as(actor.1.as_ref())
@@ -375,7 +434,7 @@ pub async fn decline_transfer(
 pub async fn get_repo(
     State(app): State<AppState>,
     who: MaybeActor,
-    Path(name): Path<String>,
+    RepoName(name): RepoName,
 ) -> ApiResult<Json<Value>> {
     Ok(Json(json!(readable_repo_by(&app, &who, &name)?)))
 }
@@ -580,7 +639,8 @@ pub async fn get_change(
 pub async fn get_change_by_number(
     State(app): State<AppState>,
     who: MaybeActor,
-    Path((repo, number)): Path<(String, i64)>,
+    RepoName(repo): RepoName,
+    Path((_, _, number)): Path<(String, String, i64)>,
 ) -> ApiResult<Json<Value>> {
     readable_repo_by(&app, &who, &repo)?;
     let change = app.with_store(|s| s.acting_as(who.scope()).change_by_number(&repo, number))?;
@@ -602,7 +662,7 @@ pub struct ChangesQuery {
 pub async fn list_changes(
     State(app): State<AppState>,
     who: MaybeActor,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Query(query): Query<ChangesQuery>,
 ) -> ApiResult<Json<Value>> {
     readable_repo_by(&app, &who, &repo)?;
@@ -634,7 +694,7 @@ pub struct DescribeBody {
 pub async fn describe_repo(
     State(app): State<AppState>,
     actor: Actor,
-    Path(name): Path<String>,
+    RepoName(name): RepoName,
     Json(body): Json<DescribeBody>,
 ) -> ApiResult<Json<Value>> {
     let env = app.with_store(|s| {
@@ -1093,7 +1153,7 @@ pub struct QueueQuery {
 pub async fn list_queue(
     State(app): State<AppState>,
     who: MaybeActor,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Query(query): Query<QueueQuery>,
 ) -> ApiResult<Json<Value>> {
     let record = readable_repo_by(&app, &who, &repo)?;
@@ -1258,7 +1318,7 @@ pub async fn list_verifications(
 pub async fn attention(
     State(app): State<AppState>,
     who: MaybeActor,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
 ) -> ApiResult<Json<Value>> {
     readable_repo_by(&app, &who, &repo)?;
     let items = app.with_store(|s| s.acting_as(who.scope()).attention_for(&repo))?;
@@ -1346,7 +1406,7 @@ pub struct RenameBody {
 pub async fn rename_repo(
     State(app): State<AppState>,
     actor: Actor,
-    Path(name): Path<String>,
+    RepoName(name): RepoName,
     Json(body): Json<RenameBody>,
 ) -> ApiResult<Json<Value>> {
     let to = body.to.trim().to_owned();
@@ -1354,8 +1414,11 @@ pub async fn rename_repo(
         s.acting_as(actor.1.as_ref())
             .check_rename(&actor.0, &name, &to)
     })?;
+    // The owner's name stays in front; the directory follows the full name.
+    let record = found(app.with_store(|s| s.repo(&name))?, "repo")?;
+    let full_to = format!("{}/{to}", record.owner);
     if let Some(git) = app.git() {
-        git.store.rename_repo(&name, &to).await?;
+        git.store.rename_repo(&name, &full_to).await?;
     }
     let env = match app.with_store(|s| {
         s.acting_as(actor.1.as_ref())
@@ -1364,19 +1427,19 @@ pub async fn rename_repo(
         Ok(env) => env,
         Err(err) => {
             if let Some(git) = app.git() {
-                let _ = git.store.rename_repo(&to, &name).await;
+                let _ = git.store.rename_repo(&full_to, &name).await;
             }
             return Err(err.into());
         }
     };
     app.publish(&env);
-    Ok(committed(Some(to), &env))
+    Ok(committed(Some(full_to), &env))
 }
 
 pub async fn archive_repo(
     State(app): State<AppState>,
     actor: Actor,
-    Path(name): Path<String>,
+    RepoName(name): RepoName,
 ) -> ApiResult<Json<Value>> {
     let env = app.with_store(|s| {
         s.acting_as(actor.1.as_ref())
@@ -1389,7 +1452,7 @@ pub async fn archive_repo(
 pub async fn unarchive_repo(
     State(app): State<AppState>,
     actor: Actor,
-    Path(name): Path<String>,
+    RepoName(name): RepoName,
 ) -> ApiResult<Json<Value>> {
     let env = app.with_store(|s| {
         s.acting_as(actor.1.as_ref())
@@ -1408,7 +1471,7 @@ pub struct DeleteBody {
 pub async fn delete_repo(
     State(app): State<AppState>,
     actor: Actor,
-    Path(name): Path<String>,
+    RepoName(name): RepoName,
     Json(body): Json<DeleteBody>,
 ) -> ApiResult<Json<Value>> {
     let env = app.with_store(|s| {
@@ -1431,7 +1494,7 @@ pub struct DrawQuery {
 pub async fn draw_attention(
     State(app): State<AppState>,
     actor: Actor,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Query(query): Query<DrawQuery>,
 ) -> ApiResult<Json<Value>> {
     let day = query.day.unwrap_or_else(crate::today);
@@ -1515,7 +1578,7 @@ pub struct PathsQuery {
 pub async fn path_conflicts(
     State(app): State<AppState>,
     who: MaybeActor,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Query(query): Query<PathsQuery>,
 ) -> ApiResult<Json<Value>> {
     readable_repo_by(&app, &who, &repo)?;
@@ -1532,7 +1595,7 @@ pub async fn path_conflicts(
 pub async fn list_leases(
     State(app): State<AppState>,
     who: MaybeActor,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
 ) -> ApiResult<Json<Value>> {
     readable_repo_by(&app, &who, &repo)?;
     let leases = app.with_store(|s| s.acting_as(who.scope()).live_leases(&repo))?;
@@ -1751,7 +1814,7 @@ pub struct PolicyBody {
 pub async fn get_policy(
     State(app): State<AppState>,
     who: MaybeActor,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
 ) -> ApiResult<Json<Value>> {
     let record = readable_repo_by(&app, &who, &repo)?;
     Ok(Json(json!(record.policy)))
@@ -1760,7 +1823,7 @@ pub async fn get_policy(
 pub async fn set_policy(
     State(app): State<AppState>,
     actor: Actor,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Json(body): Json<PolicyBody>,
 ) -> ApiResult<Json<Value>> {
     if body.preview {
@@ -1815,7 +1878,7 @@ pub struct SimulateQuery {
 pub async fn simulate_policy(
     State(app): State<AppState>,
     actor: Actor,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Query(query): Query<SimulateQuery>,
     Json(policy): Json<cairn_core::Policy>,
 ) -> ApiResult<Json<Value>> {
@@ -1861,7 +1924,7 @@ pub async fn policy_packs() -> Json<Value> {
 pub async fn policy_pack(
     State(app): State<AppState>,
     who: MaybeActor,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
 ) -> ApiResult<Json<Value>> {
     readable_repo_by(&app, &who, &repo)?;
     let pack = found(
@@ -1885,7 +1948,7 @@ pub struct MirrorBody {
 pub async fn set_mirror(
     State(app): State<AppState>,
     actor: Actor,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
     Json(body): Json<MirrorBody>,
 ) -> ApiResult<Json<Value>> {
     let env = app.with_store(|s| {
@@ -1899,7 +1962,7 @@ pub async fn set_mirror(
 pub async fn get_mirror(
     State(app): State<AppState>,
     actor: Actor,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
 ) -> ApiResult<Json<Value>> {
     let record = readable_repo(&app, &actor, &repo)?;
     Ok(Json(json!(record.mirror)))
@@ -1913,7 +1976,7 @@ pub async fn get_mirror(
 pub async fn tags(
     State(app): State<AppState>,
     who: MaybeActor,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
 ) -> ApiResult<Json<Value>> {
     readable_repo_by(&app, &who, &repo)?;
     let tags = app.with_store(|s| s.acting_as(who.scope()).tags(&repo))?;
@@ -1944,7 +2007,7 @@ pub async fn health(State(app): State<AppState>) -> Response {
 pub async fn awaiting_verification(
     State(app): State<AppState>,
     actor: Actor,
-    Path(repo): Path<String>,
+    RepoName(repo): RepoName,
 ) -> ApiResult<Json<Value>> {
     readable_repo(&app, &actor, &repo)?;
     let waiting = app.with_store(|s| {

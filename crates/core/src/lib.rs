@@ -49,8 +49,8 @@ pub use commands::{password_acceptable, until_in_days, verify_password};
 pub use error::{CoreError, CoreResult};
 pub use event::{Envelope, Event, EventSeq};
 pub use id::{
-    ChangeId, ClaimId, GrantId, PrincipalId, SessionId, TaskId, ThreadId, TokenId, VerdictId,
-    VerificationId,
+    ChangeId, ClaimId, GrantId, PrincipalId, RESERVED_IDS, SessionId, TaskId, ThreadId, TokenId,
+    VerdictId, VerificationId, split_repo_name, validate_repo_name,
 };
 pub use leases::{Overlap, covers, patterns_overlap};
 pub use policy::{PolicyTrace, Requirement};

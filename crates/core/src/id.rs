@@ -29,6 +29,26 @@ pub(crate) fn validate_slug(s: &str) -> bool {
         && !s.ends_with('-')
 }
 
+/// Names nobody may take as a principal, because an owner's page lives at
+/// `/{owner}` and these addresses are already spoken for by the pages,
+/// the API, git and the assets.
+pub const RESERVED_IDS: &[&str] = &[
+    "api", "git", "assets", "healthz", "ui", "agents", "forgot", "inbox", "join", "log", "login",
+    "logout", "new", "people", "report", "reports", "reset", "search", "signin", "tasks", "teams",
+    "theme", "verify", "waitlist", "you",
+];
+
+/// A repository's full name is `owner/short`, both slugs: the owner is a
+/// person or an organisation, the short name is theirs to choose.
+pub fn split_repo_name(name: &str) -> Option<(&str, &str)> {
+    let (owner, short) = name.split_once('/')?;
+    (validate_slug(owner) && validate_slug(short)).then_some((owner, short))
+}
+
+pub fn validate_repo_name(name: &str) -> bool {
+    split_repo_name(name).is_some()
+}
+
 macro_rules! random_id {
     ($(#[$doc:meta])* $name:ident, $prefix:literal) => {
         $(#[$doc])*

@@ -144,7 +144,7 @@ async fn full_protocol_over_http() {
         "/api/tasks",
         Some("ada"),
         Some(json!({
-            "repo": "demo",
+            "repo": "ada/demo",
             "title": "Ship the demo",
             "spec": "Walk the whole protocol over HTTP."
         })),
@@ -193,7 +193,7 @@ async fn full_protocol_over_http() {
         "/api/changes",
         Some("scout"),
         Some(json!({
-            "repo": "demo", "target": "main", "title": "Demo change", "task": task
+            "repo": "ada/demo", "target": "main", "title": "Demo change", "task": task
         })),
     )
     .await;
@@ -816,7 +816,7 @@ async fn tokens_and_grants_enforce_without_dev_identity() {
         "/api/tasks",
         Some(&drone_auth),
         Some(json!({
-            "repo": "demo", "title": "T", "spec": "S"
+            "repo": "ada/demo", "title": "T", "spec": "S"
         })),
     )
     .await;
@@ -830,7 +830,7 @@ async fn tokens_and_grants_enforce_without_dev_identity() {
         "/api/grants",
         Some(&ada_auth),
         Some(json!({
-            "grantee": "drone", "actions": ["task"], "repo": "demo"
+            "grantee": "drone", "actions": ["task"], "repo": "ada/demo"
         })),
     )
     .await;
@@ -841,7 +841,7 @@ async fn tokens_and_grants_enforce_without_dev_identity() {
         "/api/tasks",
         Some(&drone_auth),
         Some(json!({
-            "repo": "demo", "title": "T", "spec": "S"
+            "repo": "ada/demo", "title": "T", "spec": "S"
         })),
     )
     .await;
@@ -862,7 +862,7 @@ async fn tokens_and_grants_enforce_without_dev_identity() {
         "/api/tasks",
         Some(&drone_auth),
         Some(json!({
-            "repo": "demo", "title": "T2", "spec": "S"
+            "repo": "ada/demo", "title": "T2", "spec": "S"
         })),
     )
     .await;

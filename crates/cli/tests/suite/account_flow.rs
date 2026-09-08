@@ -58,7 +58,7 @@ async fn a_token_can_be_revoked_from_the_page() {
     let (_, location) = post_form(app, "/you/tokens", &cookie, "action=mint&label=doomed").await;
     let secret = shown_once(app, &location, &cookie).await;
     assert_eq!(
-        api_with_token(app, "GET", "/api/repos/demo", &secret, None)
+        api_with_token(app, "GET", "/api/repos/ada/demo", &secret, None)
             .await
             .0,
         StatusCode::OK,
@@ -91,7 +91,7 @@ async fn a_token_can_be_revoked_from_the_page() {
     .await;
 
     assert_eq!(
-        api_with_token(app, "GET", "/api/repos/demo", &secret, None)
+        api_with_token(app, "GET", "/api/repos/ada/demo", &secret, None)
             .await
             .0,
         StatusCode::UNAUTHORIZED,
@@ -142,7 +142,7 @@ async fn a_new_agent_gets_a_token_but_no_capability() {
         app,
         "/agents",
         "cairn_dev=ada",
-        "action=grant&grantee=helper&task=on&repo=demo",
+        "action=grant&grantee=helper&task=on&repo=ada/demo",
     )
     .await;
     let (status, _) = api_with_token(
@@ -150,7 +150,7 @@ async fn a_new_agent_gets_a_token_but_no_capability() {
         "POST",
         "/api/tasks",
         &secret,
-        Some(serde_json::json!({ "repo": "demo", "title": "x", "spec": "y" })),
+        Some(serde_json::json!({ "repo": "ada/demo", "title": "x", "spec": "y" })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "now it can do that one thing");

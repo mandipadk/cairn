@@ -22,7 +22,8 @@ async fn a_revoked_token_stops_working_on_the_next_request() {
     let forge = boot_token_only().await;
     let app = &forge.app;
 
-    let (status, _) = api_with_token(app, "GET", "/api/repos/demo", &forge.scout_token, None).await;
+    let (status, _) =
+        api_with_token(app, "GET", "/api/repos/ada/demo", &forge.scout_token, None).await;
     assert_eq!(
         status,
         StatusCode::OK,
@@ -50,7 +51,7 @@ async fn a_revoked_token_stops_working_on_the_next_request() {
     assert_eq!(status, StatusCode::OK);
 
     let (status, refused) =
-        api_with_token(app, "GET", "/api/repos/demo", &forge.scout_token, None).await;
+        api_with_token(app, "GET", "/api/repos/ada/demo", &forge.scout_token, None).await;
     assert_eq!(
         status,
         StatusCode::UNAUTHORIZED,
@@ -60,8 +61,12 @@ async fn a_revoked_token_stops_working_on_the_next_request() {
     // The browser session is the same credential in a cookie, so it dies
     // with it. A signed-in tab outliving a revocation would make
     // revocation a suggestion.
-    let response =
-        get_with_cookie(app, "/demo", &format!("cairn_token={}", forge.scout_token)).await;
+    let response = get_with_cookie(
+        app,
+        "/ada/demo",
+        &format!("cairn_token={}", forge.scout_token),
+    )
+    .await;
     assert_eq!(
         response,
         StatusCode::SEE_OTHER,
@@ -193,7 +198,7 @@ async fn a_repo_scoped_grant_stays_in_its_repo() {
         "POST",
         "/api/grants",
         &forge.ada_token,
-        Some(json!({ "grantee": "arbiter", "repo": "demo", "actions": ["task"] })),
+        Some(json!({ "grantee": "arbiter", "repo": "ada/demo", "actions": ["task"] })),
     )
     .await;
     let (_, token) = api_with_token(
@@ -211,7 +216,7 @@ async fn a_repo_scoped_grant_stays_in_its_repo() {
         "POST",
         "/api/tasks",
         &arbiter_token,
-        Some(json!({ "repo": "demo", "title": "In scope", "spec": "work" })),
+        Some(json!({ "repo": "ada/demo", "title": "In scope", "spec": "work" })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "the granted repo is allowed");
@@ -221,7 +226,7 @@ async fn a_repo_scoped_grant_stays_in_its_repo() {
         "POST",
         "/api/tasks",
         &arbiter_token,
-        Some(json!({ "repo": "elsewhere", "title": "Out of scope", "spec": "work" })),
+        Some(json!({ "repo": "ada/elsewhere", "title": "Out of scope", "spec": "work" })),
     )
     .await;
     assert_eq!(
@@ -305,7 +310,7 @@ async fn the_dev_header_is_inert_when_dev_mode_is_off() {
 
     // A read with only the header is a stranger's read: a private
     // repository answers as if it were not there.
-    let (status, refused) = api(app, "GET", "/api/repos/demo", "ada", None).await;
+    let (status, refused) = api(app, "GET", "/api/repos/ada/demo", "ada", None).await;
     assert_eq!(
         status,
         StatusCode::NOT_FOUND,
@@ -317,13 +322,14 @@ async fn the_dev_header_is_inert_when_dev_mode_is_off() {
         "POST",
         "/api/changes",
         "ada",
-        Some(json!({ "repo": "demo", "target": "main", "title": "Asserted" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "Asserted" })),
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{refused}");
 
     // And it cannot ride along with a real token to change who is acting.
-    let (status, _) = api_with_token(app, "GET", "/api/repos/demo", &forge.scout_token, None).await;
+    let (status, _) =
+        api_with_token(app, "GET", "/api/repos/ada/demo", &forge.scout_token, None).await;
     assert_eq!(status, StatusCode::OK);
 }
 
@@ -341,7 +347,7 @@ async fn a_claim_cannot_be_verified_by_whoever_made_it() {
         "POST",
         "/api/grants",
         &forge.ada_token,
-        Some(json!({ "grantee": "scout", "repo": "demo", "actions": ["verify"] })),
+        Some(json!({ "grantee": "scout", "repo": "ada/demo", "actions": ["verify"] })),
     )
     .await;
 
@@ -350,7 +356,7 @@ async fn a_claim_cannot_be_verified_by_whoever_made_it() {
         "POST",
         "/api/changes",
         &forge.scout_token,
-        Some(json!({ "repo": "demo", "target": "main", "title": "Work" })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "Work" })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{change}");
@@ -407,7 +413,7 @@ async fn a_claim_cannot_be_verified_by_whoever_made_it() {
         "POST",
         "/api/grants",
         &forge.ada_token,
-        Some(json!({ "grantee": "arbiter", "repo": "demo", "actions": ["verify"] })),
+        Some(json!({ "grantee": "arbiter", "repo": "ada/demo", "actions": ["verify"] })),
     )
     .await;
     let (_, token) = api_with_token(

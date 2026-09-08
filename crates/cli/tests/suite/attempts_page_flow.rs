@@ -30,7 +30,7 @@ async fn the_task_page_reads_the_attempts_and_takes_the_comparison() {
         "POST",
         "/api/tasks",
         "ada",
-        Some(json!({ "repo": "demo", "title": "Two ways in", "spec": "Try both.", "attempts": 2 })),
+        Some(json!({ "repo": "ada/demo", "title": "Two ways in", "spec": "Try both.", "attempts": 2 })),
     )
     .await["id"]
         .as_str()
@@ -73,7 +73,7 @@ async fn the_task_page_reads_the_attempts_and_takes_the_comparison() {
         "POST",
         "/api/changes",
         "scout",
-        Some(json!({ "repo": "demo", "target": "main", "title": "Two ways in", "task": task })),
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "Two ways in", "task": task })),
     )
     .await["id"]
         .as_str()
@@ -144,7 +144,7 @@ async fn the_task_page_reads_the_attempts_and_takes_the_comparison() {
     // owner's inbox; the page then shows it and the readiness line turns.
     let (status, location) = post_form(
         app,
-        "/demo/changes/1/prefer",
+        "/ada/demo/changes/1/prefer",
         &ada,
         "revision=2&rationale=r2+covers+more+and+carries+a+claim.",
     )
@@ -179,6 +179,6 @@ async fn the_task_page_reads_the_attempts_and_takes_the_comparison() {
     );
 
     // The change page says so too.
-    let (_, page) = page_with_cookie(app, "/demo/changes/1", &ada).await;
+    let (_, page) = page_with_cookie(app, "/ada/demo/changes/1", &ada).await;
     assert!(page.contains("r2 preferred"), "{page}");
 }

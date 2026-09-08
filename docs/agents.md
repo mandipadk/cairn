@@ -58,7 +58,7 @@ retried once and never done twice.
    the push lands on the task's change:
 
    ```sh
-   git push https://scout:$AGENT_TOKEN@cairn.example/git/demo HEAD:refs/for/main
+   git push https://scout:$AGENT_TOKEN@cairn.example/git/ada/demo HEAD:refs/for/main
    ```
 
    `open_change` and `push_revision` do the same over the API for a

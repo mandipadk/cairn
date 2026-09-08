@@ -1,0 +1,128 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Icontact0093pending",
+      "id": "c-336ykq23bwzeezgt06mrnwqych",
+      "landed_oid": "786aba924078feb8fdd690a24853be79f101b3d7",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 93,
+      "opened_at": "2026-09-08T01:22:11.876286058Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Let an older contact table hold a pending address, and keep a refusal from spending the hour",
+      "updated_at": "2026-09-08T01:22:59.886547273Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-336ykq23bwzeezgt06mrnwqych",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-09jseqqarpvkbk0y9sb28gr0d2",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 734,
+        "summary": "Suite green, exit status gated; rustfmt and clippy clean, warnings denied. New: an older contact table with a required email is reshaped at open and takes a pending address, rows kept; a refused address leaves the hourly slot free. Walk green.",
+        "unchecked": [
+          "The reshape was exercised on a table built by hand in the test, not on a copy of the production database."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "786aba924078feb8fdd690a24853be79f101b3d7",
+    "landed_at": "2026-09-08T01:22:59.886547273Z",
+    "merged_by": "mandip",
+    "repo": "cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-336ykq23bwzeezgt06mrnwqych",
+      "commit_oid": "786aba924078feb8fdd690a24853be79f101b3d7",
+      "message": "Let an older contact table hold a pending address, and keep a refusal from spending the hour\n\nThe reference instance refused every new address: its contact table was\nmade when an address was required, and an address is now pending, with\nnone on record, until its link is followed. SQLite cannot relax NOT NULL\nin place, so an older table is rebuilt in the current shape at open with\nits rows and index carried over. The same attempt also spent the hourly\nconfirmation slot before anything was sent, so the second try said to\nwait; a refused address now gives the slot back.\n\nChange-Id: Icontact0093pending\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "crates/cli/tests/suite/reset_flow.rs",
+        "crates/core/src/commands.rs",
+        "crates/core/src/store.rs",
+        "crates/core/tests/suite/lifecycle.rs",
+        "crates/server/src/web/mod.rs"
+      ],
+      "session": null
+    },
+    "seq": 737,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-09jseqqarpvkbk0y9sb28gr0d2",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-09jseqqarpvkbk0y9sb28gr0d2",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 96 judged claims, 97% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 5 path(s) outside docs/, *.md: crates/cli/tests/suite/reset_flow.rs, crates/core/src/commands.rs, crates/core/src/store.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-336ykq23bwzeezgt06mrnwqych",
+        "claim": "cl-09jseqqarpvkbk0y9sb28gr0d2",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "id": "vr-2kc7xd0h3nj1w40fhmc491afp2",
+        "observed": "exit 0: Doc-tests cairn_server",
+        "revision": 1,
+        "seq": 735
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "LYRwrAK3FhPGJ85gMBGVi3AsL8rniTFFvHl/dRGZ3n7zc9rpq8tn/lFLVr/uxYOKH1UHdinKTuuircudoQlmAA=="
+  }
+}

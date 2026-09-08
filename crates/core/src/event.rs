@@ -207,6 +207,22 @@ pub enum Event {
         /// What the remote said, when it refused.
         detail: Option<String>,
     },
+    /// A name given to a landed commit by somebody who may merge on the
+    /// repository. Tags are never moved or deleted: a later tag is a
+    /// new statement, not a correction.
+    TagPushed {
+        repo: String,
+        name: String,
+        /// The commit the tag resolves to.
+        commit_oid: String,
+        /// The tag object itself, when the tag is annotated; the ref
+        /// points here so signatures and tagger survive.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        object_oid: Option<String>,
+        /// An annotated tag's message, when there was one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
 
     TaskCreated {
         task: TaskId,
@@ -478,6 +494,7 @@ impl Event {
             Event::PolicySet { .. } => "policy_set",
             Event::MirrorSet { .. } => "mirror_set",
             Event::MirrorPushed { .. } => "mirror_pushed",
+            Event::TagPushed { .. } => "tag_pushed",
             Event::TaskCreated { .. } => "task_created",
             Event::TaskClaimed { .. } => "task_claimed",
             Event::TaskStateChanged { .. } => "task_state_changed",

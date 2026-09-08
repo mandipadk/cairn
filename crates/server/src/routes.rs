@@ -1908,6 +1908,18 @@ pub async fn get_mirror(
 /// Liveness and readiness in one: the store answers, so the forge can
 /// serve. Deliberately unauthenticated and deliberately dull — a probe
 /// that needs a credential is a probe nobody configures.
+/// The names a repository has given landed commits, newest first, with
+/// who gave them.
+pub async fn tags(
+    State(app): State<AppState>,
+    who: MaybeActor,
+    Path(repo): Path<String>,
+) -> ApiResult<Json<Value>> {
+    readable_repo_by(&app, &who, &repo)?;
+    let tags = app.with_store(|s| s.acting_as(who.scope()).tags(&repo))?;
+    Ok(Json(json!(tags)))
+}
+
 pub async fn health(State(app): State<AppState>) -> Response {
     match app.with_store(|s| s.latest_seq()) {
         Ok(seq) => (

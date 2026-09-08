@@ -23,6 +23,8 @@ Cairn records the causal chain as structured, subscribable data.
 - **Merges** — decided by explainable policy, with the full evaluation
   trace recorded in the event log and a signed receipt attached to the
   landed commit.
+- **Tags** — names given to landed commits by whoever may merge, never
+  moved, so a name means one thing for good.
 - **Records** — what the log knows about a principal's claims over a
   window: how many were made, reproduced and disputed. A policy may spend
   an earned record within named paths in place of a re-run.

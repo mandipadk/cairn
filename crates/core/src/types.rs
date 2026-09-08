@@ -691,6 +691,21 @@ pub struct Mirror {
     pub enabled: bool,
 }
 
+/// A name a repository gave to a landed commit.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Tag {
+    pub name: String,
+    pub commit_oid: String,
+    /// The annotated tag object, when the tag has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_oid: Option<String>,
+    pub by: PrincipalId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    pub seq: i64,
+    pub at: String,
+}
+
 /// What one attempt learned, kept so the next one does not re-walk it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Lesson {

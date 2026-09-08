@@ -183,6 +183,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/inbox/read", post(routes::mark_read))
         .route("/api/events/stream", get(sse::stream))
         .route("/api/git/pushes", post(git_http::record_push))
+        .route("/api/git/tags", post(git_http::record_tag))
+        .route("/api/repos/{name}/tags", get(routes::tags))
         .route("/api/repos/{name}/blame", get(git_http::blame))
         .route("/api/repos/{name}/debt", get(debt::debt))
         .route("/api/repos/{name}/debt/history", get(debt::history))

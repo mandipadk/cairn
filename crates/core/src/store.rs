@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 24;
+const SCHEMA_VERSION: i64 = 25;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -335,6 +335,17 @@ CREATE INDEX IF NOT EXISTS idx_changes_landed ON changes (repo, landed_oid);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_changes_key
   ON changes (repo, external_key) WHERE external_key IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS tags (
+    repo TEXT NOT NULL,
+    name TEXT NOT NULL,
+    commit_oid TEXT NOT NULL,
+    object_oid TEXT,
+    by TEXT NOT NULL,
+    message TEXT,
+    seq INTEGER NOT NULL,
+    at TEXT NOT NULL,
+    PRIMARY KEY (repo, name)
+);
 CREATE TABLE IF NOT EXISTS revisions (
   change_id  TEXT NOT NULL,
   number     INTEGER NOT NULL,
@@ -900,6 +911,7 @@ fn record_scope(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
         | PolicySet { repo, .. }
         | MirrorSet { repo, .. }
         | MirrorPushed { repo, .. }
+        | TagPushed { repo, .. }
         | HistoryImported { repo, .. }
         | PathsDeclared { repo, .. }
         | RepoTransferOffered { repo, .. }
@@ -1848,6 +1860,7 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                 "merge_queue",
                 "attention_draws",
                 "event_scope",
+                "tags",
             ] {
                 tx.execute(
                     &format!("UPDATE {table} SET repo = ? WHERE repo = ?"),
@@ -1895,6 +1908,7 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                 "DELETE FROM threads WHERE change_id IN (SELECT id FROM changes WHERE repo = ?)",
                 "DELETE FROM attention_draws WHERE repo = ?",
                 "DELETE FROM merge_queue WHERE repo = ?",
+                "DELETE FROM tags WHERE repo = ?",
                 "DELETE FROM changes WHERE repo = ?",
                 "DELETE FROM leases WHERE repo = ?",
                 "DELETE FROM imports WHERE repo = ?",
@@ -1951,6 +1965,21 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                         .as_ref()
                         .map(|m| serde_json::to_string(m).expect("mirror serializes")),
                     repo
+                ],
+            )?;
+        }
+        Event::TagPushed {
+            repo,
+            name,
+            commit_oid,
+            object_oid,
+            message,
+        } => {
+            tx.execute(
+                "INSERT OR REPLACE INTO tags (repo, name, commit_oid, object_oid, by, message, seq, at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    repo, name, commit_oid, object_oid, actor, message, env.seq.0, env.ts
                 ],
             )?;
         }
@@ -2819,7 +2848,7 @@ mod projection_shape {
         assert_eq!(
             (super::SCHEMA_VERSION, shape.as_str()),
             (
-                24,
+                25,
                 r#"{"require_executed_check":true,"independence":"human_or_two_models","require_runner_verification":false,"runner_quorum":1,"required_domains":[],"require_concerns_resolved":true,"attention_budget":null,"agents_act_in_sessions":false,"trust":null}"#
             ),
             "the policy's stored shape changed: bump SCHEMA_VERSION and pin the new shape here"

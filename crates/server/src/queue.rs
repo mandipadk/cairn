@@ -257,7 +257,7 @@ async fn land(
 /// Copy a landed branch outward, if the repository mirrors. The
 /// attempt is recorded either way: a mirror that has been quietly
 /// failing is exactly the thing nobody notices until they need it.
-async fn mirror_branch(state: &AppState, repo: &str, branch: &str, landed: &str) {
+pub(crate) async fn mirror_branch(state: &AppState, repo: &str, branch: &str, landed: &str) {
     let Some(git) = state.git() else { return };
     let Ok(Some(record)) = state.with_store(|s| s.repo(repo)) else {
         return;

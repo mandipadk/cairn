@@ -10,6 +10,10 @@
 //! server's reconciliation pass once the pushed objects leave
 //! quarantine; hooks are forbidden from updating refs before that.
 //!
+//! Tags under `refs/tags/*` take the same road: the hook resolves the
+//! pushed object to a commit, refuses one that is on no branch, records
+//! the name through the API, and the server writes the ref afterwards.
+//!
 //! The hook holds no state and makes no decisions: it is a translator,
 //! and the API's typed refusals become push failures verbatim.
 
@@ -53,10 +57,23 @@ fn conversation(
     let client = Client { server, token };
     for command in &commands {
         let mut parts = command.split(' ');
-        let (Some(_old), Some(new), Some(ref_name)) = (parts.next(), parts.next(), parts.next())
+        let (Some(old), Some(new), Some(ref_name)) = (parts.next(), parts.next(), parts.next())
         else {
             bail!("malformed proc-receive command {command:?}");
         };
+        if let Some(name) = ref_name.strip_prefix("refs/tags/") {
+            // A tag keeps its own name, so there is no option to report;
+            // the server writes refs/tags/<name> once the objects have
+            // left quarantine, as it does for change refs.
+            match handle_tag(&client, repo, old, new, name) {
+                Ok(()) => pkt::write_data(&mut output, format!("ok {ref_name}\n").as_bytes())?,
+                Err(reason) => {
+                    let reason = reason.replace('\n', "; ");
+                    pkt::write_data(&mut output, format!("ng {ref_name} {reason}\n").as_bytes())?;
+                }
+            }
+            continue;
+        }
         match handle_push(&client, repo, new, ref_name) {
             Ok((number, revision)) => {
                 pkt::write_data(&mut output, format!("ok {ref_name}\n").as_bytes())?;
@@ -156,6 +173,86 @@ fn handle_push(
     }
 }
 
+/// One tag → one recorded name for a landed commit. Ok means the forge
+/// took the name and will write the ref; Err is what the pusher reads.
+fn handle_tag(
+    client: &Client,
+    repo: &str,
+    old_oid: &str,
+    new_oid: &str,
+    name: &str,
+) -> Result<(), String> {
+    if new_oid.starts_with(ZERO_OID_PREFIX) {
+        return Err(format!(
+            "deleting tag {name} is not supported; a tag is a statement the log keeps"
+        ));
+    }
+    if !old_oid.starts_with(ZERO_OID_PREFIX) {
+        return Err(format!(
+            "tag {name} already exists and tags are not moved; make a new one"
+        ));
+    }
+    let commit = git_out(&[
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        &format!("{new_oid}^{{commit}}"),
+    ])
+    .map_err(|_| format!("tag {name} does not point at a commit"))?;
+    let commit = commit.trim().to_owned();
+    let branches = git_out(&["branch", "--contains", &commit, "--format=%(refname:short)"])?;
+    if branches.trim().is_empty() {
+        return Err(format!(
+            "{} is not on any branch of {repo}; a tag names landed history",
+            &commit[..commit.len().min(12)]
+        ));
+    }
+    // An annotated tag is its own object, with a message worth keeping;
+    // a lightweight one is just a name for the commit.
+    let annotated = git_out(&["cat-file", "-t", new_oid])?.trim() == "tag";
+    let message = if annotated {
+        git_out(&["cat-file", "tag", new_oid])
+            .ok()
+            .and_then(|raw| {
+                raw.split_once("\n\n")
+                    .map(|(_, body)| body.trim().to_owned())
+            })
+            .filter(|body| !body.is_empty())
+    } else {
+        None
+    };
+    let (status, body) = client.record_tag(&json!({
+        "repo": repo,
+        "name": name,
+        "commit_oid": commit,
+        "object_oid": annotated.then(|| new_oid.to_owned()),
+        "message": message,
+    }))?;
+    if !(200..300).contains(&status) {
+        return Err(body["error"]
+            .as_str()
+            .unwrap_or("forge rejected the tag")
+            .to_owned());
+    }
+    Ok(())
+}
+
+/// Run git inside the hook's repository and return what it printed.
+fn git_out(args: &[&str]) -> Result<String, String> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .output()
+        .map_err(|e| format!("running git {}: {e}", args[0]))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git {} failed: {}",
+            args[0],
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 /// Commits reachable from the pushed tip but not from the target
 /// branch, oldest first. Inside the hook, quarantined objects are
 /// visible through receive-pack's environment.
@@ -216,15 +313,20 @@ struct Client<'a> {
 
 impl Client<'_> {
     fn record_push(&self, body: &Value) -> Result<(u16, Value), String> {
+        self.post("/api/git/pushes", body)
+    }
+
+    fn record_tag(&self, body: &Value) -> Result<(u16, Value), String> {
+        self.post("/api/git/tags", body)
+    }
+
+    fn post(&self, path: &str, body: &Value) -> Result<(u16, Value), String> {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
             .build()
             .into();
         let mut response = agent
-            .post(format!(
-                "{}/api/git/pushes",
-                self.server.trim_end_matches('/')
-            ))
+            .post(format!("{}{path}", self.server.trim_end_matches('/')))
             .header("Authorization", format!("Bearer {}", self.token))
             .send_json(body)
             .map_err(|e| format!("forge unreachable: {e}"))?;

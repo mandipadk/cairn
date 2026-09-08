@@ -2048,6 +2048,77 @@ impl Store {
         Ok(env)
     }
 
+    /// Give a landed commit a name. The hook has already checked that
+    /// the commit is on a branch; this checks who is asking and that
+    /// the name is new, since a tag is never moved.
+    pub fn push_tag(
+        &mut self,
+        actor: &PrincipalId,
+        repo: &str,
+        name: &str,
+        commit_oid: &str,
+        object_oid: Option<&str>,
+        message: Option<&str>,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        authorize(
+            &tx,
+            self.acting.as_ref(),
+            actor,
+            Capability::Merge,
+            Some(repo),
+        )?;
+        raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
+        ensure_writable(&tx, repo)?;
+        bounded("tag name", name, MAX_TITLE)?;
+        require(
+            !name.is_empty()
+                && !name.starts_with('-')
+                && !name.ends_with(".lock")
+                && !name.contains("..")
+                && !name.contains("@{")
+                && !name.contains('\\')
+                && !name.chars().any(|c| c.is_whitespace() || c.is_control()),
+            || format!("{name:?} is not a name git would accept for a tag"),
+        )?;
+        for oid in std::iter::once(commit_oid).chain(object_oid) {
+            require(
+                (oid.len() == 40 || oid.len() == 64) && oid.chars().all(|c| c.is_ascii_hexdigit()),
+                || format!("{oid:?} is not an object id"),
+            )?;
+        }
+        if let Some(message) = message {
+            bounded("tag message", message, MAX_TEXT)?;
+        }
+        let taken: Option<String> = tx
+            .query_row(
+                "SELECT commit_oid FROM tags WHERE repo = ? AND name = ?",
+                rusqlite::params![repo, name],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(taken) = taken {
+            return Err(CoreError::Conflict(format!(
+                "tag {name} already names {}; tags are not moved, make a new one",
+                &taken[..taken.len().min(12)]
+            )));
+        }
+        let env = append(
+            &tx,
+            actor,
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
+            Event::TagPushed {
+                repo: repo.to_owned(),
+                name: name.to_owned(),
+                commit_oid: commit_oid.to_owned(),
+                object_oid: object_oid.map(str::to_owned),
+                message: message.map(str::to_owned),
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
     /// Record what happened when a landed branch was copied outward.
     /// Kept whether it worked or not: a mirror that has been quietly
     /// failing for a week is exactly what nobody notices.

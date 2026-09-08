@@ -336,8 +336,12 @@ pub async fn receive_pack(
             )
             .await?;
         // Objects have left quarantine now; project the graph's revisions
-        // onto refs/changes/<number>/<revision>.
+        // onto refs/changes/<number>/<revision>, and its tags onto
+        // refs/tags/<name>.
         reconcile_change_refs(&app, &name).await;
+        if reconcile_tag_refs(&app, &name).await {
+            mirror_default_branch(&app, &name).await;
+        }
         Ok((
             [(
                 header::CONTENT_TYPE,
@@ -407,6 +411,91 @@ pub struct RecordPush {
     pub repo: String,
     pub target: String,
     pub commits: Vec<PushedCommit>,
+}
+
+/// What the proc-receive hook reports about one pushed tag: the name
+/// and the commit it resolves to, on a branch of the repository.
+#[derive(Deserialize)]
+pub struct RecordTag {
+    pub repo: String,
+    pub name: String,
+    pub commit_oid: String,
+    /// The annotated tag object, when there is one.
+    #[serde(default)]
+    pub object_oid: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// Enter a pushed tag into the graph. The hook has checked that the
+/// commit is on a branch; the store checks who may give names here and
+/// that the name is new. The ref itself is written once receive-pack
+/// has finished, by [`reconcile_tag_refs`].
+pub async fn record_tag(
+    State(app): State<AppState>,
+    actor: crate::auth::Pusher,
+    Json(body): Json<RecordTag>,
+) -> ApiResult<Json<Value>> {
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref()).push_tag(
+            &actor.0,
+            &body.repo,
+            &body.name,
+            &body.commit_oid,
+            body.object_oid.as_deref(),
+            body.message.as_deref(),
+        )
+    })?;
+    app.publish(&env);
+    Ok(committed(None, &env))
+}
+
+/// `refs/tags/<name>` is a projection of the graph onto git, like the
+/// change refs: create whatever the graph says exists and git lacks.
+/// Returns whether anything was created, so the caller can send the new
+/// names outward without waiting for the next landing.
+pub(crate) async fn reconcile_tag_refs(app: &AppState, repo: &str) -> bool {
+    let Some(git) = app.git() else { return false };
+    let wanted = match app.with_store(|s| s.tags(repo)) {
+        Ok(wanted) => wanted,
+        Err(err) => {
+            tracing::warn!(%err, repo, "listing tags for ref reconciliation failed");
+            return false;
+        }
+    };
+    let existing: HashSet<String> = match git.store.list_refs(repo, "refs/tags/").await {
+        Ok(refs) => refs.into_iter().map(|(name, _)| name).collect(),
+        Err(err) => {
+            tracing::warn!(%err, repo, "listing tag refs failed");
+            return false;
+        }
+    };
+    let mut created = false;
+    for tag in wanted {
+        let refname = format!("refs/tags/{}", tag.name);
+        if existing.contains(&refname) {
+            continue;
+        }
+        let oid = tag.object_oid.as_deref().unwrap_or(&tag.commit_oid);
+        match git.store.set_ref(repo, &refname, oid).await {
+            Ok(()) => created = true,
+            Err(err) => tracing::debug!(%err, %refname, repo, "tag ref not creatable yet"),
+        }
+    }
+    created
+}
+
+/// Send the repository's default branch, and with it its tags, to the
+/// mirror now rather than at the next landing.
+async fn mirror_default_branch(app: &AppState, repo: &str) {
+    let Some(git) = app.git() else { return };
+    let Ok(Some(record)) = app.with_store(|s| s.repo(repo)) else {
+        return;
+    };
+    let Ok(Some(tip)) = git.store.tip(repo, &record.default_branch).await else {
+        return;
+    };
+    crate::queue::mirror_branch(app, repo, &record.default_branch, &tip).await;
 }
 
 /// Stacks larger than this are almost certainly a mistaken push of

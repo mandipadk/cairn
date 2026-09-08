@@ -3641,6 +3641,14 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
                 }
             },
         ),
+        Event::TagPushed {
+            name, commit_oid, ..
+        } => (
+            "dot ok",
+            html! {
+                b { (actor) } " tagged " b { (name) } " at " (commit_oid.get(..9).unwrap_or(commit_oid))
+            },
+        ),
         Event::PrincipalRegistered { principal, .. } => (
             "dot idle",
             html! {

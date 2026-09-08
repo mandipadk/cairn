@@ -263,6 +263,16 @@ and nothing waiting in the landing queue; the repository's changes,
 claims, verdicts and discussion go with it, tasks and lessons keep their
 text and lose their home, and the log keeps what happened.
 
+## Tags
+
+A tag names a landed commit. Push one the ordinary way — `git push origin
+v0.1.0` — and the forge takes it from whoever holds `merge` on the
+repository, for a commit that is on one of its branches, under a name it
+has not used before. Tags are never moved or deleted: a later tag is a
+new statement, not a correction. Each is recorded as a `tag_pushed` event
+with who set it, listed at `GET /api/repos/{name}/tags`, and copied to
+the mirror along with the branches.
+
 ## Continuous integration
 
 `cairn verify` is the runner. Given a change it re-runs that change's

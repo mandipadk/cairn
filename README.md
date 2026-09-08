@@ -117,7 +117,8 @@ credential helper. Pushing to `refs/for/<branch>` opens a change. Push again wit
 stays fetchable at `refs/changes/<number>/<revision>`. A multi-commit push
 becomes a stack, landed bottom-up, with children carried onto each new
 tip automatically. Branches move only by merge — a direct push is refused
-with the reason.
+with the reason. Tags are pushed the ordinary way, by whoever may merge,
+at commits that landed, and are never moved.
 
 ## Try it
 

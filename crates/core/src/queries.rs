@@ -1810,6 +1810,29 @@ impl Store {
     }
 
     /// The burndown: every tip the map was computed at, oldest first.
+    /// The names a repository has given landed commits, newest first.
+    pub fn tags(&self, repo: &str) -> CoreResult<Vec<crate::Tag>> {
+        let tags = self
+            .conn
+            .prepare_cached(
+                "SELECT name, commit_oid, object_oid, by, message, seq, at
+                   FROM tags WHERE repo = ?1 ORDER BY seq DESC",
+            )?
+            .query_map(params![repo], |row| {
+                Ok(crate::Tag {
+                    name: row.get(0)?,
+                    commit_oid: row.get(1)?,
+                    object_oid: row.get(2)?,
+                    by: PrincipalId(row.get(3)?),
+                    message: row.get(4)?,
+                    seq: row.get(5)?,
+                    at: row.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(tags)
+    }
+
     pub fn debt_history(&self, repo: &str, limit: i64) -> CoreResult<Vec<crate::DebtSnapshot>> {
         let mut points: Vec<crate::DebtSnapshot> = self
             .conn

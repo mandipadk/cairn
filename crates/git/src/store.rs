@@ -126,13 +126,15 @@ const HOOK_SCRIPT: &str =
     "#!/bin/sh\nexec \"${CAIRN_HOOK_BIN:?cairn hook binary not set}\" internal-proc-receive\n";
 
 /// Branches advance only by policy-approved merges; every other write
-/// path is closed. proc-receive owns refs/for/*, and this pre-receive
-/// guard refuses everything else (direct branch pushes, tags).
+/// path is closed. proc-receive owns refs/for/* and refs/tags/* (the
+/// hook decides whether a tag names landed history and whether the
+/// pusher may set one), and this pre-receive guard refuses everything
+/// else, which is to say direct branch pushes.
 const PRE_RECEIVE_SCRIPT: &str = r#"#!/bin/sh
 status=0
 while read old new ref; do
   case "$ref" in
-    refs/for/*) ;;
+    refs/for/*|refs/tags/*) ;;
     *)
       echo "cairn: direct push to $ref refused; push to refs/for/<branch> - branches advance only by merge" >&2
       status=1
@@ -321,21 +323,33 @@ impl GitStore {
             ],
         )
         .await?;
-        self.run(
-            Some(&path),
-            &["config", "receive.procReceiveRefs", "refs/for"],
-        )
-        .await?;
+        for refs in ["refs/for", "refs/tags"] {
+            self.run(
+                Some(&path),
+                &["config", "--add", "receive.procReceiveRefs", refs],
+            )
+            .await?;
+        }
         // A half-finished import must not be fetchable by anyone who can
         // read the repository.
         self.run(Some(&path), &["config", "transfer.hideRefs", "refs/import"])
             .await?;
+        self.install_hooks(&path).await
+    }
+
+    /// Write the hook scripts this binary expects. Run at creation and
+    /// again before every receive, so a repository created by an older
+    /// forge carries the current scripts without anyone migrating it.
+    async fn install_hooks(&self, path: &Path) -> GitResult<()> {
         for (hook, script) in [
             ("proc-receive", HOOK_SCRIPT),
             ("pre-receive", PRE_RECEIVE_SCRIPT),
         ] {
             let hook_path = path.join("hooks").join(hook);
-            tokio::fs::write(&hook_path, script).await?;
+            let current = tokio::fs::read(&hook_path).await.ok();
+            if current.as_deref() != Some(script.as_bytes()) {
+                tokio::fs::write(&hook_path, script).await?;
+            }
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -419,6 +433,16 @@ impl GitStore {
     ) -> GitResult<Vec<u8>> {
         let path = self.existing_repo_path(name)?;
         let mut command = Command::new("git");
+        if service == Service::ReceivePack {
+            self.install_hooks(&path).await?;
+            // Which refs the hook owns is this binary's decision, not the
+            // repository's configuration, so it is said on every receive.
+            for refs in ["refs/for", "refs/tags"] {
+                command
+                    .arg("-c")
+                    .arg(format!("receive.procReceiveRefs={refs}"));
+            }
+        }
         command
             .arg(service.subcommand())
             .arg("--stateless-rpc")
@@ -809,7 +833,12 @@ impl GitStore {
         };
         // The receipts travel with the code: the notes ref goes along
         // whenever the repository has one.
-        let mut refspecs = vec![format!("refs/heads/{branch}:refs/heads/{branch}")];
+        // Tags name landed history, so they travel too; a glob with
+        // nothing behind it pushes nothing and is not an error.
+        let mut refspecs = vec![
+            format!("refs/heads/{branch}:refs/heads/{branch}"),
+            "refs/tags/*:refs/tags/*".to_owned(),
+        ];
         if self.has_ref(name, "refs/notes/cairn").await? {
             refspecs.push("refs/notes/cairn:refs/notes/cairn".to_owned());
         }

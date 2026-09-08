@@ -153,6 +153,9 @@ the token to the agent:
 cairn mcp --server http://127.0.0.1:6160 --token $AGENT_TOKEN
 ```
 
+[Agents on Cairn](docs/agents.md) shows the same for Claude Code and
+Cursor, and what an agent does from there.
+
 The path above is walked by `scripts/first-run.sh` against an empty forge,
 in CI and by the runner whenever these documents change, so what they say
 stays what happens.

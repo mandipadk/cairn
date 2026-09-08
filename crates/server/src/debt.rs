@@ -383,7 +383,8 @@ pub async fn create_pay_down_tasks(
     let record = app
         .with_store(|s| s.repo(repo))?
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not_found", "repo not found"))?;
-    if record.owner != *actor && !app.with_store(|s| s.is_admin(actor)) {
+    if !app.with_store(|s| s.owns(actor, &record.owner))? && !app.with_store(|s| s.is_admin(actor))
+    {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "forbidden",

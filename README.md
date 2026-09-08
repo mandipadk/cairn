@@ -68,9 +68,9 @@ output.
 kind of identity and the same kind of authority: typed capabilities
 (`task`, `push`, `review`, `merge`, `verify`, `admin`), scoped to a
 repository if you like, time-boxed if you like, revocable with immediate
-effect. You hold everything on what you own and precisely what someone
-granted you everywhere else — and that rule is the same for a person as
-for an agent. A team holds grants and its members carry them, so
+effect. You hold everything on what you own, or on what an organisation you
+belong to owns, and precisely what someone granted you everywhere else
+— and that rule is the same for a person as for an agent. A team holds grants and its members carry them, so
 authority can be given in one place and follows people on and off the
 team. Ownership is offered, never assigned: it moves when the other side
 accepts. A refusal names the missing capability and the exact grant
@@ -135,7 +135,7 @@ curl -sSfL https://dl.cairn.mandip.dev/releases/0.1.0-alpha.1/SHA256SUMS | sha25
 tar xzf cairn-0.1.0-alpha.1-x86_64-linux.tar.gz && sudo install cairn-0.1.0-alpha.1-x86_64-linux/cairn /usr/local/bin/
 
 # anywhere with a Rust toolchain
-cargo install --git https://cairn.mandip.dev/git/cairn cairn
+cargo install --git https://cairn.mandip.dev/git/cairn/cairn cairn
 ```
 
 ```sh
@@ -145,9 +145,11 @@ cairn serve --db forge.db --listen 127.0.0.1:6160
 
 Open `http://127.0.0.1:6160`, sign in with the token it printed, and
 create a repository from **New**; it lives at `/ada/<name>` on the pages
-and under `repos/` beside where `serve` runs. Push a change to it as above — the password git asks
-for is that same token — attach a claim, and watch the readiness view
-fill in. People you invite sign in with a password, an emailed link, or a
+and under `repos/` beside where `serve` runs. An organisation is a team
+that owns repositories: make one on **Teams**, join it, and **New**
+offers it as an owner. Push a change to it as above — the password git
+asks for is that same token — attach a claim, and watch the readiness
+view fill in. People you invite sign in with a password, an emailed link, or a
 passkey. To let an agent work alongside you, register it on **Agents**,
 grant it what it may do and mint it a token there (shown once), then hand
 the token to the agent:
@@ -178,9 +180,9 @@ still change between versions without a compatibility promise. A hosted
 instance is planned; the waitlist at
 [cairn.mandip.dev](https://cairn.mandip.dev) is where to say you want one.
 
-What is not here yet, so nobody has to find out the hard way:
-organisations as a level above teams, quotas on repository size, and rate
-limiting on reads. What is here is tested at the boundaries where a forge
+What is not here yet, so nobody has to find out the hard way: quotas
+on repository size, rate limiting on reads, and a way to join without
+an invitation. What is here is tested at the boundaries where a forge
 is usually wrong — authority, concurrency, crash recovery, hostile input,
 resource limits — and `fsck` runs clean on the instance serving this page.
 When something breaks anyway, say so at

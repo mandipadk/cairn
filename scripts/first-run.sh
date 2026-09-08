@@ -51,6 +51,14 @@ expect "$(api grants "$TOKEN" '{"grantee": "scout", "actions": ["task", "push"]}
 AGENT=$(api principals/scout/tokens "$TOKEN" '{"label": "first-run"}' | json "d['token']")
 [ -n "$AGENT" ] || { echo "!! no agent token was minted"; exit 1; }
 
+echo "README: an organisation is a team that owns; a member creates under it from New"
+form() { curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -b "cairn_token=$TOKEN" -X POST "$URL$1" --data "$2"; }
+expect "$(form /teams 'action=create&id=crew&display=Crew')" "303 $URL/teams" "make the organisation"
+expect "$(form /teams 'action=add&team=crew&member=ada')" "303 $URL/teams" "join it"
+expect "$(api repos "$TOKEN" '{"name": "shared", "owner": "crew"}' | json "d['event']['repo']")" crew/shared "create a repository under it"
+expect "$(status /crew)" 404 "an organisation with nothing public is nothing to a stranger"
+curl -s -b "cairn_token=$TOKEN" "$URL/crew" | grep -q 'crew/shared' || { echo "!! the organisation's page does not list its repository"; exit 1; }
+
 echo "git: a private repository asks an anonymous clone for credentials; scout clones with the token"
 if GIT_TERMINAL_PROMPT=0 git -c credential.helper= clone -q "$URL/git/ada/demo" anon 2>/dev/null; then
   echo "!! a private repository was cloned without a token"; exit 1

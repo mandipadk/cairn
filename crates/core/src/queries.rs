@@ -77,6 +77,12 @@ pub(crate) mod raw {
             .exists(rusqlite::params![team, member])?)
     }
 
+    /// Whether `actor` holds what `owner` holds: they are the owner, or
+    /// a member of the organisation that is.
+    pub fn owns(conn: &Connection, actor: &str, owner: &str) -> CoreResult<bool> {
+        Ok(actor == owner || is_team_member(conn, owner, actor)?)
+    }
+
     /// What a repository once called `old` is called now, if it was renamed.
     pub fn current_name_for(conn: &Connection, old: &str) -> CoreResult<Option<String>> {
         use rusqlite::OptionalExtension;
@@ -1400,6 +1406,12 @@ impl Store {
 
     pub fn is_team_member(&self, team: &PrincipalId, member: &PrincipalId) -> CoreResult<bool> {
         raw::is_team_member(&self.conn, team.as_str(), member.as_str())
+    }
+
+    /// Whether `actor` owns what `owner` owns: themselves, or an
+    /// organisation they belong to.
+    pub fn owns(&self, actor: &PrincipalId, owner: &PrincipalId) -> CoreResult<bool> {
+        raw::owns(&self.conn, actor.as_str(), owner.as_str())
     }
 
     pub fn repo(&self, name: &str) -> CoreResult<Option<Repo>> {

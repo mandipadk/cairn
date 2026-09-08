@@ -1658,7 +1658,7 @@ fn chrome_for(app: &AppState, who: &PrincipalId) -> Result<Chrome, cairn_core::C
         let mut yours = 0;
         let mut leases = Vec::new();
         for repo in store.readable_repos(who)? {
-            if repo.owner == *who {
+            if store.owns(who, &repo.owner)? {
                 owned.push(repo.name.clone());
             }
             leases.extend(store.live_leases(&repo.name)?);
@@ -1895,6 +1895,11 @@ async fn owner_page(
             Who::Signed(viewer) => readable(&app, viewer, &repo.name).is_ok(),
         })
         .collect();
+    // To a stranger an owner with nothing public is nobody, the way a
+    // private repository is nothing: names are not confirmed for free.
+    if matches!(who, Who::Anonymous(_)) && repos.is_empty() {
+        return not_found();
+    }
     let organisation = principal.kind == cairn_core::PrincipalKind::Team;
     let members = if organisation {
         app.with_store(|s| s.members_of(&owner_id))
@@ -2568,17 +2573,23 @@ pub(crate) async fn old_names(
         .into_iter()
         .find_map(|prefix| path.strip_prefix(prefix).map(|rest| (prefix, rest)))
         .unwrap_or(("/", path.as_str()));
-    // A page sends a stranger to sign in rather than say whether a
-    // repository exists; for a public repository's old name that stranger
-    // is better sent where it went.
-    let sent_to_sign_in = prefix == "/"
-        && response.status() == StatusCode::SEE_OTHER
-        && response
-            .headers()
-            .get(header::LOCATION)
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|to| to.starts_with("/login"));
-    if response.status() != StatusCode::NOT_FOUND && !sent_to_sign_in {
+    // A page sends a stranger to sign in, and the git door asks for a
+    // credential, rather than say whether a repository exists; for a
+    // public repository's old name that stranger is better sent where it
+    // went, and the check below lets nothing else through.
+    let asked_to_identify = match prefix {
+        "/" => {
+            response.status() == StatusCode::SEE_OTHER
+                && response
+                    .headers()
+                    .get(header::LOCATION)
+                    .and_then(|v| v.to_str().ok())
+                    .is_some_and(|to| to.starts_with("/login"))
+        }
+        "/git/" => response.status() == StatusCode::UNAUTHORIZED,
+        _ => false,
+    };
+    if response.status() != StatusCode::NOT_FOUND && !asked_to_identify {
         return response;
     }
     let parts: Vec<&str> = rest.splitn(3, '/').collect();
@@ -3768,7 +3779,11 @@ async fn repo_settings_page(
         Ok(record) => record,
         Err(response) => return *response,
     };
-    if record.owner != viewer.0 && !viewer.1.admin {
+    if !app
+        .with_store(|s| s.owns(&viewer.0, &record.owner))
+        .unwrap_or(false)
+        && !viewer.1.admin
+    {
         return not_found();
     }
     views::repo_settings(
@@ -4178,7 +4193,11 @@ async fn repo_policy(
         Ok(record) => record,
         Err(response) => return *response,
     };
-    if record.owner != viewer.0 && !viewer.1.admin {
+    if !app
+        .with_store(|s| s.owns(&viewer.0, &record.owner))
+        .unwrap_or(false)
+        && !viewer.1.admin
+    {
         return not_found();
     }
     let form = match parse_policy_form(&body) {

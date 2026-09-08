@@ -93,8 +93,9 @@ fn authorize(
     }
 
     // Ownership is the one authority nobody is granted: it comes with
-    // having made the thing. Everything else — for humans exactly as for
-    // agents — is a grant somebody issued and can take back.
+    // having made the thing, or belonging to the organisation that did.
+    // Everything else — for humans exactly as for agents — is a grant
+    // somebody issued and can take back.
     //
     // This used to read "if the principal is a human, allow it", which
     // is right for a forge with one operator and wrong the moment there
@@ -103,7 +104,7 @@ fn authorize(
     // running this", and those stopped being the same thing.
     if let Some(name) = repo
         && let Some(record) = raw::repo(tx, name)?
-        && record.owner == *actor
+        && raw::owns(tx, actor.as_str(), record.owner.as_str())?
     {
         return Ok(principal);
     }
@@ -1529,7 +1530,7 @@ impl Store {
         if record.visibility == Visibility::Public {
             return true;
         }
-        if record.owner == *actor {
+        if raw::owns(&self.conn, actor.as_str(), record.owner.as_str()).unwrap_or(false) {
             return true;
         }
         let Ok(grants) = raw::effective_grants(&self.conn, actor.as_str()) else {

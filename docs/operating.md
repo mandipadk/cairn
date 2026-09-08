@@ -37,7 +37,7 @@ curl -sSfL "https://dl.cairn.mandip.dev/releases/$V/SHA256SUMS" | sha256sum -c -
 From source, anywhere with a Rust toolchain:
 
 ```sh
-cargo install --git https://cairn.mandip.dev/git/cairn cairn
+cargo install --git https://cairn.mandip.dev/git/cairn/cairn cairn
 ```
 
 The mirror at `github.com/mandipadk/cairn` is the same code. `cairn

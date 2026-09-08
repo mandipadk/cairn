@@ -128,6 +128,22 @@ async fn a_rename_moves_everything_and_the_old_name_is_gone() {
     let (status, location) = get_redirect(app, "/ada/demo/changes", "").await;
     assert_eq!(status, StatusCode::PERMANENT_REDIRECT, "{location}");
     assert_eq!(location, "/ada/shown/changes");
+    // Over git too: an anonymous clone at the old address follows it.
+    git(
+        &forge.work,
+        &[
+            "-c",
+            "credential.helper=",
+            "clone",
+            "-q",
+            &format!("http://{}/git/ada/demo", forge.addr),
+            "anon",
+        ],
+    );
+    assert!(
+        forge.work.join("anon/.git").is_dir(),
+        "the old git address still clones"
+    );
     let (status, change) = api(app, "GET", &format!("/api/changes/{id}"), "ada", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(change["repo"], "ada/shown");

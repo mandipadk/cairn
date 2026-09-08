@@ -122,8 +122,20 @@ at commits that landed, and are never moved.
 
 ## Try it
 
+A built binary for x86_64 Linux comes with each release, beside the
+checksums that cover it; everywhere else, build from source:
+
 ```sh
+# x86_64 Linux
+curl -sSfLO https://dl.cairn.mandip.dev/releases/0.1.0-alpha.1/cairn-0.1.0-alpha.1-x86_64-linux.tar.gz
+curl -sSfL https://dl.cairn.mandip.dev/releases/0.1.0-alpha.1/SHA256SUMS | sha256sum -c --ignore-missing
+tar xzf cairn-0.1.0-alpha.1-x86_64-linux.tar.gz && sudo install cairn-0.1.0-alpha.1-x86_64-linux/cairn /usr/local/bin/
+
+# anywhere with a Rust toolchain
 cargo install --git https://cairn.mandip.dev/git/cairn cairn
+```
+
+```sh
 cairn admin bootstrap --db forge.db you --display "You"
 cairn serve --db forge.db --listen 127.0.0.1:6160
 ```

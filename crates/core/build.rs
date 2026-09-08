@@ -22,6 +22,7 @@ fn main() {
     for path in [
         "../../.git/HEAD",
         "../../.git/refs/heads",
+        "../../.git/refs/tags",
         "../../.git/packed-refs",
     ] {
         if std::path::Path::new(path).exists() {

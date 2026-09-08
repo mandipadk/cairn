@@ -35,6 +35,6 @@ ls -l "$out" | awk 'NR>1 {print "  " $5 " " $9}'
 cat "$out/SHA256SUMS"
 
 if [ -n "${S3_BUCKET:-}" ]; then
-  scripts/upload-s3.py "$out/$name.tar.gz" "releases/$version/$name.tar.gz"
-  scripts/upload-s3.py "$out/SHA256SUMS" "releases/$version/SHA256SUMS"
+  python3 scripts/upload-s3.py "$out/$name.tar.gz" "releases/$version/$name.tar.gz"
+  python3 scripts/upload-s3.py "$out/SHA256SUMS" "releases/$version/SHA256SUMS"
 fi

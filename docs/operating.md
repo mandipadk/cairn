@@ -26,9 +26,22 @@ cargo install --git https://cairn.mandip.dev/git/cairn cairn
 
 The mirror at `github.com/mandipadk/cairn` is the same code. `cairn
 --version` names the version and the commit it was built from, and
-`/healthz` on a running forge carries the same string. A packaged build is
-what `scripts/release.sh` produces: one archive with the binary, the
-licence and the README, beside a `SHA256SUMS` that covers it.
+`/healthz` on a running forge carries the same string.
+
+From a release, for x86_64 Linux: each tagged version is built on the
+reference instance and published at
+`https://dl.cairn.mandip.dev/releases/<version>/`, as one archive holding
+the binary, the licence and the README, beside a `SHA256SUMS` that covers
+it. Check the sum before you unpack:
+
+```sh
+V=0.1.0-alpha.1
+curl -sSfLO "https://dl.cairn.mandip.dev/releases/$V/cairn-$V-x86_64-linux.tar.gz"
+curl -sSfL "https://dl.cairn.mandip.dev/releases/$V/SHA256SUMS" | sha256sum -c --ignore-missing
+```
+
+`scripts/release.sh` is what produces those files; run it anywhere to
+package a build for that machine.
 
 ## Running
 

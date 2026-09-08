@@ -1164,6 +1164,16 @@ impl Store {
     /// Allow something at most once per window per key. Operational and
     /// tiny: it exists so an anonymous form cannot page every admin a
     /// hundred times a minute, or one person mail the world.
+    /// Give a throttle slot back, because the attempt it was taken for
+    /// was refused before it did anything.
+    pub fn forgive(&mut self, key: &str) -> CoreResult<()> {
+        self.conn.execute(
+            "DELETE FROM throttles WHERE key = ?",
+            rusqlite::params![key],
+        )?;
+        Ok(())
+    }
+
     pub fn throttle(&mut self, key: &str, window_secs: i64) -> CoreResult<bool> {
         let now = jiff::Timestamp::now();
         let until = (now + jiff::SignedDuration::from_secs(window_secs)).to_string();

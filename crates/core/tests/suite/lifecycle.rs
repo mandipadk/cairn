@@ -2092,6 +2092,58 @@ fn an_expired_token_identifies_nobody() {
 /// A database made before verified email has a contact table of three
 /// columns. Opening it must add what today's reads ask for, or every
 /// settings page on an older forge fails.
+/// The first contact table required an address. Since addresses became
+/// pending until confirmed, that table refused every new one on the
+/// reference instance; opening it now reshapes it, keeping its rows.
+#[test]
+fn an_older_contact_table_lets_an_address_be_pending() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("old.db");
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE contact (principal TEXT PRIMARY KEY, email TEXT NOT NULL, set_at TEXT NOT NULL) STRICT;
+             INSERT INTO contact (principal, email, set_at) VALUES ('grace', 'grace@example.test', '2026-01-01T00:00:00Z');",
+        )
+        .unwrap();
+    }
+    let mut store = cairn_core::Store::open(&path).unwrap();
+    let ada = cairn_core::PrincipalId::new("ada").unwrap();
+    store
+        .register_principal(
+            &ada,
+            &ada,
+            cairn_core::PrincipalKind::Human,
+            "Ada",
+            None,
+            None,
+        )
+        .unwrap();
+    let secret = store
+        .request_email(&ada, "ada@example.test")
+        .expect("a pending address needs no confirmed one");
+    let contact = store.contact_of(&ada).unwrap();
+    assert_eq!(contact.pending.as_deref(), Some("ada@example.test"));
+    assert!(contact.email.is_none());
+    store.confirm_email(&secret).unwrap();
+    assert_eq!(
+        store.contact_of(&ada).unwrap().email.as_deref(),
+        Some("ada@example.test")
+    );
+    // The row that was there is still there. It was never confirmed,
+    // since confirmation did not exist when it was written, so it does
+    // not resolve by address; that is the standing rule, not the reshape.
+    let grace = cairn_core::PrincipalId::new("grace").unwrap();
+    assert_eq!(
+        store.contact_of(&grace).unwrap().email.as_deref(),
+        Some("grace@example.test")
+    );
+    assert_eq!(
+        store.principal_by_email("grace@example.test").unwrap(),
+        None
+    );
+}
+
 #[test]
 fn an_older_contact_table_gains_its_columns_on_open() {
     let dir = tempfile::tempdir().unwrap();

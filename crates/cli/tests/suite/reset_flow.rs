@@ -258,3 +258,33 @@ async fn a_sign_in_link_signs_you_in_once_and_only_to_a_confirmed_address() {
     let (_, location) = get_redirect(app, &path, "").await;
     assert!(location.starts_with("/login?error="), "{location}");
 }
+
+/// Three confirmation mails an hour is the allowance; an address the
+/// forge refuses sends nothing, so it must not count against it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_address_does_not_spend_the_hourly_slot() {
+    let outbox = tempfile::tempdir().unwrap();
+    let mail_file = outbox.path().join("mail.txt");
+    let forge = boot_mailing(&format!("cat > '{}'", mail_file.display())).await;
+    let app = &forge.app;
+    let (_, cookie) = sign_in_as(&forge, "ada").await;
+
+    let (_, location) =
+        post_form(app, "/you/settings/email", &cookie, "email=not-an-address").await;
+    assert!(location.starts_with("/you/settings?error="), "{location}");
+    assert!(
+        !location.contains("Try+again"),
+        "a refusal is not a throttle: {location}"
+    );
+    assert!(!mail_file.exists());
+
+    let (_, location) = post_form(
+        app,
+        "/you/settings/email",
+        &cookie,
+        "email=ada%40example.org",
+    )
+    .await;
+    assert_eq!(location, "/you/settings?sent=1", "the slot was still free");
+    assert!(mail_file.exists(), "the confirmation went out");
+}

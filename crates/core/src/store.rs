@@ -606,6 +606,7 @@ impl Store {
         // three columns; the two it lacks are what every read here asks for.
         ensure_column(&conn, "contact", "verified_at", "TEXT")?;
         ensure_column(&conn, "contact", "pending", "TEXT")?;
+        ensure_contact_email_optional(&conn)?;
 
         // Projections are derived, so a schema change is not a
         // migration problem: drop them and replay the log. This is the
@@ -2830,6 +2831,41 @@ mod legacy_payload_tests {
             "a credential must not be republished: {served}"
         );
     }
+}
+
+/// The first contact table required an address; since addresses became
+/// pending until confirmed, a row may hold none. SQLite cannot relax a
+/// NOT NULL in place, so an older table is rebuilt in the current shape
+/// with its rows carried over. On 2026-09-07 the reference instance
+/// refused every new address until this ran.
+fn ensure_contact_email_optional(conn: &Connection) -> CoreResult<()> {
+    let email_required = conn
+        .prepare("PRAGMA table_info(contact)")?
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(1)?, row.get::<_, i64>(3)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|(name, notnull)| name == "email" && *notnull == 1);
+    if email_required {
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE contact_reshaped (
+               principal   TEXT PRIMARY KEY,
+               email       TEXT,
+               verified_at TEXT,
+               pending     TEXT,
+               set_at      TEXT NOT NULL
+             ) STRICT;
+             INSERT INTO contact_reshaped (principal, email, verified_at, pending, set_at)
+               SELECT principal, email, verified_at, pending, set_at FROM contact;
+             DROP TABLE contact;
+             ALTER TABLE contact_reshaped RENAME TO contact;
+             CREATE INDEX IF NOT EXISTS idx_contact_email ON contact (email);
+             COMMIT;",
+        )?;
+    }
+    Ok(())
 }
 
 /// Add a column to an operational table if it is not there yet.

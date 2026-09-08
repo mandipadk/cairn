@@ -547,15 +547,16 @@ async fn change_email(
     // Mail with the forge's name on it, to an address of the caller's
     // choosing: three an hour is plenty for a person and useless for spam.
     let slot = jiff::Timestamp::now().as_second() / 1200;
-    let allowed = app
-        .with_store(|s| s.throttle(&format!("email-confirm:{}:{slot}", viewer.0), 1200))
-        .unwrap_or(true);
+    let key = format!("email-confirm:{}:{slot}", viewer.0);
+    let allowed = app.with_store(|s| s.throttle(&key, 1200)).unwrap_or(true);
     if !allowed {
         return Redirect::to("/you/settings?error=Try+again+in+a+little+while").into_response();
     }
     let secret = match app.with_store(|s| s.request_email(&viewer.0, &email)) {
         Ok(secret) => secret,
         Err(err) => {
+            // Nothing was sent, so the slot was not spent.
+            let _ = app.with_store(|s| s.forgive(&key));
             return Redirect::to(&format!("/you/settings?error={}", urlencode(&humane(&err))))
                 .into_response();
         }

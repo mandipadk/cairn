@@ -30,7 +30,10 @@ mod web;
 
 pub use mail::Mailer;
 pub use queue::{reconcile_branches, spawn_queue_processor};
-pub use state::{AppState, DEFAULT_WRITES_PER_MINUTE};
+pub use state::{
+    AppState, DEFAULT_ANONYMOUS_READS_PER_MINUTE, DEFAULT_READS_PER_MINUTE,
+    DEFAULT_WRITES_PER_MINUTE,
+};
 
 use axum::Router;
 use axum::routing::{get, post};
@@ -268,6 +271,10 @@ pub fn router(state: AppState) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             api_guard::api_writes,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            guard::read_allowance,
         ))
         .layer(axum::middleware::from_fn(guard::security_headers))
         .layer(axum::middleware::from_fn(guard::same_origin_writes))

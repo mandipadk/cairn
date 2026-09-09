@@ -2661,7 +2661,7 @@ pub(crate) async fn old_names(
         };
         // Where a repository went is known to whoever may read it there;
         // to anyone else the old name is as empty as it was a moment ago.
-        let may_read = match requester(&app, prefix, &headers) {
+        let may_read = match requester(&app, &path, &headers) {
             Some(who) => app
                 .with_store(|s| s.readable(&who, &current))
                 .ok()
@@ -2690,12 +2690,12 @@ pub(crate) async fn old_names(
 /// Whoever is asking at this door, resolved the way the door resolves
 /// identity: the session cookie on the pages, the bearer token on the
 /// API, basic auth over git. `None` is a stranger.
-fn requester(app: &AppState, prefix: &str, headers: &HeaderMap) -> Option<PrincipalId> {
-    match prefix {
-        "/git/" => crate::git_http::reader(app, headers)
+pub(crate) fn requester(app: &AppState, path: &str, headers: &HeaderMap) -> Option<PrincipalId> {
+    match path {
+        _ if path.starts_with("/git/") => crate::git_http::reader(app, headers)
             .ok()
             .map(|(who, _)| who),
-        "/api/repos/" => headers
+        _ if path.starts_with("/api/") => headers
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))

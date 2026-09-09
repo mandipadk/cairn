@@ -96,6 +96,14 @@ enum Command {
         /// to wait (429 with Retry-After). 0 turns the allowance off.
         #[arg(long, default_value_t = cairn_server::DEFAULT_WRITES_PER_MINUTE)]
         api_writes_per_minute: u32,
+        /// Reads one principal may make per minute before being told to
+        /// wait. 0 turns the allowance off.
+        #[arg(long, default_value_t = cairn_server::DEFAULT_READS_PER_MINUTE)]
+        reads_per_minute: u32,
+        /// Reads one address with no account behind it may make per
+        /// minute. 0 turns the allowance off.
+        #[arg(long, default_value_t = cairn_server::DEFAULT_ANONYMOUS_READS_PER_MINUTE)]
+        anonymous_reads_per_minute: u32,
         /// Repositories one owner may have. 0 for no limit.
         #[arg(long)]
         quota_repos: Option<u32>,
@@ -352,6 +360,8 @@ async fn main() -> anyhow::Result<()> {
             workload_issuer,
             workload_audience,
             api_writes_per_minute,
+            reads_per_minute,
+            anonymous_reads_per_minute,
             quota_repos,
             quota_agents,
             quota_open_tasks,
@@ -424,7 +434,9 @@ async fn main() -> anyhow::Result<()> {
             if trust_proxy {
                 state = state.trusting_proxy();
             }
-            state = state.with_write_allowance(api_writes_per_minute);
+            state = state
+                .with_write_allowance(api_writes_per_minute)
+                .with_read_allowance(reads_per_minute, anonymous_reads_per_minute);
             let key_path = signing_key_file.unwrap_or_else(|| {
                 db.parent()
                     .unwrap_or(std::path::Path::new("."))

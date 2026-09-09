@@ -352,3 +352,42 @@ async fn a_push_from_an_owner_over_their_disk_is_refused_with_the_numbers() {
         "the refused push opened nothing new: {changes}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reader_who_will_not_wait_is_told_how_long() {
+    let forge = boot().await;
+    let app = cairn_server::router(forge.state.clone().with_read_allowance(3, 3));
+
+    for _ in 0..3 {
+        let (status, _) = api(&app, "GET", "/api/repos/ada/demo", "ada", None).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let (status, body) = api(&app, "GET", "/api/repos/ada/demo", "ada", None).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    assert_eq!(body["kind"], "rate_limited");
+    assert!(
+        body["detail"]["retry_after"]
+            .as_u64()
+            .is_some_and(|s| (1..=60).contains(&s)),
+        "the wait is stated: {body}"
+    );
+
+    // Somebody else's allowance is their own.
+    api(
+        &app,
+        "POST",
+        "/api/principals",
+        "ada",
+        Some(json!({ "id": "bee", "kind": "human", "display": "Bee" })),
+    )
+    .await;
+    let (status, body) = api(&app, "GET", "/api/repos/ada/demo", "bee", None).await;
+    assert_ne!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+
+    // The health check is never the thing that runs out: a monitor
+    // polling it must not be locked out of saying the forge is up.
+    for _ in 0..10 {
+        let (status, _) = api(&app, "GET", "/healthz", "ada", None).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+}

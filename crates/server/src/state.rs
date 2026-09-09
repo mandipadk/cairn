@@ -16,6 +16,13 @@ const SESSION_TTL_DAYS: i64 = 14;
 /// wait. Ten a second sustained is far past any agent doing work and
 /// well short of what a loop stuck on a refusal produces.
 pub const DEFAULT_WRITES_PER_MINUTE: u32 = 600;
+/// Reads one principal may make per minute. Generous: a person browsing
+/// and an agent reading the graph both do a lot of it, and the point is
+/// to stop a runaway loop rather than to shape traffic.
+pub const DEFAULT_READS_PER_MINUTE: u32 = 1200;
+/// And what one address may, with no account behind it. Lower, because
+/// a stranger's reads are the ones nobody can be asked about after.
+pub const DEFAULT_ANONYMOUS_READS_PER_MINUTE: u32 = 240;
 
 /// One change the log says landed, and where.
 struct Landed {
@@ -69,6 +76,10 @@ pub struct AppState {
     pub(crate) reset_limiter: crate::guard::LoginLimiter,
     /// API writes, per principal: a runaway loop is told to wait.
     pub(crate) write_limiter: crate::guard::Limiter<PrincipalId>,
+    /// Reads, per principal, and per source address for a stranger:
+    /// two allowances, so neither can exhaust the other.
+    pub(crate) read_limiter: crate::guard::Limiter<PrincipalId>,
+    pub(crate) anonymous_read_limiter: crate::guard::LoginLimiter,
     /// Writes under an idempotency key that have not answered yet, so a
     /// second copy arriving meanwhile is refused rather than done twice.
     writes_in_flight: Arc<Mutex<HashSet<(PrincipalId, String)>>>,
@@ -114,6 +125,14 @@ impl AppState {
             reset_limiter: crate::guard::LoginLimiter::new(5, Duration::from_secs(300)),
             write_limiter: crate::guard::Limiter::new(
                 DEFAULT_WRITES_PER_MINUTE,
+                Duration::from_secs(60),
+            ),
+            read_limiter: crate::guard::Limiter::new(
+                DEFAULT_READS_PER_MINUTE,
+                Duration::from_secs(60),
+            ),
+            anonymous_read_limiter: crate::guard::LoginLimiter::new(
+                DEFAULT_ANONYMOUS_READS_PER_MINUTE,
                 Duration::from_secs(60),
             ),
             writes_in_flight: Arc::new(Mutex::new(HashSet::new())),
@@ -220,6 +239,22 @@ impl AppState {
 
     pub(crate) fn proxy_trust(&self) -> crate::guard::ProxyTrust {
         self.proxy_trust
+    }
+
+    /// How many reads a principal may make per minute, and how many an
+    /// address with no account behind it may; 0 for no allowance.
+    pub fn with_read_allowance(mut self, per_minute: u32, anonymous: u32) -> Self {
+        self.read_limiter = if per_minute == 0 {
+            crate::guard::Limiter::unlimited()
+        } else {
+            crate::guard::Limiter::new(per_minute, Duration::from_secs(60))
+        };
+        self.anonymous_read_limiter = if anonymous == 0 {
+            crate::guard::LoginLimiter::unlimited()
+        } else {
+            crate::guard::LoginLimiter::new(anonymous, Duration::from_secs(60))
+        };
+        self
     }
 
     /// How many API writes a principal may make per minute; 0 means

@@ -103,6 +103,65 @@ fn refused(why: &'static str) -> Response {
     (StatusCode::FORBIDDEN, why).into_response()
 }
 
+/// What a reader is allowed, before being told to wait.
+///
+/// Writes have had an allowance since agents started retrying them;
+/// reads had none, and reads are what a stranger can ask for without
+/// an account. A clone is the expensive one: it forks git and streams
+/// a pack, and nothing about being anonymous made it cheaper.
+///
+/// Whoever is asking decides whose allowance is spent — a principal
+/// when the request carries identity, the source address otherwise —
+/// so one busy agent cannot use up what everybody else has, and a
+/// stranger cannot use up what people with accounts have. Assets and
+/// the health check are not counted: they are cheap, and a monitor
+/// polling `/healthz` should never be the thing that runs out.
+pub async fn read_allowance(
+    axum::extract::State(app): axum::extract::State<crate::AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let counted = matches!(*request.method(), Method::GET | Method::HEAD)
+        && !request.uri().path().starts_with("/assets/")
+        && request.uri().path() != "/healthz";
+    if !counted {
+        return next.run(request).await;
+    }
+    let path = request.uri().path().to_owned();
+    let json = path.starts_with("/api/") || path.starts_with("/git/");
+    let refused = match crate::web::requester(&app, &path, request.headers()) {
+        Some(who) => app.read_limiter.check(who).err(),
+        // In-process callers have no address and no identity, and there
+        // is no anonymous network in front of them to protect against.
+        None => {
+            client_ip(&app, &request).and_then(|peer| app.anonymous_read_limiter.check(peer).err())
+        }
+    };
+    match refused {
+        Some(wait) if json => rate_limited_read(wait),
+        Some(wait) => (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, wait.as_secs().max(1).to_string())],
+            "Too many requests. Wait a moment and try again.",
+        )
+            .into_response(),
+        None => next.run(request).await,
+    }
+}
+
+/// The caller's address, read off a whole request rather than its
+/// parts, for middleware that has not taken it apart yet.
+fn client_ip(app: &crate::AppState, request: &Request) -> Option<IpAddr> {
+    let connected = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|connected| connected.0.ip());
+    match app.proxy_trust() {
+        ProxyTrust::ForwardedHeader => forwarded(request.headers()).or(connected),
+        ProxyTrust::Connection => connected,
+    }
+}
+
 /// A fixed-window limiter, keyed by whoever is asking: a source address
 /// for the forms a stranger can post to, a principal for API writes.
 /// Deliberately small: it exists to make guessing and runaway loops
@@ -190,9 +249,8 @@ pub enum ProxyTrust {
 /// Read the address a trusted proxy recorded. The rightmost entry is
 /// the one the nearest proxy added; entries further left were supplied
 /// by whatever came before it, including the client.
-fn forwarded_for(parts: &axum::http::request::Parts) -> Option<IpAddr> {
-    parts
-        .headers
+fn forwarded(headers: &axum::http::HeaderMap) -> Option<IpAddr> {
+    headers
         .get("x-forwarded-for")?
         .to_str()
         .ok()?
@@ -213,7 +271,7 @@ impl axum::extract::FromRequestParts<crate::AppState> for ClientIp {
             .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
             .map(|connected| connected.0.ip());
         Ok(ClientIp(match state.proxy_trust() {
-            ProxyTrust::ForwardedHeader => forwarded_for(parts).or(connected),
+            ProxyTrust::ForwardedHeader => forwarded(&parts.headers).or(connected),
             ProxyTrust::Connection => connected,
         }))
     }
@@ -224,6 +282,22 @@ pub fn too_many_attempts() -> Response {
         StatusCode::TOO_MANY_REQUESTS,
         [(header::RETRY_AFTER, "60")],
         "Too many sign-in attempts. Wait a minute and try again.",
+    )
+        .into_response()
+}
+
+/// The same, for a read: a caller that cannot tell these apart would
+/// wait either way, and one that can knows which of its loops to slow.
+pub fn rate_limited_read(wait: Duration) -> Response {
+    let seconds = wait.as_secs_f64().ceil().max(1.0) as u64;
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [(header::RETRY_AFTER, seconds.to_string())],
+        axum::Json(serde_json::json!({
+            "kind": "rate_limited",
+            "error": format!("too many reads; wait {seconds}s and try again"),
+            "detail": { "retry_after": seconds },
+        })),
     )
         .into_response()
 }
@@ -259,14 +333,14 @@ mod tests {
             .unwrap();
         let (parts, ()) = request.into_parts();
         assert_eq!(
-            forwarded_for(&parts),
+            forwarded(&parts.headers),
             Some("203.0.113.4".parse().unwrap()),
             "the rightmost hop is the one a client cannot forge"
         );
 
         let empty = axum::http::Request::builder().body(()).unwrap();
         let (parts, ()) = empty.into_parts();
-        assert_eq!(forwarded_for(&parts), None);
+        assert_eq!(forwarded(&parts.headers), None);
     }
 
     #[test]

@@ -155,10 +155,14 @@ decoration — while a push still requires the two to agree, because a
 mismatch there is usually somebody's mistake worth catching.
 
 What an owner may take up is bounded by their quota, below; the size of
-one push and one file is bounded too. Not defended yet: rate limiting on
-reads, and a principal that holds legitimate capabilities and abuses
-them. Grants are the tool for that, and they are only as narrow as
-whoever issues them.
+one push and one file is bounded too. Reads have an allowance like
+writes: 1200 a minute for a principal, 240 for an address with no
+account behind it, with `429` and `Retry-After` saying how long, set by
+`--reads-per-minute` and `--anonymous-reads-per-minute` and turned off
+with `0`. Assets and `/healthz` are not counted, so a monitor polling
+the forge is never what runs out. Not defended: a principal that holds
+legitimate capabilities and abuses them. Grants are the tool for that,
+and they are only as narrow as whoever issues them.
 
 ## Send mail
 
@@ -375,6 +379,28 @@ that has never measured any looks once at startup, so an upgrade does
 not report everybody at zero. What a push will cost is not knowable
 until it is unpacked — so a push from an owner already over their disk
 is refused, rather than the one that crossed the line.
+
+### What is yours, and what is the forge's
+
+On a forge somebody else runs, an owner decides everything about what
+they own: who may read it, its policy, its description, its name, who
+holds it next, and whether it exists. A repository's owner also grants
+capabilities on it, makes agents, and answers for what lands.
+
+Four things are the operator's, not an owner's, on any forge: setting a
+mirror and importing history, because both reach out from the forge's
+own machine to an address the forge would then trust; registering a
+person or an organisation, because a name in the forge's namespace is
+not one owner's to hand out; and quotas, because they are how one
+forge's room is shared. An owner sees their quota and cannot change it.
+
+What an owner can always do is leave. Everything they own is git, and a
+clone carries the history; the receipts on the commits are checkable
+offline against the forge's public key, so what landed and why travels
+with the code and stays true somewhere else. `GET
+/api/repos/{owner}/{name}/receipts` is the whole record for a
+repository, and a mirror set by the operator keeps a copy moving on its
+own. There is no export button, and nothing to unlock.
 
 ### Attention budget
 
@@ -627,7 +653,9 @@ Other commands: `cairn serve`, `cairn mcp --server <url> --token <t>`,
 - `--oidc-issuer`, `--oidc-client-id`, `--oidc-client-secret-file`,
   `--oidc-label`, `--oidc-link-by-email`; `--workload-issuer`
   (repeatable), `--workload-audience`.
-- `--api-writes-per-minute <n>` (default 600, 0 for none).
+- `--api-writes-per-minute <n>` (default 600, 0 for none);
+  `--reads-per-minute <n>` (default 1200) and
+  `--anonymous-reads-per-minute <n>` (default 240).
 - `--quota-repos`, `--quota-agents`, `--quota-open-tasks`,
   `--quota-disk-mb` (defaults 50, 25, 200 and 5120; 0 for no limit).
 - `--signing-key-file <path>` (default `signing.key` beside the database).

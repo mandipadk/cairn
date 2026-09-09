@@ -37,7 +37,10 @@ echo "operating.md: the binary names its version and build"
 echo "README: bootstrap, then serve"
 TOKEN=$("$BIN" admin bootstrap --db forge.db ada --display "Ada" | grep -oE 'cairn_[A-Za-z0-9_-]+' | head -1)
 [ -n "$TOKEN" ] || { echo "!! bootstrap printed no token"; exit 1; }
-"$BIN" serve --db forge.db --listen "127.0.0.1:$PORT" >serve.log 2>&1 &
+# A small allowance for readers with no account, so the walk can show
+# what running out looks like without making hundreds of requests to
+# get there. Signed-in work keeps the ordinary allowance.
+"$BIN" serve --db forge.db --listen "127.0.0.1:$PORT" --anonymous-reads-per-minute 20 >serve.log 2>&1 &
 SERVE=$!
 for _ in $(seq 1 60); do curl -sf -m 1 "$URL/healthz" >/dev/null 2>&1 && break; sleep 0.5; done
 curl -sf "$URL/healthz" >/dev/null || { echo "!! serve did not come up"; cat serve.log; exit 1; }
@@ -115,6 +118,11 @@ CAIRN_DB=forge.db CAIRN_REPOS=repos CAIRN_BACKUPS=bundles "$REPO/scripts/backup.
 mkdir restored && tar -xzf bundles/cairn-*.tar.gz -C restored && tar -xf restored/repos.tar -C restored
 [ -s restored/signing.key ] || { echo "!! the bundle carries no signing key"; exit 1; }
 "$BIN" admin fsck --db restored/cairn.db --repos restored/repos | tail -1 | grep -q '^clean' || { echo "!! the restored copy is not clean"; exit 1; }
+
+echo "operating.md: a stranger's reads have an allowance, and the health check is never it"
+LIMITED=$(for _ in $(seq 1 30); do curl -s -o /dev/null -w '%{http_code} ' "$URL/login"; done)
+case "$LIMITED" in *429*) ;; *) echo "!! a reader past the allowance was not told to wait: $LIMITED"; exit 1;; esac
+for _ in $(seq 1 10); do expect "$(status /healthz)" 200 "the health check is not counted against anybody"; done
 
 echo "operating.md: the watcher sees the forge up, and sees it go"
 "$BIN" admin watch --url "$URL" --state watch.json | grep -q ': up since' || { echo "!! the watcher did not see the forge up"; exit 1; }

@@ -1,0 +1,133 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Ireads0100",
+      "id": "c-24ebcwkm0ndtzxkwttc4senedm",
+      "landed_oid": "2de37ab1b35f41c4ae2de3697789f9209b592221",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 100,
+      "opened_at": "2026-09-09T17:04:54.50023985Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn/cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Give reading an allowance too",
+      "updated_at": "2026-09-09T17:05:45.560030805Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-24ebcwkm0ndtzxkwttc4senedm",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-7axsvyxa77gyzn0j5y5tnm85xf",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 789,
+        "summary": "fmt, clippy -D warnings, the workspace suite and the first-run walk pass. The walk runs a stranger past the allowance and gets 429, and polls the health check ten more times to show it is never counted.",
+        "unchecked": [
+          "Behaviour behind a proxy that many people share: the allowance is per address, so one office or one NAT is one reader, and nothing here measures what that feels like on a busy forge.",
+          "The cost of resolving identity twice on every read, once for the allowance and once in the handler."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "2de37ab1b35f41c4ae2de3697789f9209b592221",
+    "landed_at": "2026-09-09T17:05:45.560030805Z",
+    "merged_by": "mandip",
+    "repo": "cairn/cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-24ebcwkm0ndtzxkwttc4senedm",
+      "commit_oid": "2de37ab1b35f41c4ae2de3697789f9209b592221",
+      "message": "Give reading an allowance too\n\nWrites have had one since agents started retrying them; reads had none,\nand reads are what a stranger can ask for without an account. A clone\nis the expensive one — it forks git and streams a pack — and nothing\nabout being anonymous made it cheaper.\n\nWhoever is asking decides whose allowance is spent: a principal when\nthe request carries identity, resolved the way each door resolves it,\nand the source address otherwise. Two allowances rather than one, so a\nbusy agent cannot use up what everybody else has and a stranger cannot\nuse up what people with accounts have. Running out is 429 with\nRetry-After, the shape a write already refuses with. Assets and the\nhealth check are not counted, because a monitor polling the forge to\nsay whether it is up should never be the thing that runs out.\n\nWith this the list of what a forge on the open internet has no defence\nagainst is one line shorter, and the guide now says plainly what is an\nowner's and what is the operator's on a forge somebody else runs — and\nthat leaving needs no export button, because it is all git and the\nreceipts verify off the forge.\n\nChange-Id: Ireads0100\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "README.md",
+        "crates/cli/src/main.rs",
+        "crates/cli/tests/suite/quotas_flow.rs",
+        "crates/server/src/guard.rs",
+        "crates/server/src/lib.rs",
+        "crates/server/src/state.rs",
+        "crates/server/src/web/mod.rs",
+        "docs/operating.md",
+        "scripts/first-run.sh"
+      ],
+      "session": null
+    },
+    "seq": 792,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-7axsvyxa77gyzn0j5y5tnm85xf",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-7axsvyxa77gyzn0j5y5tnm85xf",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 103 judged claims, 98% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 7 path(s) outside docs/, *.md: crates/cli/src/main.rs, crates/cli/tests/suite/quotas_flow.rs, crates/server/src/guard.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-24ebcwkm0ndtzxkwttc4senedm",
+        "claim": "cl-7axsvyxa77gyzn0j5y5tnm85xf",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "id": "vr-2z60w9c0x6nwvv73drh5b4ccwg",
+        "observed": "exit 0: Doc-tests cairn_server",
+        "revision": 1,
+        "seq": 790
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "/j1gPYYsm26SAeUz3VIHT+kbNnsORrF/53ABSSeztLPmLF0v6I7opVseQbOhwLHFm2PsEaun+wKJWxgEARW/Ag=="
+  }
+}

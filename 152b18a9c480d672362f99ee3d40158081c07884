@@ -1,0 +1,151 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Iquotas0099",
+      "id": "c-7ze2dvgkrx4smdzs4x75twmmmp",
+      "landed_oid": "152b18a9c480d672362f99ee3d40158081c07884",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 99,
+      "opened_at": "2026-09-09T16:51:09.303897936Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn/cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Say what one owner may take up here",
+      "updated_at": "2026-09-09T16:52:00.389064339Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-7ze2dvgkrx4smdzs4x75twmmmp",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-1ekwh7paad2mejhea9b1p5y302",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 782,
+        "summary": "fmt, clippy -D warnings, the workspace suite and the first-run walk pass; the walk hits a quota refusal. Rehearsed twice on a copy of this forge: the first found the missing projections, the second rebuilt to schema 27 with fsck clean and quotas readable.",
+        "unchecked": [
+          "Disk measurement under a repository large enough to matter: the tests and the rehearsal measure repositories of a few megabytes, so the walk of a big tree is timed nowhere.",
+          "Read rate limiting, which is the other half of this phase and follows as its own change.",
+          "This change was pushed with credentials sent up front, because the forge it was pushed to still has the redirect bug it fixes; the ordinary challenge-then-push path is exercised by the tests and by the next landing."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "152b18a9c480d672362f99ee3d40158081c07884",
+    "landed_at": "2026-09-09T16:52:00.389064339Z",
+    "merged_by": "mandip",
+    "repo": "cairn/cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-7ze2dvgkrx4smdzs4x75twmmmp",
+      "commit_oid": "152b18a9c480d672362f99ee3d40158081c07884",
+      "message": "Say what one owner may take up here\n\nA forge shared with other people has to be able to say no. Every owner,\na person or an organisation, now has a quota: repositories, agents,\nopen tasks across their repositories, and disk those repositories take.\nA refusal names what they have and what the limit is, because \"you\ncannot\" alone leaves the reader guessing whether to delete something or\nask for more; over the API it is 409 with kind over_quota. The forge's\ndefaults are 50, 25, 200 and 5 GiB, set for the whole forge with\n--quota-repos and its three companions, and for one owner with\ncairn admin quota or the quota endpoint. An owner sees theirs on their\nown page and nobody else does. This is the shape a bigger plan would\ntake: a bigger quota and nothing else.\n\nDisk is measured rather than tracked, because git changes the answer by\npacking objects with nothing happening here to record. Each repository\nis measured after a push and after a landing, and a forge that has\nnever measured looks once at startup so an upgrade does not report\neverybody at zero. Since what a push costs is not knowable until it is\nunpacked, an owner already over is refused the next one rather than the\none that crossed the line.\n\nOne thing this fixes was live and breaking pushes. The old-address\nredirect added in the previous change answered git's credential\nchallenge with a move, so every push - which always begins with that\nchallenge - followed the redirect somewhere else and died. An address\nthat names a repository which exists now is never an old address,\nwhatever the handler answered, and a name freed by a rename can be\ntaken again and is then live rather than old. A test pushes to a\nretaken name. This change had to be pushed with credentials up front to\nget past the bug it repairs.\n\nTwo projections, tags and former names, were never in the list a schema\nchange rebuilds and fsck compares. Nothing looked wrong until a\nrepository with a tag was renamed twice: the next rebuild replayed the\nlog into rows that were still there and stopped at a unique constraint,\nwhich is a forge that will not start. Both are in the list now, and a\ntest derives it from the schema so the two cannot drift again. This is\nthe rehearsal on a copy of production earning its place: no test here\nhad two renames and a tag in one log.\n\nAn agent now belongs to somebody, and that is what makes the count\npossible: it is the person who registered it, or an organisation they\nbelong to. So anybody who can sign in makes their own agents, mints\ntheir tokens, grants them capabilities on repositories they hold, and\nretires them; registering a person or an organisation stays the\noperator's, because a name in this namespace is not one owner's to hand\nout. The Agents page is everyone's now, showing what the viewer holds.\nAn agent cannot own anything, including itself, which closes a gap in\nthe owner check that only ever mattered once agents could register.\n\nChange-Id: Iquotas0099\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "README.md",
+        "crates/cli/src/main.rs",
+        "crates/cli/tests/suite/credential_flow.rs",
+        "crates/cli/tests/suite/main.rs",
+        "crates/cli/tests/suite/quotas_flow.rs",
+        "crates/cli/tests/suite/repo_lifecycle_flow.rs",
+        "crates/cli/tests/suite/security_flow.rs",
+        "crates/core/src/commands.rs",
+        "crates/core/src/error.rs",
+        "crates/core/src/event.rs",
+        "crates/core/src/lib.rs",
+        "crates/core/src/queries.rs",
+        "crates/core/src/store.rs",
+        "crates/core/src/types.rs",
+        "crates/git/src/store.rs",
+        "crates/server/src/error.rs",
+        "crates/server/src/git_http.rs",
+        "crates/server/src/lib.rs",
+        "crates/server/src/queue.rs",
+        "crates/server/src/routes.rs",
+        "crates/server/src/web/mod.rs",
+        "crates/server/src/web/views.rs",
+        "crates/server/tests/api.rs",
+        "docs/architecture.md",
+        "docs/operating.md",
+        "scripts/first-run.sh"
+      ],
+      "session": null
+    },
+    "seq": 785,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-1ekwh7paad2mejhea9b1p5y302",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-1ekwh7paad2mejhea9b1p5y302",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 102 judged claims, 98% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 23 path(s) outside docs/, *.md: crates/cli/src/main.rs, crates/cli/tests/suite/credential_flow.rs, crates/cli/tests/suite/main.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-7ze2dvgkrx4smdzs4x75twmmmp",
+        "claim": "cl-1ekwh7paad2mejhea9b1p5y302",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "id": "vr-2kzcqkk7zmk4n2dvcw023hq2az",
+        "observed": "exit 0: Doc-tests cairn_server",
+        "revision": 1,
+        "seq": 783
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "AonocRCodRu7LjHGdpNK6kgKJNmk+hPmwGSmaBi7nSU+U6/IH9A7O08YMLO2iW9+i4GW1L7IFWDmBjHCjvk8Bw=="
+  }
+}

@@ -1806,6 +1806,17 @@ pub struct Viewer(pub PrincipalId, pub Chrome);
 /// signed-out and a signed-in page, so the two can never disagree about
 /// what counts as being signed in.
 fn viewer_from(headers: &HeaderMap, state: &AppState) -> Option<Viewer> {
+    let who = signed_in_as(headers, state)?;
+    chrome_for(state, &who)
+        .ok()
+        .map(|chrome| Viewer(who, chrome))
+}
+
+/// Who a browser is signed in as, without working out what to draw for
+/// them. The sidebar costs a walk of every repository they can read, and
+/// anything that only needs a name — the read allowance, the old-name
+/// redirect — should not pay for it.
+fn signed_in_as(headers: &HeaderMap, state: &AppState) -> Option<PrincipalId> {
     // A signed-in browser, the ordinary case.
     let who = if let Some(id) = cookie(headers, SESSION_COOKIE)
         && let Some(principal) = state.resolve_session(&id)
@@ -1828,9 +1839,7 @@ fn viewer_from(headers: &HeaderMap, state: &AppState) -> Option<Viewer> {
     } else {
         return None;
     };
-    chrome_for(state, &who)
-        .ok()
-        .map(|chrome| Viewer(who, chrome))
+    Some(who)
 }
 
 /// Whoever is looking, signed in or not. Never refuses: the page
@@ -2708,7 +2717,7 @@ pub(crate) fn requester(app: &AppState, path: &str, headers: &HeaderMap) -> Opti
                     .and_then(|v| v.to_str().ok())
                     .and_then(PrincipalId::new)
             }),
-        _ => viewer_from(headers, app).map(|viewer| viewer.0),
+        _ => signed_in_as(headers, app),
     }
 }
 

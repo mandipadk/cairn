@@ -410,6 +410,39 @@ async fn a_push_from_an_owner_over_their_disk_is_refused_with_the_numbers() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn the_pack_is_what_a_clone_costs() {
+    let forge = boot().await;
+    // A clone is an advertisement and then the pack. Counting only the
+    // advertisement meters the asking and leaves the answering free,
+    // and the answering is the part that forks git.
+    let app = cairn_server::router(forge.state.clone().with_read_allowance(25, 25));
+    api(
+        &app,
+        "POST",
+        "/api/repos/ada/demo/visibility",
+        "ada",
+        Some(json!({ "visibility": "public" })),
+    )
+    .await;
+
+    // One advertisement is one unit; the pack that follows is twenty.
+    let (status, _) = api(&app, "GET", "/api/repos/ada/demo", "ada", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let status = status_of(&app, "POST", "/git/ada/demo/git-upload-pack", Some("ada")).await;
+    assert_ne!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "the first pack is within the allowance"
+    );
+    let status = status_of(&app, "POST", "/git/ada/demo/git-upload-pack", Some("ada")).await;
+    assert_eq!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "and the second is not: a pack is not a page view"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_reader_who_will_not_wait_is_told_how_long() {
     let forge = boot().await;
     let app = cairn_server::router(forge.state.clone().with_read_allowance(3, 3));

@@ -79,7 +79,7 @@ pub struct AppState {
     /// Reads, per principal, and per source address for a stranger:
     /// two allowances, so neither can exhaust the other.
     pub(crate) read_limiter: crate::guard::Limiter<PrincipalId>,
-    pub(crate) anonymous_read_limiter: crate::guard::LoginLimiter,
+    pub(crate) anonymous_read_limiter: crate::guard::Limiter<crate::guard::Caller>,
     /// Writes under an idempotency key that have not answered yet, so a
     /// second copy arriving meanwhile is refused rather than done twice.
     writes_in_flight: Arc<Mutex<HashSet<(PrincipalId, String)>>>,
@@ -131,7 +131,7 @@ impl AppState {
                 DEFAULT_READS_PER_MINUTE,
                 Duration::from_secs(60),
             ),
-            anonymous_read_limiter: crate::guard::LoginLimiter::new(
+            anonymous_read_limiter: crate::guard::Limiter::new(
                 DEFAULT_ANONYMOUS_READS_PER_MINUTE,
                 Duration::from_secs(60),
             ),
@@ -250,9 +250,9 @@ impl AppState {
             crate::guard::Limiter::new(per_minute, Duration::from_secs(60))
         };
         self.anonymous_read_limiter = if anonymous == 0 {
-            crate::guard::LoginLimiter::unlimited()
+            crate::guard::Limiter::unlimited()
         } else {
-            crate::guard::LoginLimiter::new(anonymous, Duration::from_secs(60))
+            crate::guard::Limiter::new(anonymous, Duration::from_secs(60))
         };
         self
     }

@@ -441,6 +441,16 @@ async fn main() -> anyhow::Result<()> {
             state = state
                 .with_write_allowance(api_writes_per_minute)
                 .with_read_allowance(reads_per_minute, anonymous_reads_per_minute);
+            if anonymous_reads_per_minute > 0 && !trust_proxy {
+                // Worth saying out loud: behind a proxy without this
+                // flag every visitor arrives from the same address, so
+                // one allowance is shared by the whole internet and the
+                // forge looks broken to everybody at once.
+                tracing::info!(
+                    "readers with no account are limited by address; behind a reverse proxy, \
+                     pass --trust-proxy or they all share one allowance"
+                );
+            }
             let key_path = signing_key_file.unwrap_or_else(|| {
                 db.parent()
                     .unwrap_or(std::path::Path::new("."))

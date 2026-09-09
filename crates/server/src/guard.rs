@@ -13,6 +13,7 @@ use axum::extract::Request;
 use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::net::IpAddr;
@@ -121,32 +122,82 @@ pub async fn read_allowance(
     request: Request,
     next: Next,
 ) -> Response {
-    let counted = matches!(*request.method(), Method::GET | Method::HEAD)
-        && !request.uri().path().starts_with("/assets/")
-        && request.uri().path() != "/healthz";
+    let path = request.uri().path().to_owned();
+    // A clone is two requests: an advertisement, which is a GET, and the
+    // pack itself, which is a POST. Counting only the first would meter
+    // the asking and leave the answering — the part that forks git and
+    // streams however much history there is — free. Writes have their
+    // own allowance under /api/, so the door to count here is git's.
+    let pack = path.starts_with("/git/") && *request.method() == Method::POST;
+    let reading = matches!(*request.method(), Method::GET | Method::HEAD) || pack;
+    let counted = reading && !path.starts_with("/assets/") && path != "/healthz";
     if !counted {
         return next.run(request).await;
     }
-    let path = request.uri().path().to_owned();
+    // A pack is not a page view. Charging it once would let a thousand
+    // clones an hour through the same allowance as a thousand page
+    // loads, and one of those is a great deal more work than the other.
+    let cost = if pack { PACK_COSTS } else { 1 };
     let json = path.starts_with("/api/") || path.starts_with("/git/");
     let refused = match crate::web::requester(&app, &path, request.headers()) {
-        Some(who) => app.read_limiter.check(who).err(),
+        Some(who) => app.read_limiter.spend(who, cost).err(),
         // In-process callers have no address and no identity, and there
         // is no anonymous network in front of them to protect against.
         None => {
-            client_ip(&app, &request).and_then(|peer| app.anonymous_read_limiter.check(peer).err())
+            bucket(&app, &request).and_then(|key| app.anonymous_read_limiter.spend(key, cost).err())
         }
     };
     match refused {
         Some(wait) if json => rate_limited_read(wait),
         Some(wait) => (
             StatusCode::TOO_MANY_REQUESTS,
-            [(header::RETRY_AFTER, wait.as_secs().max(1).to_string())],
+            [(
+                header::RETRY_AFTER,
+                wait.as_secs_f64().ceil().max(1.0).to_string(),
+            )],
             "Too many requests. Wait a moment and try again.",
         )
             .into_response(),
         None => next.run(request).await,
     }
+}
+
+/// How many units a pack transfer spends. A clone forks git and streams
+/// history; a page load does not.
+const PACK_COSTS: u32 = 20;
+
+/// Somebody with no name here: an address, or a credential that did not
+/// resolve to one.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum Caller {
+    From(IpAddr),
+    Credential(String),
+}
+
+/// Which bucket an unidentified caller spends from.
+///
+/// A caller that offered a credential which did not resolve — revoked,
+/// expired, or for a deactivated principal — is not a stranger, and
+/// putting them in the strangers' bucket lets one agent looping on a
+/// dead token exhaust the allowance for everybody arriving from the
+/// same address. They get a bucket of their own, keyed by what they
+/// offered, so the loop only starves itself.
+fn bucket(app: &crate::AppState, request: &Request) -> Option<Caller> {
+    if let Some(offered) = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    {
+        let mut hasher = Sha256::new();
+        hasher.update(offered.as_bytes());
+        let digest = hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        return Some(Caller::Credential(digest));
+    }
+    client_ip(app, request).map(Caller::From)
 }
 
 /// The caller's address, read off a whole request rather than its
@@ -172,6 +223,14 @@ pub struct Limiter<K: Eq + Hash> {
     allowed: u32,
     window: Duration,
 }
+
+/// How many callers one limiter remembers at once. A window's worth of
+/// distinct addresses is normally far fewer; this is the ceiling that
+/// keeps a flood of them from becoming this process's memory.
+const MOST_CALLERS: usize = 50_000;
+
+/// How many may accumulate before the map is swept.
+const SWEEP_AT: usize = 1024;
 
 /// Sign-in and the other public forms are keyed by source address.
 pub type LoginLimiter = Limiter<IpAddr>;
@@ -205,18 +264,35 @@ impl<K: Eq + Hash> Limiter<K> {
     /// Record an attempt. A refusal says how long until this caller's
     /// window opens again, which is what `Retry-After` tells them.
     pub fn check(&self, from: K) -> Result<(), Duration> {
+        self.spend(from, 1)
+    }
+
+    /// Record work worth `cost` attempts.
+    pub fn spend(&self, from: K, cost: u32) -> Result<(), Duration> {
         let mut attempts = match self.attempts.lock() {
             Ok(attempts) => attempts,
             // A poisoned lock must not lock everyone out.
             Err(poisoned) => poisoned.into_inner(),
         };
         let now = Instant::now();
-        attempts.retain(|_, (_, started)| now.duration_since(*started) < self.window);
+        // Sweeping the whole map on every request is work proportional
+        // to how many callers there are, done while holding the lock
+        // every other request is waiting on — which is exactly backwards
+        // under the load this exists to survive. Sweep once it has grown
+        // instead, and drop the oldest if a flood of distinct callers
+        // outpaces even that.
+        if attempts.len() >= SWEEP_AT {
+            attempts.retain(|_, (_, started)| now.duration_since(*started) < self.window);
+            if attempts.len() >= MOST_CALLERS {
+                let cutoff = now - self.window / 2;
+                attempts.retain(|_, (_, started)| *started > cutoff);
+            }
+        }
         let entry = attempts.entry(from).or_insert((0, now));
         if now.duration_since(entry.1) >= self.window {
             *entry = (0, now);
         }
-        entry.0 = entry.0.saturating_add(1);
+        entry.0 = entry.0.saturating_add(cost);
         if entry.0 <= self.allowed {
             Ok(())
         } else {

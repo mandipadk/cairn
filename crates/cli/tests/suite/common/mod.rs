@@ -278,6 +278,21 @@ pub fn git_raw(dir: &Path, args: &[&str]) -> std::process::Output {
 /// a bearer token, with no dev header anywhere.
 /// A request with no identity at all: what a stranger's browser or a
 /// script without a token sends.
+/// The status of one request, whatever the body turns out to be. For
+/// doors that answer with something that is not JSON — a git pack, a
+/// refusal in prose.
+pub async fn status_of(app: &Router, method: &str, path: &str, actor: Option<&str>) -> StatusCode {
+    let mut request = Request::builder().method(method).uri(path);
+    if let Some(actor) = actor {
+        request = request.header("x-cairn-principal", actor);
+    }
+    let request = request.body(Body::empty()).unwrap();
+    tower::ServiceExt::oneshot(app.clone(), request)
+        .await
+        .unwrap()
+        .status()
+}
+
 pub async fn api_anonymous(
     app: &Router,
     method: &str,

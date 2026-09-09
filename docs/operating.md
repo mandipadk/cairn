@@ -159,8 +159,17 @@ one push and one file is bounded too. Reads have an allowance like
 writes: 1200 a minute for a principal, 240 for an address with no
 account behind it, with `429` and `Retry-After` saying how long, set by
 `--reads-per-minute` and `--anonymous-reads-per-minute` and turned off
-with `0`. Assets and `/healthz` are not counted, so a monitor polling
-the forge is never what runs out. Not defended: a principal that holds
+with `0`. A clone spends twenty, because it forks git and streams
+history and a page load does not; that is the transfer itself, not just
+the ref advertisement. Assets and `/healthz` are not counted, so a
+monitor polling the forge is never what runs out. A caller whose
+credential does not resolve — revoked, expired, deactivated — spends
+its own allowance rather than the address's, so one agent looping on a
+dead token cannot use up what visitors from the same place have.
+
+**Behind a proxy, pass `--trust-proxy`.** Without it every visitor
+appears to arrive from the proxy, so the whole internet shares one
+anonymous allowance and the forge looks broken to everybody at once. Not defended: a principal that holds
 legitimate capabilities and abuses them. Grants are the tool for that,
 and they are only as narrow as whoever issues them.
 

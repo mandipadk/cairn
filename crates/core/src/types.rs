@@ -231,6 +231,65 @@ pub struct Principal {
     /// what it did stays on the record.
     #[serde(default = "yes")]
     pub active: bool,
+    /// Whose this is. An agent belongs to the person or organisation it
+    /// was registered under, and counts against their quota; a person
+    /// and an organisation belong to themselves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<PrincipalId>,
+}
+
+/// What one owner may take up on a forge. `None` on a field is no
+/// limit; the operator sets these per forge, and may set a different
+/// quota for one owner.
+///
+/// This is the shape a free tier and a paid one differ only in: a
+/// bigger plan is a bigger quota and nothing else.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Quota {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repos: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agents: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_tasks: Option<u32>,
+    /// Bytes of git storage across everything the owner holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk: Option<u64>,
+}
+
+impl Default for Quota {
+    /// What a forge allows one owner when its operator has not said
+    /// otherwise. Generous for a forge one person runs for themselves,
+    /// and small enough to be a free tier on a forge open to strangers.
+    fn default() -> Self {
+        Quota {
+            repos: Some(50),
+            agents: Some(25),
+            open_tasks: Some(200),
+            disk: Some(5 * 1024 * 1024 * 1024),
+        }
+    }
+}
+
+impl Quota {
+    /// No limit on anything: a forge that trusts everyone who can sign in.
+    pub fn unlimited() -> Self {
+        Quota {
+            repos: None,
+            agents: None,
+            open_tasks: None,
+            disk: None,
+        }
+    }
+}
+
+/// What an owner is actually taking up, counted from the projections.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Usage {
+    pub repos: u32,
+    pub agents: u32,
+    pub open_tasks: u32,
+    pub disk: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

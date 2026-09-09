@@ -308,3 +308,52 @@ async fn git_takes_a_session_credential_and_refuses_it_after_the_session() {
         "{refused}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_credential_follows_the_repository_it_was_drawn_for() {
+    let forge = boot().await;
+    let app = &forge.app;
+    let (_, session) = open_session(&forge).await;
+    let (status, drawn) = credential(&forge, &session, json!({ "minutes": 30 })).await;
+    assert_eq!(status, StatusCode::OK, "{drawn}");
+    let token = drawn["token"].as_str().unwrap().to_owned();
+    assert_eq!(drawn["scope"]["repo"], "ada/demo");
+
+    // The repository is renamed while the session is live.
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/repos/ada/demo/rename",
+        "ada",
+        Some(json!({ "to": "moved" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // The credential is still the same credential, and still buys what it
+    // bought: the work it was drawn for did not stop being that work.
+    let (status, changes) =
+        api_with_token(app, "GET", "/api/repos/ada/moved/changes", &token, None).await;
+    assert_eq!(status, StatusCode::OK, "{changes}");
+    let (status, opened) = api_with_token(
+        app,
+        "POST",
+        "/api/changes",
+        &token,
+        Some(json!({ "repo": "ada/moved", "target": "main", "title": "Still working" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{opened}");
+    // And still buys nothing anywhere else.
+    api(
+        app,
+        "POST",
+        "/api/repos",
+        "ada",
+        Some(json!({ "name": "elsewhere" })),
+    )
+    .await;
+    let (status, _) =
+        api_with_token(app, "GET", "/api/repos/ada/elsewhere/changes", &token, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "the scope did not widen");
+}

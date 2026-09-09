@@ -10,7 +10,8 @@ Cairn records the causal chain as structured, subscribable data.
 - **Owners** — a repository belongs to a person or an organisation and
   is addressed as `/owner/repo` everywhere; an organisation is a team
   that can own, its members hold what it holds, and names are unique
-  per owner.
+  per owner. An owner has a quota — repositories, agents, open tasks,
+  disk — and a refusal names what they have and what is allowed.
 - **Tasks** — durable statements of intent. A task may allow more than
   one attempt; the attempts arrive as revisions of one change and are
   compared, not merged separately.

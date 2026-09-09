@@ -96,6 +96,18 @@ enum Command {
         /// to wait (429 with Retry-After). 0 turns the allowance off.
         #[arg(long, default_value_t = cairn_server::DEFAULT_WRITES_PER_MINUTE)]
         api_writes_per_minute: u32,
+        /// Repositories one owner may have. 0 for no limit.
+        #[arg(long)]
+        quota_repos: Option<u32>,
+        /// Agents one owner may have. 0 for no limit.
+        #[arg(long)]
+        quota_agents: Option<u32>,
+        /// Open tasks one owner's repositories may hold at once. 0 for no limit.
+        #[arg(long)]
+        quota_open_tasks: Option<u32>,
+        /// Disk one owner's repositories may take, in megabytes. 0 for no limit.
+        #[arg(long)]
+        quota_disk_mb: Option<u64>,
         /// The Ed25519 key that signs merge receipts; generated there when
         /// absent. Beside the database when unset.
         #[arg(long)]
@@ -217,6 +229,27 @@ enum AdminCommand {
         #[arg(long)]
         remove: Option<String>,
     },
+    /// Show or set what one owner may take up here. Without any of the
+    /// limits, it prints what they may have and what they are using; a
+    /// limit given as 0 means no limit at all. Setting one replaces
+    /// this owner's quota entirely.
+    Quota {
+        #[arg(long, default_value = "cairn.db")]
+        db: PathBuf,
+        /// The person or organisation.
+        owner: String,
+        /// Who the change is recorded as: an unscoped admin.
+        #[arg(long = "as")]
+        r#as: Option<String>,
+        #[arg(long)]
+        repos: Option<u32>,
+        #[arg(long)]
+        agents: Option<u32>,
+        #[arg(long)]
+        open_tasks: Option<u32>,
+        #[arg(long)]
+        disk_mb: Option<u64>,
+    },
     /// Give every repository named the old way, without its owner in
     /// front, its owner's name: `demo` becomes `ada/demo`, on the record
     /// and on disk. Run once when upgrading to a forge that expects
@@ -319,12 +352,34 @@ async fn main() -> anyhow::Result<()> {
             workload_issuer,
             workload_audience,
             api_writes_per_minute,
+            quota_repos,
+            quota_agents,
+            quota_open_tasks,
+            quota_disk_mb,
             signing_key_file,
         } => {
             let git_version = cairn_git::preflight().context("checking the git on PATH")?;
             tracing::info!("cairn {}", cairn_core::VERSION);
+            // What an owner may take up here, before anybody's own
+            // quota is consulted. Absent leaves the built-in default
+            // standing; 0 means that particular limit does not exist.
+            let mut quota = cairn_core::Quota::default();
+            let limit = |given: Option<u32>| given.map(|n| (n > 0).then_some(n));
+            if let Some(repos) = limit(quota_repos) {
+                quota.repos = repos;
+            }
+            if let Some(agents) = limit(quota_agents) {
+                quota.agents = agents;
+            }
+            if let Some(tasks) = limit(quota_open_tasks) {
+                quota.open_tasks = tasks;
+            }
+            if let Some(disk) = quota_disk_mb.map(|mb| (mb > 0).then(|| mb * 1024 * 1024)) {
+                quota.disk = disk;
+            }
             let store = Store::open(&db)
-                .with_context(|| format!("opening forge database at {}", db.display()))?;
+                .with_context(|| format!("opening forge database at {}", db.display()))?
+                .with_default_quota(quota);
             // A repository without its owner in its name predates owners
             // and has no address on this forge; adopting is one command,
             // and refusing to serve is better than serving it nowhere.
@@ -528,6 +583,73 @@ async fn main() -> anyhow::Result<()> {
                     .with_context(|| format!("{principal:?} is not a valid principal slug"))?;
                 store.grant_bootstrap_admin(&id)?;
                 println!("{principal} now holds an unscoped admin grant");
+            }
+            AdminCommand::Quota {
+                db,
+                owner,
+                r#as,
+                repos,
+                agents,
+                open_tasks,
+                disk_mb,
+            } => {
+                let mut store = Store::open(&db)
+                    .with_context(|| format!("opening forge database at {}", db.display()))?;
+                let owner_id =
+                    PrincipalId::new(&owner).context("the owner must be a valid slug")?;
+                let asked = [
+                    repos.is_some(),
+                    agents.is_some(),
+                    open_tasks.is_some(),
+                    disk_mb.is_some(),
+                ];
+                if asked.iter().any(|given| *given) {
+                    let actor = PrincipalId::new(r#as.as_deref().unwrap_or(""))
+                        .context("--as <admin> says who this is recorded as")?;
+                    let mut quota = store.quota(&owner_id)?;
+                    let limit = |given: Option<u32>| given.map(|n| (n > 0).then_some(n));
+                    if let Some(value) = limit(repos) {
+                        quota.repos = value;
+                    }
+                    if let Some(value) = limit(agents) {
+                        quota.agents = value;
+                    }
+                    if let Some(value) = limit(open_tasks) {
+                        quota.open_tasks = value;
+                    }
+                    if let Some(value) = disk_mb.map(|mb| (mb > 0).then(|| mb * 1024 * 1024)) {
+                        quota.disk = value;
+                    }
+                    store.set_quota(&actor, &owner_id, &quota)?;
+                }
+                let quota = store.quota(&owner_id)?;
+                let usage = store.usage(&owner_id)?;
+                let say = |what: &str, used: String, limit: Option<String>| {
+                    println!(
+                        "{what:<12} {used:>10} of {}",
+                        limit.unwrap_or_else(|| "no limit".to_owned())
+                    );
+                };
+                say(
+                    "repositories",
+                    usage.repos.to_string(),
+                    quota.repos.map(|n| n.to_string()),
+                );
+                say(
+                    "agents",
+                    usage.agents.to_string(),
+                    quota.agents.map(|n| n.to_string()),
+                );
+                say(
+                    "open tasks",
+                    usage.open_tasks.to_string(),
+                    quota.open_tasks.map(|n| n.to_string()),
+                );
+                say(
+                    "disk",
+                    format!("{} MB", usage.disk / (1024 * 1024)),
+                    quota.disk.map(|b| format!("{} MB", b / (1024 * 1024))),
+                );
             }
             AdminCommand::AdoptOwners { db, repos, r#as } => {
                 let mut store = Store::open(&db)

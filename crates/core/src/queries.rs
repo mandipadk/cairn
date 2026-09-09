@@ -44,7 +44,7 @@ pub(crate) mod raw {
 
     pub fn principal(conn: &Connection, id: &str) -> CoreResult<Option<Principal>> {
         conn.prepare_cached(
-            "SELECT id, kind, display, model, harness, active FROM principals WHERE id = ?",
+            "SELECT id, kind, display, model, harness, active, owner FROM principals WHERE id = ?",
         )?
         .query_row(params![id], |row| {
             Ok((
@@ -54,10 +54,11 @@ pub(crate) mod raw {
                 row.get::<_, Option<String>>(3)?,
                 row.get::<_, Option<String>>(4)?,
                 row.get::<_, i64>(5)?,
+                row.get::<_, Option<String>>(6)?,
             ))
         })
         .optional()?
-        .map(|(id, kind, display, model, harness, active)| {
+        .map(|(id, kind, display, model, harness, active, owner)| {
             Ok(Principal {
                 active: active != 0,
                 kind: parsed(&format!("principal {id}"), &kind, PrincipalKind::parse)?,
@@ -65,6 +66,7 @@ pub(crate) mod raw {
                 display,
                 model,
                 harness,
+                owner: owner.map(PrincipalId),
             })
         })
         .transpose()
@@ -1371,6 +1373,56 @@ pub(crate) mod raw {
             .collect()
     }
 
+    /// The quota set for this owner, if the operator set one.
+    pub fn quota(conn: &Connection, owner: &str) -> CoreResult<Option<crate::Quota>> {
+        let stored: Option<String> = conn
+            .prepare_cached("SELECT quota FROM quotas WHERE owner = ?")?
+            .query_row(params![owner], |row| row.get(0))
+            .optional()?;
+        stored
+            .map(|json| {
+                serde_json::from_str(&json).map_err(|err| CoreError::Corrupt {
+                    at: format!("quotas/{owner}"),
+                    reason: err.to_string(),
+                })
+            })
+            .transpose()
+    }
+
+    /// What this owner is taking up, disk aside: disk is measured, not
+    /// counted, and comes from [`repo_sizes`].
+    pub fn usage(conn: &Connection, owner: &str) -> CoreResult<crate::Usage> {
+        let repos: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM repos WHERE owner = ?",
+            params![owner],
+            |row| row.get(0),
+        )?;
+        let agents: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM principals WHERE kind = 'agent' AND active = 1 AND owner = ?",
+            params![owner],
+            |row| row.get(0),
+        )?;
+        let open_tasks: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM tasks
+               WHERE state = 'open'
+                 AND repo IN (SELECT name FROM repos WHERE owner = ?)",
+            params![owner],
+            |row| row.get(0),
+        )?;
+        let disk: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(bytes), 0) FROM repo_sizes
+               WHERE repo IN (SELECT name FROM repos WHERE owner = ?)",
+            params![owner],
+            |row| row.get(0),
+        )?;
+        Ok(crate::Usage {
+            repos: repos.max(0) as u32,
+            agents: agents.max(0) as u32,
+            open_tasks: open_tasks.max(0) as u32,
+            disk: disk.max(0) as u64,
+        })
+    }
+
     pub fn principal_count(conn: &Connection) -> CoreResult<i64> {
         Ok(conn.query_row("SELECT COUNT(*) FROM principals", [], |r| r.get(0))?)
     }
@@ -1402,6 +1454,37 @@ impl Store {
     /// What a repository once called `old` is called now, if it was renamed.
     pub fn current_name_for(&self, old: &str) -> CoreResult<Option<String>> {
         raw::current_name_for(&self.conn, old)
+    }
+
+    /// What this owner may take up: their own quota if the operator set
+    /// one, this forge's default otherwise.
+    pub fn quota(&self, owner: &PrincipalId) -> CoreResult<crate::Quota> {
+        Ok(raw::quota(&self.conn, owner.as_str())?.unwrap_or_else(|| self.default_quota.clone()))
+    }
+
+    /// This forge's quota for an owner nobody has said anything about.
+    pub fn default_quota(&self) -> crate::Quota {
+        self.default_quota.clone()
+    }
+
+    /// What this owner is taking up now.
+    pub fn usage(&self, owner: &PrincipalId) -> CoreResult<crate::Usage> {
+        raw::usage(&self.conn, owner.as_str())
+    }
+
+    /// Repositories nobody has measured yet: everything on a forge that
+    /// has just upgraded to a binary that counts disk, and nothing at
+    /// all once each has been looked at once.
+    pub fn unmeasured_repos(&self) -> CoreResult<Vec<String>> {
+        Ok(self
+            .conn
+            .prepare(
+                "SELECT name FROM repos
+                   WHERE name NOT IN (SELECT repo FROM repo_sizes)
+                   ORDER BY name",
+            )?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?)
     }
 
     pub fn is_team_member(&self, team: &PrincipalId, member: &PrincipalId) -> CoreResult<bool> {

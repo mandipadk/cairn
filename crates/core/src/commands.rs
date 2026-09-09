@@ -18,8 +18,9 @@ use crate::queries::raw;
 use crate::store::{Store, append};
 use crate::types::{
     Anchor, BrowserSession, Capability, Change, ChangeSpec, ChangeState, ClaimSpec, Contact,
-    Disposition, Mirror, ObjectFormat, PasskeyRecord, Policy, Principal, PrincipalKind, Replay,
-    Resolution, ReviewDomain, Scope, SessionState, TaskState, ThreadKind, Visibility,
+    Disposition, Mirror, ObjectFormat, PasskeyRecord, Policy, Principal, PrincipalKind, Quota,
+    Replay, Resolution, ReviewDomain, Scope, SessionState, TaskState, ThreadKind, Usage,
+    Visibility,
 };
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
@@ -282,31 +283,81 @@ fn valid_commit_oid(oid: &str) -> bool {
 /// label an administrator assigns. An agent needs an admin grant,
 /// because an agent creating repositories on its own initiative is not
 /// something to allow by default.
-/// Whether `actor` may act as `owner` when making or taking a repository:
-/// themselves, an organisation they belong to, or anyone at all for
-/// whoever runs the forge.
+/// Whether `actor` may act as `owner` when making or taking something
+/// an owner holds: themselves, an organisation they belong to, or
+/// anyone at all for whoever runs the forge.
 fn may_act_for(
     tx: &Transaction,
     acting: Option<&Scope>,
     actor: &PrincipalId,
     owner: &PrincipalId,
 ) -> CoreResult<()> {
+    let record = raw::principal(tx, owner.as_str())?
+        .ok_or_else(|| CoreError::NotFound(format!("principal {owner}")))?;
+    // Checked before the shortcut below, so an agent cannot be an owner
+    // by being the one asking.
+    require(record.kind != PrincipalKind::Agent, || {
+        format!("{owner} is an agent; a person or an organisation owns things here")
+    })?;
     if owner == actor {
         return Ok(());
     }
-    let record = raw::principal(tx, owner.as_str())?
-        .ok_or_else(|| CoreError::NotFound(format!("principal {owner}")))?;
     match record.kind {
         PrincipalKind::Team if raw::is_team_member(tx, owner.as_str(), actor.as_str())? => Ok(()),
-        PrincipalKind::Agent => Err(CoreError::Invalid(format!(
-            "{owner} is an agent; a person or an organisation owns a repository"
-        ))),
-        _ => authorize(tx, acting, actor, Capability::Admin, None).map(|_| ()).map_err(|_| {
-            CoreError::Forbidden(format!(
-                "{actor} may not make repositories for {owner}: not a member, and not running the forge"
-            ))
-        }),
+        _ => authorize(tx, acting, actor, Capability::Admin, None)
+            .map(|_| ())
+            .map_err(|_| {
+                CoreError::Forbidden(format!(
+                    "{actor} may not act for {owner}: not a member of it, and not running the forge"
+                ))
+            }),
     }
+}
+
+/// Refuse when one more of `what` would put `owner` past what this
+/// forge allows them. The refusal names both numbers, because "you
+/// cannot" without "you have 50 and the limit is 50" leaves the reader
+/// guessing whether to delete something or ask for more.
+fn within_quota(
+    tx: &Transaction,
+    default: &Quota,
+    owner: &PrincipalId,
+    what: &str,
+    limit: impl Fn(&Quota) -> Option<u32>,
+    have: impl Fn(&Usage) -> u32,
+) -> CoreResult<()> {
+    let quota = raw::quota(tx, owner.as_str())?.unwrap_or_else(|| default.clone());
+    let Some(limit) = limit(&quota) else {
+        return Ok(());
+    };
+    let have = have(&raw::usage(tx, owner.as_str())?);
+    if have < limit {
+        return Ok(());
+    }
+    Err(CoreError::OverQuota(format!(
+        "{owner} has {have} {what}, and this forge allows {limit}"
+    )))
+}
+
+/// What a principal is, at the moment it is registered. A struct
+/// because the alternative is an eight-argument function nobody can
+/// read at a call site.
+struct NewPrincipal<'a> {
+    owner: Option<&'a PrincipalId>,
+    kind: PrincipalKind,
+    display: &'a str,
+    model: Option<&'a str>,
+    harness: Option<&'a str>,
+}
+
+/// Whether `actor` holds this agent: they own it, or they belong to the
+/// organisation that does. An agent its owner cannot give a token, grant
+/// a capability or retire is an agent they do not really have.
+fn holds_agent(tx: &Transaction, actor: &PrincipalId, subject: &Principal) -> CoreResult<bool> {
+    let Some(owner) = subject.owner.as_ref() else {
+        return Ok(false);
+    };
+    Ok(subject.kind == PrincipalKind::Agent && raw::owns(tx, actor.as_str(), owner.as_str())?)
 }
 
 fn may_create_repo(tx: &Transaction, actor: &PrincipalId) -> CoreResult<()> {
@@ -353,12 +404,22 @@ impl Store {
         active: bool,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
+        // Authority before existence, so somebody with none cannot use
+        // this to find out which names are taken. Retiring an agent you
+        // hold is yours to do, and is how the room it takes in your
+        // quota comes back.
+        let found = raw::principal(&tx, principal.as_str())?;
+        let holds = match &found {
+            Some(subject) => holds_agent(&tx, actor, subject)?,
+            None => false,
+        };
+        if !holds {
+            authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
+        }
         require(actor != principal, || {
             "you cannot deactivate yourself; ask whoever else runs the forge".into()
         })?;
-        let subject = raw::principal(&tx, principal.as_str())?
-            .ok_or_else(|| CoreError::NotFound(format!("principal {principal}")))?;
+        let subject = found.ok_or_else(|| CoreError::NotFound(format!("principal {principal}")))?;
         if subject.active == active {
             return Err(CoreError::Conflict(format!(
                 "{principal} is already {}",
@@ -393,6 +454,62 @@ impl Store {
         model: Option<&str>,
         harness: Option<&str>,
     ) -> CoreResult<Envelope> {
+        self.register(
+            actor,
+            id,
+            NewPrincipal {
+                owner: None,
+                kind,
+                display,
+                model,
+                harness,
+            },
+        )
+    }
+
+    /// Register an agent that belongs to `owner`.
+    ///
+    /// An agent is somebody's: the person who registered it, or an
+    /// organisation they belong to, and it counts against that owner's
+    /// quota. So a person may make their own agents without running the
+    /// forge — the quota is what makes that safe — while registering a
+    /// person or an organisation stays the operator's, because a name
+    /// in the forge's namespace is not one owner's to hand out.
+    pub fn register_agent_for(
+        &mut self,
+        actor: &PrincipalId,
+        owner: Option<&PrincipalId>,
+        id: &PrincipalId,
+        display: &str,
+        model: Option<&str>,
+        harness: Option<&str>,
+    ) -> CoreResult<Envelope> {
+        self.register(
+            actor,
+            id,
+            NewPrincipal {
+                owner,
+                kind: PrincipalKind::Agent,
+                display,
+                model,
+                harness,
+            },
+        )
+    }
+
+    fn register(
+        &mut self,
+        actor: &PrincipalId,
+        id: &PrincipalId,
+        new: NewPrincipal<'_>,
+    ) -> CoreResult<Envelope> {
+        let NewPrincipal {
+            owner,
+            kind,
+            display,
+            model,
+            harness,
+        } = new;
         let tx = self.conn.transaction()?;
         require(!crate::id::RESERVED_IDS.contains(&id.as_str()), || {
             format!("{id} is reserved: the pages live at that address")
@@ -416,8 +533,24 @@ impl Store {
             )));
         }
         let bootstrap = raw::principal_count(&tx)? == 0 && actor == id;
+        let owner = owner.unwrap_or(actor);
         if !bootstrap {
-            authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
+            if kind == PrincipalKind::Agent {
+                may_act_for(&tx, self.acting.as_ref(), actor, owner)?;
+                within_quota(
+                    &tx,
+                    &self.default_quota,
+                    owner,
+                    "agents",
+                    |q| q.agents,
+                    |u| u.agents,
+                )?;
+            } else {
+                require(owner == actor, || {
+                    "a person and an organisation belong to themselves".to_owned()
+                })?;
+                authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
+            }
         }
         let env = append(
             &tx,
@@ -429,6 +562,7 @@ impl Store {
                 display: display.to_owned(),
                 model: model.map(str::to_owned),
                 harness: harness.map(str::to_owned),
+                owner: (kind == PrincipalKind::Agent && owner != actor).then(|| owner.clone()),
             },
         )?;
         tx.commit()?;
@@ -1354,7 +1488,15 @@ impl Store {
         may_create_repo(&tx, actor)?;
         let owner = owner.unwrap_or(actor);
         may_act_for(&tx, self.acting.as_ref(), actor, owner)?;
-        new_repo_is_allowed(&tx, &format!("{owner}/{short}"), default_branch)
+        new_repo_is_allowed(&tx, &format!("{owner}/{short}"), default_branch)?;
+        within_quota(
+            &tx,
+            &self.default_quota,
+            owner,
+            "repositories",
+            |q| q.repos,
+            |u| u.repos,
+        )
         // The transaction is dropped, so nothing here is kept.
     }
 
@@ -1375,6 +1517,14 @@ impl Store {
         may_act_for(&tx, self.acting.as_ref(), actor, owner)?;
         let name = format!("{owner}/{short}");
         new_repo_is_allowed(&tx, &name, default_branch)?;
+        within_quota(
+            &tx,
+            &self.default_quota,
+            owner,
+            "repositories",
+            |q| q.repos,
+            |u| u.repos,
+        )?;
         let env = append(
             &tx,
             actor,
@@ -2387,6 +2537,18 @@ impl Store {
             raw::task(&tx, parent.as_str())?
                 .ok_or_else(|| CoreError::NotFound(format!("task {parent}")))?;
         }
+        // Open work in a repository is that repository owner's; a task
+        // belonging to the forge itself is nobody's to be charged for.
+        if let Some(record) = repo.and_then(|repo| raw::repo(&tx, repo).ok().flatten()) {
+            within_quota(
+                &tx,
+                &self.default_quota,
+                &record.owner,
+                "open tasks",
+                |q| q.open_tasks,
+                |u| u.open_tasks,
+            )?;
+        }
         let task = TaskId::generate();
         let env = append(
             &tx,
@@ -2522,6 +2684,53 @@ impl Store {
         )?;
         tx.commit()?;
         Ok((session, env))
+    }
+
+    /// Say what one owner may take up here, replacing whatever applied
+    /// to them before. Whoever runs the forge decides; this is the one
+    /// knob a bigger plan turns.
+    pub fn set_quota(
+        &mut self,
+        actor: &PrincipalId,
+        owner: &PrincipalId,
+        quota: &Quota,
+    ) -> CoreResult<Envelope> {
+        let tx = self.conn.transaction()?;
+        authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
+        let record = raw::principal(&tx, owner.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("principal {owner}")))?;
+        require(record.kind != PrincipalKind::Agent, || {
+            format!("{owner} is an agent; a quota belongs to a person or an organisation")
+        })?;
+        let env = append(
+            &tx,
+            actor,
+            self.acting.as_ref().and_then(|s| s.session.as_ref()),
+            Event::QuotaSet {
+                owner: owner.clone(),
+                quota: quota.clone(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(env)
+    }
+
+    /// Remember how much disk a repository takes. A measurement, not an
+    /// event: git changes the answer by packing objects, with nothing
+    /// happening in the forge to record.
+    pub fn record_repo_size(&mut self, repo: &str, bytes: u64) -> CoreResult<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO repo_sizes (repo, bytes, measured) VALUES (?, ?, ?)",
+            rusqlite::params![repo, bytes as i64, jiff::Timestamp::now().to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// The forge's quota for owners nobody has set one for. Configured
+    /// at startup, so it is set on the handle rather than logged.
+    pub fn with_default_quota(mut self, quota: Quota) -> Self {
+        self.default_quota = quota;
+        self
     }
 
     /// Act under a session credential's scope for the calls that follow
@@ -3726,8 +3935,10 @@ impl Store {
         })?;
         // A token is the principal's own credential. Minting one for
         // somebody else is running the forge, not being a person; the
-        // old rule let any signed-in human mint an admin's token.
-        if actor != principal {
+        // old rule let any signed-in human mint an admin's token. The
+        // exception is an agent you hold: it is yours, and it cannot
+        // work without one.
+        if actor != principal && !holds_agent(&tx, actor, &subject)? {
             authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
         }
         let token = TokenId::generate();
@@ -3755,7 +3966,11 @@ impl Store {
         let current = raw::token(&tx, token.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("token {token}")))?;
         if current.principal != *actor {
-            authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
+            let subject = raw::principal(&tx, current.principal.as_str())?
+                .ok_or_else(|| CoreError::NotFound(format!("principal {}", current.principal)))?;
+            if !holds_agent(&tx, actor, &subject)? {
+                authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
+            }
         }
         if current.revoked {
             return Err(CoreError::Conflict(format!(

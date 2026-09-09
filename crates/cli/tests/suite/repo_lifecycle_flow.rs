@@ -144,6 +144,60 @@ async fn a_rename_moves_everything_and_the_old_name_is_gone() {
         forge.work.join("anon/.git").is_dir(),
         "the old git address still clones"
     );
+
+    // A name freed by a rename can be taken again, and then it is a
+    // live address rather than an old one — including for the
+    // credential challenge every push begins with, which must not be
+    // answered with a redirect somewhere else.
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/repos",
+        "ada",
+        Some(json!({ "name": "demo" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, location) = get_redirect(app, "/ada/demo", "").await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{location}");
+    assert!(
+        location.starts_with("/login"),
+        "not a redirect to the other one: {location}"
+    );
+    git(
+        &forge.work,
+        &[
+            "clone",
+            "-q",
+            &format!("http://ada:{}@{}/git/ada/demo", forge.ada_token, forge.addr),
+            "retaken",
+        ],
+    );
+    let retaken = forge.work.join("retaken");
+    commit_file(
+        &retaken,
+        "new.txt",
+        "new\n",
+        "New here\n\nChange-Id: Iretaken",
+    );
+    git(
+        &retaken,
+        &[
+            "-c",
+            "credential.helper=",
+            "push",
+            "-q",
+            &format!("http://ada:{}@{}/git/ada/demo", forge.ada_token, forge.addr),
+            "HEAD:refs/for/main",
+        ],
+    );
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
+    assert_eq!(
+        changes.as_array().map(Vec::len),
+        Some(1),
+        "the push reached the repository at that address: {changes}"
+    );
+
     let (status, change) = api(app, "GET", &format!("/api/changes/{id}"), "ada", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(change["repo"], "ada/shown");

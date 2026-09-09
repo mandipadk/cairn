@@ -223,11 +223,14 @@ async fn private_repositories_do_not_leak_through_side_doors() {
             .all(|g| g["repo"].is_null()),
         "{grants}"
     );
-    // The agents page is running the forge.
+    // The agents page is everybody's, and shows each of them only what
+    // they hold: bee has no agents, and learns nothing of ada's.
     let (_, bee_cookie) = sign_in_as(&forge, "bee").await;
-    assert_eq!(
-        get_with_cookie(app, "/agents", &bee_cookie).await,
-        StatusCode::NOT_FOUND
+    let (status, page) = page_with_cookie(app, "/agents", &bee_cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !page.contains("scout") && !page.contains("ada/demo"),
+        "somebody else's agents and repositories are not on it: {page}"
     );
 }
 

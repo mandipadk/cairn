@@ -343,6 +343,7 @@ pub async fn receive_pack(
         if reconcile_tag_refs(&app, &name).await {
             mirror_default_branch(&app, &name).await;
         }
+        remember_size(&app, &name).await;
         Ok((
             [(
                 header::CONTENT_TYPE,
@@ -499,6 +500,24 @@ async fn mirror_default_branch(app: &AppState, repo: &str) {
     crate::queue::mirror_branch(app, repo, &record.default_branch, &tip).await;
 }
 
+/// Measure what a repository takes on disk and remember it, so an
+/// owner's page and their disk quota have a number to work from.
+///
+/// After the objects arrive rather than before: what a push will cost
+/// is not knowable until it is unpacked, so the forge charges for what
+/// is there and refuses the *next* push from an owner already over.
+pub(crate) async fn remember_size(app: &AppState, repo: &str) {
+    let Some(git) = app.git() else { return };
+    match git.store.size(repo).await {
+        Ok(bytes) => {
+            if let Err(err) = app.with_store(|s| s.record_repo_size(repo, bytes)) {
+                tracing::warn!(error = %err, repo, "could not remember a repository's size");
+            }
+        }
+        Err(err) => tracing::warn!(error = %err, repo, "could not measure a repository"),
+    }
+}
+
 /// Stacks larger than this are almost certainly a mistaken push of
 /// history; refuse with advice rather than mint hundreds of changes.
 const MAX_STACK: usize = 64;
@@ -530,6 +549,32 @@ pub async fn record_push(
             ),
         ));
     }
+    // Room to grow, measured at the last push rather than this one:
+    // what an unpacked push costs is not knowable in advance, so an
+    // owner already over their disk goes no further.
+    app.with_store(|s| {
+        let Some(record) = s.repo(&body.repo)? else {
+            return Ok(());
+        };
+        let quota = s.quota(&record.owner)?;
+        let Some(limit) = quota.disk else {
+            return Ok(());
+        };
+        let used = s.usage(&record.owner)?.disk;
+        if used < limit {
+            return Ok(());
+        }
+        Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "over_quota",
+            format!(
+                "{} is using {} of git storage, and this forge allows {}",
+                record.owner,
+                crate::in_bytes(used),
+                crate::in_bytes(limit)
+            ),
+        ))
+    })?;
     // Stack identity across amends and rebases requires per-commit keys.
     if body.commits.len() > 1 && body.commits.iter().any(|c| c.change_id.is_none()) {
         return Err(ApiError::new(

@@ -154,10 +154,11 @@ Reading authenticates on the token alone — the username in Basic auth is
 decoration — while a push still requires the two to agree, because a
 mismatch there is usually somebody's mistake worth catching.
 
-Not defended yet: rate limiting on reads; quotas on repository or push
-size; and a principal that holds legitimate capabilities and abuses them.
-Grants are the tool for that, and they are only as narrow as whoever
-issues them.
+What an owner may take up is bounded by their quota, below; the size of
+one push and one file is bounded too. Not defended yet: rate limiting on
+reads, and a principal that holds legitimate capabilities and abuses
+them. Grants are the tool for that, and they are only as narrow as
+whoever issues them.
 
 ## Send mail
 
@@ -320,6 +321,18 @@ cairn receipt verify receipt.json --key 3f9a1c…        # the fingerprint /api/
 git -C clone log --show-notes=cairn -1                  # the same document, on the commit
 ```
 
+### Whose agent
+
+An agent belongs to the person or organisation it was registered under,
+and counts against that owner's agents. Anybody who can sign in makes
+their own from the Agents page, or with
+`POST /api/principals {"id": ..., "kind": "agent", "owner": ...}` where
+`owner` is themselves or an organisation they belong to. Their owner
+mints and revokes its tokens, grants it capabilities on repositories
+they hold, and retires it — which is how the room it took comes back.
+Registering a person or an organisation stays the operator's: a name in
+the forge's namespace is not one owner's to hand out.
+
 ### Agents' credentials
 
 An agent's session can draw a short-lived credential:
@@ -333,6 +346,35 @@ policy carries `"agents_act_in_sessions": true` refuses agents' standing
 tokens for push, review and merge; `task` and `verify` remain open, so an
 agent can still claim a task and open a session, and a runner is
 unaffected.
+
+### What an owner may take up
+
+Every owner — a person or an organisation — has a quota: how many
+repositories they may have, how many agents, how many open tasks across
+their repositories, and how much disk those repositories take. A refusal
+names what they have and what the limit is, so the reader knows whether
+to delete something or ask for more, and arrives as `409` with
+`"kind": "over_quota"` on the API.
+
+The forge's own numbers are the defaults: 50 repositories, 25 agents,
+200 open tasks and 5 GiB of disk. Change them for the whole forge with
+`--quota-repos`, `--quota-agents`, `--quota-open-tasks` and
+`--quota-disk-mb`, where `0` means that limit does not exist. Set them
+for one owner with `cairn admin quota <owner> --as <admin> --repos 200`,
+which prints what they may have and what they are using; with no limits
+given it just prints. Over the API it is
+`GET /api/principals/{id}/quota`, readable by that owner and whoever
+runs the forge, and `POST` of a quota object to the same address, which
+replaces that owner's quota entirely — a field left out is a thing they
+have no limit on. An owner sees their own on their page.
+
+Disk is measured, not tracked: git changes the answer by packing
+objects, with nothing happening in the forge to record it. Each
+repository is measured after a push and after a landing, and a forge
+that has never measured any looks once at startup, so an upgrade does
+not report everybody at zero. What a push will cost is not knowable
+until it is unpacked — so a push from an owner already over their disk
+is refused, rather than the one that crossed the line.
 
 ### Attention budget
 
@@ -554,6 +596,9 @@ Offline administration, against the database file (root authority):
   grant admin.
 - `cairn admin waitlist [--remove <email>]` — list the waitlist, or
   remove someone who asked to be forgotten.
+- `cairn admin quota <owner> [--as <admin>] [--repos n] [--agents n]
+  [--open-tasks n] [--disk-mb n]` — what one owner may take up and what
+  they are using; with no limits given, it only prints.
 - `cairn admin reports [--dismiss <id>]` — what people reported broke,
   newest first; or dismiss one.
 - `cairn admin mail-check` — reach the relay and authenticate, sending
@@ -583,6 +628,8 @@ Other commands: `cairn serve`, `cairn mcp --server <url> --token <t>`,
   `--oidc-label`, `--oidc-link-by-email`; `--workload-issuer`
   (repeatable), `--workload-audience`.
 - `--api-writes-per-minute <n>` (default 600, 0 for none).
+- `--quota-repos`, `--quota-agents`, `--quota-open-tasks`,
+  `--quota-disk-mb` (defaults 50, 25, 200 and 5120; 0 for no limit).
 - `--signing-key-file <path>` (default `signing.key` beside the database).
 
 Files beside the database: `signing.key` (owner-only). Under `--repos`:

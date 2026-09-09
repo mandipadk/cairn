@@ -35,6 +35,25 @@ pub use state::{AppState, DEFAULT_WRITES_PER_MINUTE};
 use axum::Router;
 use axum::routing::{get, post};
 
+/// A size a person reads at a glance: three significant figures and a
+/// binary unit, since that is what disk is sold and measured in.
+pub(crate) fn in_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit + 1 < UNITS.len() {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else if size < 10.0 {
+        format!("{size:.1} {}", UNITS[unit])
+    } else {
+        format!("{size:.0} {}", UNITS[unit])
+    }
+}
+
 /// Pack payloads dwarf JSON bodies; axum's 2 MB default would reject
 /// any real push.
 const GIT_BODY_LIMIT: usize = 256 * 1024 * 1024;
@@ -49,6 +68,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/principals", post(routes::register_principal))
         .route("/api/principals/{id}", get(routes::get_principal))
         .route("/api/principals/{id}/record", get(routes::principal_record))
+        .route(
+            "/api/principals/{id}/quota",
+            get(routes::get_quota).post(routes::set_quota),
+        )
         .route("/api/principals/{id}/password", post(routes::set_password))
         .route(
             "/api/principals/{id}/state",

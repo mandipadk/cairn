@@ -383,6 +383,20 @@ impl GitStore {
     }
 
     /// Whether a repository's directory exists where its name says.
+    /// How much disk this repository takes, in bytes: every file under
+    /// its directory added up.
+    ///
+    /// Measured rather than tracked, because git changes the answer on
+    /// its own — packing objects makes a repository smaller with nothing
+    /// happening in the forge to record. The walk is blocking work, so
+    /// it runs off the async threads.
+    pub async fn size(&self, name: &str) -> GitResult<u64> {
+        let dir = self.existing_repo_path(name)?;
+        tokio::task::spawn_blocking(move || directory_size(&dir))
+            .await
+            .map_err(|err| GitError::Io(std::io::Error::other(err)))?
+    }
+
     pub fn has_repo_dir(&self, name: &str) -> bool {
         self.repo_path(name).map(|p| p.is_dir()).unwrap_or(false)
     }
@@ -1015,6 +1029,27 @@ impl GitStore {
         .await?;
         Ok(())
     }
+}
+
+/// Every file under `dir`, added up. Symlinks are counted as the links
+/// they are and never followed, so a link into somebody else's tree
+/// cannot make a repository look enormous or walk out of its own
+/// directory.
+fn directory_size(dir: &Path) -> GitResult<u64> {
+    let mut total = 0u64;
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        for entry in std::fs::read_dir(&path)? {
+            let entry = entry?;
+            let meta = entry.metadata()?;
+            if meta.is_dir() {
+                pending.push(entry.path());
+            } else {
+                total = total.saturating_add(meta.len());
+            }
+        }
+    }
+    Ok(total)
 }
 
 #[cfg(test)]

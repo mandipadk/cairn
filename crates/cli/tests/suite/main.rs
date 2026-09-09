@@ -41,6 +41,7 @@ mod passkeys_flow;
 mod password_flow;
 mod public_flow;
 mod quorum_flow;
+mod quotas_flow;
 mod read_boundary_flow;
 mod receipt_flow;
 mod recovery_flow;

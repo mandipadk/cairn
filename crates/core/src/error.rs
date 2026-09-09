@@ -25,6 +25,13 @@ pub enum CoreError {
     #[error("forbidden: {0}")]
     Forbidden(String),
 
+    /// Not a question of authority: this owner is allowed to do it and
+    /// has used up what the forge allows them. The message names what
+    /// they have and what the limit is, so the reader knows whether to
+    /// delete something or ask for more.
+    #[error("over quota: {0}")]
+    OverQuota(String),
+
     #[error(transparent)]
     Db(#[from] rusqlite::Error),
 

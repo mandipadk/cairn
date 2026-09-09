@@ -318,10 +318,10 @@ fn sidebar(chrome: &Chrome, signed: bool, current: Option<&str>) -> Markup {
                     span { "Forge log" } span class="n" {}
                 }
             }
+            a class={ @if current == Some("agents") { "on" } @else { "" } } href="/agents" {
+                span { "Agents" } span class="n" {}
+            }
             @if chrome.admin {
-                a class={ @if current == Some("agents") { "on" } @else { "" } } href="/agents" {
-                    span { "Agents" } span class="n" {}
-                }
                 a class={ @if current == Some("people") { "on" } @else { "" } } href="/people" {
                     span { "People" } span class="n" {}
                 }
@@ -1991,6 +1991,22 @@ pub fn teams(
 /// An owner's page: who they are, and every repository of theirs the
 /// reader may see. A person or an organisation; for an organisation,
 /// its members too.
+/// One line of "what you are using, out of what you may".
+fn allowance(what: &str, used: String, limit: Option<String>) -> Markup {
+    html! {
+        div class="trow" {
+            span class="fname" { (what) }
+            span class="last sec2" { (used) }
+            span class="sec3 r" {
+                @match limit {
+                    Some(limit) => { "of " (limit) }
+                    None => { "no limit" }
+                }
+            }
+        }
+    }
+}
+
 pub fn owner(
     theme: Theme,
     who: Reading<'_>,
@@ -1998,6 +2014,10 @@ pub fn owner(
     repos: &[cairn_core::Repo],
     members: &[cairn_core::PrincipalId],
     may_create: bool,
+    // What this owner is taking up and what they may, shown only to
+    // them and to whoever runs the forge: how full somebody's account
+    // is is their business.
+    allowances: Option<(cairn_core::Usage, cairn_core::Quota)>,
 ) -> Markup {
     let organisation = owner.kind == cairn_core::PrincipalKind::Team;
     layout_reading(
@@ -2037,6 +2057,15 @@ pub fn owner(
                                 @if repo.archived { " · archived" }
                             }
                         }
+                    }
+                }
+                @if let Some((usage, quota)) = allowances {
+                    div class="sechead" { b { "Allowance" } span {} }
+                    div class="ftable" {
+                        (allowance("Repositories", usage.repos.to_string(), quota.repos.map(|n| n.to_string())))
+                        (allowance("Disk", crate::in_bytes(usage.disk), quota.disk.map(crate::in_bytes)))
+                        (allowance("Agents", usage.agents.to_string(), quota.agents.map(|n| n.to_string())))
+                        (allowance("Open tasks", usage.open_tasks.to_string(), quota.open_tasks.map(|n| n.to_string())))
                     }
                 }
                 @if organisation {
@@ -2272,6 +2301,9 @@ pub fn agents(
     viewer: &Viewer,
     agents: &[super::AgentRow],
     repos: &[String],
+    // Who a new agent may belong to: the viewer, and every organisation
+    // they are in.
+    owners: &[String],
     fresh: Option<&str>,
     error: Option<&str>,
 ) -> Markup {
@@ -2300,6 +2332,9 @@ pub fn agents(
                         span class="strong" { (row.principal.id.as_str()) }
                         span class="sec3" { (row.principal.display) }
                         span class="sec3" { (row.principal.model.as_deref().unwrap_or("")) }
+                        span class="sec3" {
+                            @if let Some(owner) = &row.principal.owner { (owner.as_str()) }
+                        }
                         span class="sec3" { (record_words(&row.record)) }
                     }
                     @for grant in row.grants.iter().filter(|g| !g.revoked) {
@@ -2360,9 +2395,18 @@ pub fn agents(
                     input id="model" name="model" type="text" autocomplete="off"
                           placeholder="claude-fable-5";
                 }
+                @if owners.len() > 1 {
+                    div {
+                        label for="owner" { "Belongs to" }
+                        select id="owner" name="owner" {
+                            @for owner in owners { option value=(owner) { (owner) } }
+                        }
+                    }
+                }
                 p class="hint" {
-                    "A token is minted at the same time, because an agent without one \
-                     cannot do anything. It grants no capability by itself."
+                    "The agent is yours, and counts towards what you may have. A token is \
+                     minted at the same time, because an agent without one cannot do \
+                     anything. It grants no capability by itself."
                 }
                 button class="btn" type="submit" { "Add" }
             }
@@ -3868,6 +3912,12 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
             "dot idle",
             html! {
                 b { (actor) } " registered " (principal.as_str())
+            },
+        ),
+        Event::QuotaSet { owner, .. } => (
+            "dot idle",
+            html! {
+                b { (actor) } " set what " (owner.as_str()) " may take up"
             },
         ),
         Event::TaskStateChanged { state, .. } => (

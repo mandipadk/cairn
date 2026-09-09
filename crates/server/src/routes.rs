@@ -30,6 +30,17 @@ pub(crate) fn committed(id: Option<String>, envelope: &Envelope) -> Json<Value> 
     Json(body)
 }
 
+/// A principal id from a path segment, or a refusal that says so.
+fn principal_id(id: &str) -> ApiResult<PrincipalId> {
+    PrincipalId::new(id).ok_or_else(|| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid",
+            format!("{id:?} is not a valid principal id"),
+        )
+    })
+}
+
 fn found<T>(item: Option<T>, what: &str) -> ApiResult<T> {
     item.ok_or_else(|| {
         ApiError::new(
@@ -99,6 +110,9 @@ pub struct RegisterPrincipal {
     pub display: String,
     pub model: Option<String>,
     pub harness: Option<String>,
+    /// Whose agent this is: yourself unless said otherwise, or an
+    /// organisation you belong to.
+    pub owner: Option<PrincipalId>,
 }
 
 pub async fn register_principal(
@@ -115,17 +129,74 @@ pub async fn register_principal(
     })?;
     let env = app.with_store(|s| {
         s.acting_as(actor.1.as_ref());
-        s.register_principal(
-            &actor.0,
-            &id,
-            body.kind,
-            &body.display,
-            body.model.as_deref(),
-            body.harness.as_deref(),
-        )
+        match (body.kind, body.owner.as_ref()) {
+            (PrincipalKind::Agent, owner) => s.register_agent_for(
+                &actor.0,
+                owner,
+                &id,
+                &body.display,
+                body.model.as_deref(),
+                body.harness.as_deref(),
+            ),
+            (kind, None) => s.register_principal(
+                &actor.0,
+                &id,
+                kind,
+                &body.display,
+                body.model.as_deref(),
+                body.harness.as_deref(),
+            ),
+            (_, Some(_)) => Err(cairn_core::CoreError::Invalid(
+                "a person and an organisation belong to themselves".to_owned(),
+            )),
+        }
     })?;
     app.publish(&env);
     Ok(committed(Some(id.0), &env))
+}
+
+/// What an owner may take up, and what they are taking up. Readable by
+/// the owner (a member, for an organisation) and by whoever runs the
+/// forge: it is that owner's business and nobody else's.
+pub async fn get_quota(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let owner = principal_id(&id)?;
+    app.with_store(|s| {
+        let record = found(s.principal(&owner)?, "principal")?;
+        if !s.owns(&actor.0, &record.id)? && !s.is_admin(&actor.0) {
+            return Err(ApiError::new(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "principal not found",
+            ));
+        }
+        Ok(Json(json!({
+            "owner": record.id,
+            "quota": s.quota(&record.id)?,
+            "usage": s.usage(&record.id)?,
+            "default": s.default_quota(),
+        })))
+    })
+}
+
+/// Say what one owner may take up. Whoever runs the forge decides; a
+/// bigger plan is a bigger quota and nothing else.
+pub async fn set_quota(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Json(quota): Json<cairn_core::Quota>,
+) -> ApiResult<Json<Value>> {
+    let owner = principal_id(&id)?;
+    let env = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref());
+        s.set_quota(&actor.0, &owner, &quota)
+    })?;
+    app.publish(&env);
+    Ok(committed(None, &env))
 }
 
 #[derive(Deserialize)]

@@ -33,6 +33,26 @@ use tokio::sync::broadcast::error::RecvError;
 
 const TICK: Duration = Duration::from_secs(5);
 
+/// Measure every repository whose size nobody has recorded. Runs at
+/// startup, so the first look at a forge's disk costs one walk per
+/// repository and later boots cost nothing.
+async fn measure_unmeasured(state: &AppState) {
+    let waiting = match state.with_store(|s| s.unmeasured_repos()) {
+        Ok(repos) => repos,
+        Err(err) => {
+            tracing::warn!(error = %err, "could not ask which repositories are unmeasured");
+            return;
+        }
+    };
+    if waiting.is_empty() {
+        return;
+    }
+    tracing::info!(count = waiting.len(), "measuring repositories");
+    for repo in waiting {
+        crate::git_http::remember_size(state, &repo).await;
+    }
+}
+
 pub fn spawn_queue_processor(state: AppState) -> tokio::task::JoinHandle<()> {
     tokio::spawn(run(state))
 }
@@ -47,6 +67,10 @@ async fn run(state: AppState) {
     for stuck in reconcile_branches(&state).await {
         tracing::error!("{stuck}");
     }
+    // A forge upgrading to a binary that counts disk has measured
+    // nothing yet, and would report every owner at zero until their
+    // next push. Look once, here, off the request path.
+    measure_unmeasured(&state).await;
     loop {
         retry_pending_advances(&state).await;
         process_lanes(&state).await;
@@ -245,6 +269,7 @@ async fn land(
     }
     carry_children(state, entry, &landed).await;
     crate::receipts::attach(state, &entry.repo, &entry.change, &landed).await;
+    crate::git_http::remember_size(state, &entry.repo).await;
     mirror_branch(state, &entry.repo, &entry.target, &landed).await;
     // Redraw the debt map at the new tip, so the burndown has its point
     // whether or not anybody opens the page.

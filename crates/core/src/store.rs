@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 26;
+const SCHEMA_VERSION: i64 = 27;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -192,6 +192,16 @@ CREATE TABLE IF NOT EXISTS debt_snapshots (
   imported   INTEGER NOT NULL,
   PRIMARY KEY (repo, tip)
 ) STRICT;
+
+-- How much disk a repository takes, last time anybody looked. A
+-- measurement rather than a fact from the log: it changes when git
+-- packs objects, with no event to say so, and it is what an owner's
+-- disk quota is counted against.
+CREATE TABLE IF NOT EXISTS repo_sizes (
+  repo     TEXT PRIMARY KEY,
+  bytes    INTEGER NOT NULL,
+  measured TEXT NOT NULL
+) STRICT;
 ";
 
 /// Everything derived. Dropping and replaying these is always safe:
@@ -204,7 +214,16 @@ CREATE TABLE IF NOT EXISTS principals (
   display TEXT NOT NULL,
   model   TEXT,
   harness TEXT,
-  active  INTEGER NOT NULL DEFAULT 1
+  active  INTEGER NOT NULL DEFAULT 1,
+  owner   TEXT
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_principals_owner ON principals (owner);
+
+-- What one owner may take up, where the operator has said something
+-- other than this forge's default. Filled from QuotaSet.
+CREATE TABLE IF NOT EXISTS quotas (
+  owner TEXT PRIMARY KEY,
+  quota TEXT NOT NULL
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS tokens (
@@ -492,6 +511,9 @@ CREATE INDEX IF NOT EXISTS idx_attention_draws_day ON attention_draws (repo, day
 /// never looks at it.
 const PROJECTION_TABLES: &[&str] = &[
     "principals",
+    "quotas",
+    "tags",
+    "former_names",
     "event_scope",
     "notices",
     "team_members",
@@ -531,6 +553,10 @@ pub struct Store {
     /// The scope of the session credential this handle is acting under,
     /// if any. Set per request by the server, cleared after.
     pub(crate) acting: Option<crate::types::Scope>,
+    /// What this forge allows an owner nobody has set a quota for.
+    /// Configuration, not a fact in the log: an operator changes it by
+    /// restarting with different numbers, and the log stays true.
+    pub(crate) default_quota: crate::types::Quota,
 }
 
 impl Store {
@@ -627,7 +653,11 @@ impl Store {
             rebuild_projections(&mut conn)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
-        Ok(Store { conn, acting: None })
+        Ok(Store {
+            conn,
+            acting: None,
+            default_quota: crate::types::Quota::default(),
+        })
     }
 
     /// Events strictly after `cursor`, oldest first. The resume primitive:
@@ -987,6 +1017,8 @@ fn record_scope(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
 
         // Somebody's own account business.
         PasswordResetRequested { principal } => (None, Some(principal.as_str().to_owned())),
+
+        QuotaSet { owner, .. } => (None, Some(owner.as_str().to_owned())),
 
         PasswordSet { principal, .. }
         | IdentityLinked { principal, .. }
@@ -1669,15 +1701,34 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             display,
             model,
             harness,
+            owner,
         } => {
+            // A person and an organisation are their own; an agent is
+            // whoever it was registered under, which is the actor
+            // unless the event says otherwise.
+            let owner = match principal_kind {
+                crate::types::PrincipalKind::Agent => owner.as_ref().map_or(actor, |o| o.as_str()),
+                _ => principal.as_str(),
+            };
             tx.execute(
-                "INSERT INTO principals (id, kind, display, model, harness) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO principals (id, kind, display, model, harness, owner)
+                   VALUES (?, ?, ?, ?, ?, ?)",
                 params![
                     principal.as_str(),
                     principal_kind.as_str(),
                     display,
                     model,
-                    harness
+                    harness,
+                    owner
+                ],
+            )?;
+        }
+        Event::QuotaSet { owner, quota } => {
+            tx.execute(
+                "INSERT OR REPLACE INTO quotas (owner, quota) VALUES (?, ?)",
+                params![
+                    owner.as_str(),
+                    serde_json::to_string(quota).expect("a quota serializes")
                 ],
             )?;
         }
@@ -1893,11 +1944,13 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             // Operational tables follow the name too, where they exist:
             // fsck replays the log into projections alone, which have
             // no debt snapshots.
-            if table_exists(tx, "debt_snapshots")? {
-                tx.execute(
-                    "UPDATE debt_snapshots SET repo = ? WHERE repo = ?",
-                    params![to, repo],
-                )?;
+            for table in ["debt_snapshots", "repo_sizes"] {
+                if table_exists(tx, table)? {
+                    tx.execute(
+                        &format!("UPDATE {table} SET repo = ? WHERE repo = ?"),
+                        params![to, repo],
+                    )?;
+                }
             }
             tx.execute(
                 "UPDATE tokens SET scope = json_set(scope, '$.repo', ?)
@@ -1939,6 +1992,9 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             )?;
         }
         Event::RepoDeleted { repo } => {
+            if table_exists(tx, "repo_sizes")? {
+                tx.execute("DELETE FROM repo_sizes WHERE repo = ?", params![repo])?;
+            }
             // Knowledge stays: tasks, sessions and lessons keep their text
             // and lose their home. Everything that was the repository goes.
             for sql in [
@@ -2936,10 +2992,52 @@ mod projection_shape {
         assert_eq!(
             (super::SCHEMA_VERSION, shape.as_str()),
             (
-                26,
+                27,
                 r#"{"require_executed_check":true,"independence":"human_or_two_models","require_runner_verification":false,"runner_quorum":1,"required_domains":[],"require_concerns_resolved":true,"attention_budget":null,"agents_act_in_sessions":false,"trust":null}"#
             ),
             "the policy's stored shape changed: bump SCHEMA_VERSION and pin the new shape here"
+        );
+    }
+
+    /// Every projection must be in `PROJECTION_TABLES`, or two things
+    /// silently stop being true: `fsck` never compares it, and a schema
+    /// bump replays the log into a table that still holds its old rows.
+    /// `tags` and `former_names` were both missing, and the second
+    /// rename of a tagged repository turned the next rebuild into
+    /// "UNIQUE constraint failed" at open — a forge that will not start.
+    #[test]
+    fn every_projection_is_rebuilt_and_compared() {
+        let table = |line: &str| {
+            line.trim()
+                .strip_prefix("CREATE TABLE IF NOT EXISTS ")
+                .and_then(|rest| rest.split_whitespace().next())
+                .map(str::to_owned)
+        };
+        let declared: Vec<String> = super::PROJECTION_SCHEMA.lines().filter_map(table).collect();
+        let missing: Vec<&String> = declared
+            .iter()
+            .filter(|name| !super::PROJECTION_TABLES.contains(&name.as_str()))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "projections missing from PROJECTION_TABLES, so fsck ignores them \
+             and a schema bump replays into their old rows: {missing:?}"
+        );
+    }
+
+    /// A quota is stored in the quotas projection the same way, and
+    /// carries the same trap: a renamed field and the rows a running
+    /// forge holds stop matching what the log would write.
+    #[test]
+    fn the_stored_quota_shape_is_pinned_to_the_schema_version() {
+        let shape = serde_json::to_string(&crate::types::Quota::default()).unwrap();
+        assert_eq!(
+            (super::SCHEMA_VERSION, shape.as_str()),
+            (
+                27,
+                r#"{"repos":50,"agents":25,"open_tasks":200,"disk":5368709120}"#
+            ),
+            "the quota's stored shape changed: bump SCHEMA_VERSION and pin the new shape here"
         );
     }
 }

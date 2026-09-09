@@ -35,6 +35,10 @@ impl From<CoreError> for ApiError {
             CoreError::Invalid(_) => (StatusCode::BAD_REQUEST, "invalid"),
             CoreError::PolicyUnsatisfied(_) => (StatusCode::CONFLICT, "policy_unsatisfied"),
             CoreError::Forbidden(_) => (StatusCode::FORBIDDEN, "forbidden"),
+            // Not 403: nothing about authority would change the answer,
+            // and a caller that reads this as "sign in differently"
+            // would retry forever.
+            CoreError::OverQuota(_) => (StatusCode::CONFLICT, "over_quota"),
             CoreError::Db(_) | CoreError::Corrupt { .. } => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal")
             }

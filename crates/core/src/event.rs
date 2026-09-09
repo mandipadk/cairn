@@ -50,6 +50,19 @@ pub enum Event {
         /// independent judgment across model families.
         model: Option<String>,
         harness: Option<String>,
+        /// Whose agent this is, when that is not whoever registered it.
+        /// Absent means the actor: the ordinary case of registering
+        /// your own.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner: Option<PrincipalId>,
+    },
+
+    /// What one owner may take up here, set by whoever runs the forge.
+    /// Replaces that owner's quota entirely; a field the quota leaves
+    /// out is a thing they have no limit on.
+    QuotaSet {
+        owner: PrincipalId,
+        quota: crate::types::Quota,
     },
 
     /// A human set a password, theirs or (as an admin) someone's.
@@ -475,6 +488,7 @@ impl Event {
     pub fn kind(&self) -> &'static str {
         match self {
             Event::PrincipalRegistered { .. } => "principal_registered",
+            Event::QuotaSet { .. } => "quota_set",
             Event::PasswordSet { .. } => "password_set",
             Event::PrincipalDeactivated { .. } => "principal_deactivated",
             Event::PrincipalReactivated { .. } => "principal_reactivated",

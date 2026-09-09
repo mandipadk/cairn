@@ -70,7 +70,9 @@ kind of identity and the same kind of authority: typed capabilities
 repository if you like, time-boxed if you like, revocable with immediate
 effect. You hold everything on what you own, or on what an organisation you
 belong to owns, and precisely what someone granted you everywhere else
-— and that rule is the same for a person as for an agent. A team holds grants and its members carry them, so
+— and that rule is the same for a person as for an agent. An agent is
+somebody's: you make your own, mint its tokens and retire it, and it
+counts against what a forge allows you. A team holds grants and its members carry them, so
 authority can be given in one place and follows people on and off the
 team. Ownership is offered, never assigned: it moves when the other side
 accepts. A refusal names the missing capability and the exact grant
@@ -180,9 +182,8 @@ still change between versions without a compatibility promise. A hosted
 instance is planned; the waitlist at
 [cairn.mandip.dev](https://cairn.mandip.dev) is where to say you want one.
 
-What is not here yet, so nobody has to find out the hard way: quotas
-on repository size, rate limiting on reads, and a way to join without
-an invitation. What is here is tested at the boundaries where a forge
+What is not here yet, so nobody has to find out the hard way: rate
+limiting on reads, and a way to join without an invitation. What is here is tested at the boundaries where a forge
 is usually wrong — authority, concurrency, crash recovery, hostile input,
 resource limits — and `fsck` runs clean on the instance serving this page.
 When something breaks anyway, say so at

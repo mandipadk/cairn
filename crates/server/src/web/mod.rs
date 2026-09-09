@@ -1464,13 +1464,19 @@ async fn agents_page(
     viewer: Viewer,
     Query(flash): Query<Flash>,
 ) -> Response {
-    if !viewer.1.admin {
-        return not_found();
-    }
     let data = app.with_store(|store| {
+        // Your agents, and your organisations'. Whoever runs the forge
+        // sees all of them, because they answer for all of them.
         let mut agents = Vec::new();
         for principal in store.principals()? {
             if principal.kind != cairn_core::PrincipalKind::Agent {
+                continue;
+            }
+            let held = match &principal.owner {
+                Some(owner) => store.owns(&viewer.0, owner)?,
+                None => false,
+            };
+            if !held && !viewer.1.admin {
                 continue;
             }
             let grants = store.grants_of(&principal.id)?;
@@ -1481,16 +1487,26 @@ async fn agents_page(
                 record,
             });
         }
-        let repos: Vec<String> = store.repos()?.into_iter().map(|r| r.name).collect();
-        Ok::<_, cairn_core::CoreError>((agents, repos))
+        // You can only grant on a repository you hold, so offering any
+        // other in the form would only produce a refusal.
+        let mut repos = Vec::new();
+        for repo in store.repos()? {
+            if viewer.1.admin || store.owns(&viewer.0, &repo.owner)? {
+                repos.push(repo.name);
+            }
+        }
+        let mut owners = vec![viewer.0.to_string()];
+        owners.extend(store.teams_of(&viewer.0)?);
+        Ok::<_, cairn_core::CoreError>((agents, repos, owners))
     });
     let once = take(&app, &viewer.0, flash.once.as_deref());
     match data {
-        Ok((agents, repos)) => views::agents(
+        Ok((agents, repos, owners)) => views::agents(
             theme,
             &viewer,
             &agents,
             &repos,
+            &owners,
             once.secret.as_deref(),
             flash.error.as_deref(),
         )
@@ -1505,6 +1521,9 @@ struct AgentForm {
     action: String,
     #[serde(default)]
     id: String,
+    // Whose the new agent is; empty means the viewer's own.
+    #[serde(default)]
+    owner: String,
     #[serde(default)]
     display: String,
     #[serde(default)]
@@ -1538,9 +1557,6 @@ async fn agent_action(
     viewer: Viewer,
     Form(form): Form<AgentForm>,
 ) -> Response {
-    if !viewer.1.admin {
-        return not_found();
-    }
     let back = |error: Option<String>, secret: Option<String>| match (error, secret) {
         (Some(error), _) => {
             Redirect::to(&format!("/agents?error={}", urlencode(&error))).into_response()
@@ -1570,11 +1586,12 @@ async fn agent_action(
                 );
             };
             let model = form.model.trim();
+            let owner = PrincipalId::new(form.owner.trim());
             let registered = app.with_store(|s| {
-                s.register_principal(
+                s.register_agent_for(
                     &viewer.0,
+                    owner.as_ref(),
                     &id,
-                    cairn_core::PrincipalKind::Agent,
                     form.display.trim(),
                     (!model.is_empty()).then_some(model),
                     None,
@@ -1918,6 +1935,15 @@ async fn owner_page(
         }
         Who::Anonymous(_) => false,
     };
+    // How full an account is belongs to whoever holds it.
+    let allowances = match &who {
+        Who::Signed(viewer) if may_create || viewer.1.admin => app
+            .with_store(|s| {
+                Ok::<_, cairn_core::CoreError>((s.usage(&owner_id)?, s.quota(&owner_id)?))
+            })
+            .ok(),
+        _ => None,
+    };
     views::owner(
         theme,
         who.reading(),
@@ -1925,6 +1951,7 @@ async fn owner_page(
         &repos,
         &members,
         may_create,
+        allowances,
     )
     .into_response()
 }
@@ -2610,6 +2637,18 @@ pub(crate) async fn old_names(
             bare(first),
             rest.split_once('/').map_or("", |(_, tail)| tail),
         ));
+    }
+    // An address that names a repository which exists now is not an old
+    // address, whatever the handler answered. Without this, git's
+    // credential challenge — which every push begins with — is turned
+    // into a redirect, and the push follows it somewhere else and dies.
+    // A name can be both a live repository and somebody's former one,
+    // if a rename freed it and a new repository took it.
+    if let [owner, name, ..] = parts[..] {
+        let live = format!("{owner}/{}", bare(name));
+        if app.with_store(|s| s.repo(&live)).ok().flatten().is_some() {
+            return response;
+        }
     }
     let suffix = if prefix == "/git/" && (path.contains(".git/") || path.ends_with(".git")) {
         ".git"

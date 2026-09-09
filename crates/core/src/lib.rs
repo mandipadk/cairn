@@ -61,12 +61,13 @@ pub use store::Store;
 pub use types::Anchor;
 pub use types::Report;
 pub use types::Tag;
+pub use types::Usage;
 pub use types::{
     BrowserSession, Capability, Change, ChangeSpec, ChangeState, Claim, ClaimKind, ClaimSpec,
     Contact, Cover, DebtSnapshot, Disposition, EarnedTrust, Grant, IdentityLink, Independence,
     Lease, Lesson, LineState, Mirror, Notice, ObjectFormat, PackOrigin, PasskeyRecord, Policy,
-    PolicyPack, Preference, Principal, PrincipalKind, Provenance, QueueEntry, Receipt, Replay,
-    Reply, Repo, Resolution, Resolved, ReviewDomain, Revision, Scope, Session, SessionState, Side,
-    Simulated, Simulation, Task, TaskState, Thread, ThreadKind, TokenInfo, Verdict, Verification,
-    Visibility, Waiver, WorkloadBinding, canonical_json, line_state,
+    PolicyPack, Preference, Principal, PrincipalKind, Provenance, QueueEntry, Quota, Receipt,
+    Replay, Reply, Repo, Resolution, Resolved, ReviewDomain, Revision, Scope, Session,
+    SessionState, Side, Simulated, Simulation, Task, TaskState, Thread, ThreadKind, TokenInfo,
+    Verdict, Verification, Visibility, Waiver, WorkloadBinding, canonical_json, line_state,
 };

@@ -540,6 +540,18 @@ async fn claim_storm_has_exactly_one_winner() {
     const AGENTS: usize = 30;
     let app = test_router();
     seed(&app).await;
+    // This one is about contention, not capacity: an empty quota is no
+    // limit on anything, so the forge's default number of agents does
+    // not decide how many racers there can be.
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/api/principals/ada/quota",
+        Some("ada"),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
     for i in 0..AGENTS {
         let (status, _) = call(
             &app,

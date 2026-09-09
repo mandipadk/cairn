@@ -1,0 +1,136 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Ibytes0102",
+      "id": "c-05zt45fwsmtj65nqjn8qkq1vbv",
+      "landed_oid": "63159e89aa7995e84de9ad72eb12b590603d9480",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 102,
+      "opened_at": "2026-09-09T22:48:55.338251338Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn/cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Refuse a push before its bytes are permanent",
+      "updated_at": "2026-09-09T22:49:46.616024475Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-05zt45fwsmtj65nqjn8qkq1vbv",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-2j8cn74r47r1zq2smewwzmtnmp",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 803,
+        "summary": "fmt, clippy -D warnings, the workspace suite and the first-run walk pass. The disk test now pushes past the limit, and a tag, and a loop of them, and asserts the repository is byte for byte what it was; a unit test holds the gzip ceiling.",
+        "unchecked": [
+          "The pre-receive round trip costs a request per push, and nothing here measures what that adds to a push against a busy forge.",
+          "A pack still expands when it lands, so the measurement after a push can exceed the room checked before it; the overshoot is one push, bounded by the 256 MiB pack limit, rather than unbounded.",
+          "There is still no garbage collection: an owner whose repository holds unreachable objects cannot make them go away, and deleting the repository is the only reclamation.",
+          "The rest of the audit: the read allowance does not cover the pack transfer, the counting has loops through reactivation and task state, and the quota surface reads 0 two ways. Each follows as its own change."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "63159e89aa7995e84de9ad72eb12b590603d9480",
+    "landed_at": "2026-09-09T22:49:46.616024475Z",
+    "merged_by": "mandip",
+    "repo": "cairn/cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-05zt45fwsmtj65nqjn8qkq1vbv",
+      "commit_oid": "63159e89aa7995e84de9ad72eb12b590603d9480",
+      "message": "Refuse a push before its bytes are permanent\n\nThe disk quota could not refuse anything. Git holds a pushed pack aside\nuntil pre-receive answers and throws it away if the answer is no, but\nmigrates it into the repository for good before proc-receive — which is\nwhere this forge decides what a push means, and so where it was\nrefusing. A refusal there rejects the branch and keeps the objects, so\nan owner over their limit could push all day: every push refused, every\npack kept, nothing ever pruned. Tags went the same road and were not\nchecked at all. The check moved to pre-receive, where a refusal costs\nthe forge nothing and still reaches the pusher's terminal in words. A\ntest pushes past the limit, and a tag, and a loop of them, and asserts\nthe repository is byte for byte what it was.\n\nThree things made the number it checks the wrong number. A pushed pack\nwas exploded into loose objects, because git does that by default for\na hundred objects or fewer, and it multiplies what a push takes on\ndisk; packs are kept packed now, and one larger than 256 MiB is refused\nby git as it reads it. Size was counted in apparent bytes, and a git\nobject is a few dozen bytes in a whole filesystem block, so a\nrepository of loose objects measured a hundredth of what it occupied;\nit is counted in blocks now. And a gzipped body was decompressed\nwithout a ceiling, so a few megabytes on the wire could be hundreds of\ngigabytes of this process's memory.\n\nWhat is measured, and when, was too narrow to be true. An import\nfetched unbounded history with no check and was never measured at all,\nso the overage appeared only at the next restart. A landing that ended\nin a conflict had still written its conflicted trees and returned\nbefore measuring. And nothing ever re-measured, so the number only went\nup: an owner pushed over their limit was refused the very push that\nwould have taken a fresh one. Now an import is checked before the forge\ndials out, every exit from a landing measures, and one repository an\nhour is measured again.\n\nChange-Id: Ibytes0102\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "crates/cli/src/hook.rs",
+        "crates/cli/src/main.rs",
+        "crates/cli/tests/suite/quotas_flow.rs",
+        "crates/core/src/queries.rs",
+        "crates/git/src/store.rs",
+        "crates/server/src/git_http.rs",
+        "crates/server/src/lib.rs",
+        "crates/server/src/queue.rs",
+        "crates/server/src/routes.rs",
+        "docs/operating.md"
+      ],
+      "session": null
+    },
+    "seq": 806,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-2j8cn74r47r1zq2smewwzmtnmp",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-2j8cn74r47r1zq2smewwzmtnmp",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 105 judged claims, 98% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 9 path(s) outside docs/, *.md: crates/cli/src/hook.rs, crates/cli/src/main.rs, crates/cli/tests/suite/quotas_flow.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-05zt45fwsmtj65nqjn8qkq1vbv",
+        "claim": "cl-2j8cn74r47r1zq2smewwzmtnmp",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "id": "vr-6hghx5mcg8t7xz5tsdntntxgr4",
+        "observed": "exit 0: Doc-tests cairn_server",
+        "revision": 1,
+        "seq": 804
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "B1Gl0F8sVW5SzVIDIW08oywjpCMSLds9YoAnCQDti1st7tXVym+NbqA4j4vokRjPTjtGJB+1LGOv8EG29aQSCQ=="
+  }
+}

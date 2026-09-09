@@ -357,7 +357,57 @@ fn holds_agent(tx: &Transaction, actor: &PrincipalId, subject: &Principal) -> Co
     let Some(owner) = subject.owner.as_ref() else {
         return Ok(false);
     };
-    Ok(subject.kind == PrincipalKind::Agent && raw::owns(tx, actor.as_str(), owner.as_str())?)
+    if subject.kind != PrincipalKind::Agent {
+        return Ok(false);
+    }
+    // The owner has to be somebody who can hold things now. A log from
+    // before agents were owned can name an agent as an owner, or a
+    // principal since deactivated, and neither should confer anything.
+    let Some(record) = raw::principal(tx, owner.as_str())? else {
+        return Ok(false);
+    };
+    if record.kind == PrincipalKind::Agent || !record.active {
+        return Ok(false);
+    }
+    raw::owns(tx, actor.as_str(), owner.as_str())
+}
+
+/// Registering a principal is an act of running the forge, exactly as
+/// creating a repository is: a person does it for themselves, and
+/// anything else needs the grant that running the forge consists of.
+/// Without this an agent that merely belongs to a team could make more
+/// principals, because acting for an organisation you are in asks no
+/// capability of you.
+fn may_make_principals(tx: &Transaction, actor: &PrincipalId) -> CoreResult<()> {
+    let principal = ensure_actor(tx, actor)?;
+    if principal.kind == PrincipalKind::Human {
+        return Ok(());
+    }
+    let grants = raw::effective_grants(tx, actor.as_str())?;
+    let now = jiff::Timestamp::now().to_string();
+    if raw::grants_cover(&grants, Capability::Admin, None, &now) {
+        return Ok(());
+    }
+    Err(CoreError::Forbidden(format!(
+        "{actor} may not register principals: that needs an 'admin' grant"
+    )))
+}
+
+/// Refuse a standing act to a session credential.
+///
+/// A scope says what a session may do with the work it was drawn for:
+/// task, push, review, verify, merge. It never says "make a principal"
+/// or "mint a credential", and `authorize` is the only place a scope is
+/// consulted — so any path that reaches its answer another way, by
+/// being your own or by holding the agent, must ask here instead.
+fn not_under_a_scope(acting: Option<&Scope>, what: &str) -> CoreResult<()> {
+    match acting {
+        None => Ok(()),
+        Some(scope) => Err(CoreError::Forbidden(format!(
+            "a session credential may not {what}: it carries {}",
+            scope.describe()
+        ))),
+    }
 }
 
 fn may_create_repo(tx: &Transaction, actor: &PrincipalId) -> CoreResult<()> {
@@ -409,10 +459,15 @@ impl Store {
         // hold is yours to do, and is how the room it takes in your
         // quota comes back.
         let found = raw::principal(&tx, principal.as_str())?;
-        let holds = match &found {
-            Some(subject) => holds_agent(&tx, actor, subject)?,
-            None => false,
-        };
+        // Retiring an agent you hold is yours to do. Bringing one back is
+        // not: deactivation is what whoever runs the forge does about an
+        // agent that is misbehaving, and an undo in the hands of the
+        // party it was aimed at is no lever at all.
+        let holds = !active
+            && match &found {
+                Some(subject) => holds_agent(&tx, actor, subject)?,
+                None => false,
+            };
         if !holds {
             authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
         }
@@ -535,6 +590,8 @@ impl Store {
         let bootstrap = raw::principal_count(&tx)? == 0 && actor == id;
         let owner = owner.unwrap_or(actor);
         if !bootstrap {
+            not_under_a_scope(self.acting.as_ref(), "register a principal")?;
+            may_make_principals(&tx, actor)?;
             if kind == PrincipalKind::Agent {
                 may_act_for(&tx, self.acting.as_ref(), actor, owner)?;
                 within_quota(
@@ -1712,6 +1769,12 @@ impl Store {
     /// Whether this principal holds the unscoped admin grant that
     /// running the forge consists of.
     pub fn is_admin(&self, actor: &PrincipalId) -> bool {
+        // Running the forge is not among the verbs a session scope can
+        // carry, so a credential drawn for one task's work is never an
+        // admin, whatever its holder is the rest of the time.
+        if self.acting.is_some() {
+            return false;
+        }
         let Ok(grants) = raw::effective_grants(&self.conn, actor.as_str()) else {
             return false;
         };
@@ -3933,6 +3996,11 @@ impl Store {
         require(subject.kind != PrincipalKind::Team, || {
             format!("{principal} is a team, and a team never signs in")
         })?;
+        // A standing token outlives every session and carries every
+        // grant its principal holds, so drawing one is never something a
+        // session credential does — including for itself, which is how a
+        // fifteen-minute workload credential could have become permanent.
+        not_under_a_scope(self.acting.as_ref(), "mint a standing token")?;
         // A token is the principal's own credential. Minting one for
         // somebody else is running the forge, not being a person; the
         // old rule let any signed-in human mint an admin's token. The

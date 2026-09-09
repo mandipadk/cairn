@@ -8,6 +8,7 @@
 mod account_flow;
 mod account_state_flow;
 mod agent_api_flow;
+mod agent_authority_flow;
 mod assets_flow;
 mod attempts_flow;
 mod attempts_page_flow;

@@ -3650,7 +3650,7 @@ async fn debt_tasks_action(
 ) -> Response {
     let back = format!("/{repo}/debt");
     let count = form.count.trim().parse::<usize>().unwrap_or(5);
-    match crate::debt::create_pay_down_tasks(&app, &viewer.0, &repo, count).await {
+    match crate::debt::create_pay_down_tasks(&app, &viewer.0, None, &repo, count).await {
         Ok(created) if created.is_empty() => flash(&back, "Every indebted file already has a task"),
         Ok(_) => Redirect::to(&format!("{back}?done=1")).into_response(),
         Err(err) => flash(&back, &err.message),

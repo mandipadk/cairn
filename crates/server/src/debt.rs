@@ -377,13 +377,15 @@ fn pay_down_spec(file: &FileDebt) -> String {
 pub async fn create_pay_down_tasks(
     app: &AppState,
     actor: &PrincipalId,
+    acting: Option<&cairn_core::Scope>,
     repo: &str,
     count: usize,
 ) -> ApiResult<Vec<cairn_core::TaskId>> {
     let record = app
         .with_store(|s| s.repo(repo))?
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not_found", "repo not found"))?;
-    if !app.with_store(|s| s.owns(actor, &record.owner))? && !app.with_store(|s| s.is_admin(actor))
+    if !app.with_store(|s| s.owns(actor, &record.owner))?
+        && !app.with_store(|s| s.acting_as(acting).is_admin(actor))
     {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
@@ -424,7 +426,14 @@ pub async fn pay_down(
     RepoName(repo): RepoName,
     Json(body): Json<PayDownBody>,
 ) -> ApiResult<Json<Value>> {
-    let created = create_pay_down_tasks(&app, &actor.0, &repo, body.count.unwrap_or(5)).await?;
+    let created = create_pay_down_tasks(
+        &app,
+        &actor.0,
+        actor.1.as_ref(),
+        &repo,
+        body.count.unwrap_or(5),
+    )
+    .await?;
     Ok(Json(json!({ "tasks": created })))
 }
 

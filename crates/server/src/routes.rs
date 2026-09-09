@@ -165,6 +165,9 @@ pub async fn get_quota(
 ) -> ApiResult<Json<Value>> {
     let owner = principal_id(&id)?;
     app.with_store(|s| {
+        // Under a session credential's scope, so that a credential drawn
+        // for one task's work does not read the forge as an admin.
+        s.acting_as(actor.1.as_ref());
         let record = found(s.principal(&owner)?, "principal")?;
         if !s.owns(&actor.0, &record.id)? && !s.is_admin(&actor.0) {
             return Err(ApiError::new(
@@ -1435,7 +1438,8 @@ pub async fn list_workload(
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let principal = PrincipalId(id);
-    if actor.0 != principal && !app.with_store(|s| s.is_admin(&actor.0)) {
+    if actor.0 != principal && !app.with_store(|s| s.acting_as(actor.1.as_ref()).is_admin(&actor.0))
+    {
         return Err(ApiError::new(
             StatusCode::NOT_FOUND,
             "not_found",

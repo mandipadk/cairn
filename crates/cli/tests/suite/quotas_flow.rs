@@ -447,3 +447,234 @@ async fn a_reader_who_will_not_wait_is_told_how_long() {
         assert_eq!(status, StatusCode::OK);
     }
 }
+
+/// What an owner is taking up, as the forge itself counts it.
+async fn usage(forge: &Forge, owner: &str, field: &str) -> i64 {
+    let (_, seen) = api(
+        &forge.app,
+        "GET",
+        &format!("/api/principals/{owner}/quota"),
+        "ada",
+        None,
+    )
+    .await;
+    seen["usage"][field].as_i64().unwrap_or(-1)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_limit_on_having_is_not_a_limit_on_registering() {
+    let forge = boot().await;
+    let app = &forge.app;
+    // Whatever the forge already has of ada's, plus room for two more.
+    let start = usage(&forge, "ada", "agents").await;
+    quota(&forge, "ada", json!({ "agents": start + 2 })).await;
+    for id in ["one", "two"] {
+        let (status, body) = api(
+            app,
+            "POST",
+            "/api/principals",
+            "ada",
+            Some(json!({ "id": id, "kind": "agent", "display": id })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    // Retiring frees the room, on purpose.
+    for id in ["one", "two"] {
+        api(
+            app,
+            "POST",
+            &format!("/api/principals/{id}/state"),
+            "ada",
+            Some(json!({ "active": false })),
+        )
+        .await;
+    }
+    assert_eq!(usage(&forge, "ada", "agents").await, start);
+    for id in ["three", "four"] {
+        let (status, body) = api(
+            app,
+            "POST",
+            "/api/principals",
+            "ada",
+            Some(json!({ "id": id, "kind": "agent", "display": id })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    // Bringing the retired ones back would be four against a limit of
+    // two, so the room has to be there for them as well.
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/principals/one/state",
+        "ada",
+        Some(json!({ "active": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["kind"], "over_quota");
+    assert_eq!(usage(&forge, "ada", "agents").await, start + 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn work_in_hand_counts_and_reopening_asks_again() {
+    let forge = boot().await;
+    let app = &forge.app;
+    quota(&forge, "ada", json!({ "open_tasks": 1 })).await;
+    let (status, task) = api(
+        app,
+        "POST",
+        "/api/tasks",
+        "ada",
+        Some(json!({ "repo": "ada/demo", "title": "First", "spec": "Do it" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{task}");
+    let first = task["id"].as_str().unwrap().to_owned();
+
+    // Claiming it does not put it down. A task somebody is working on
+    // is more of a commitment than one nobody has picked up.
+    api_with_token(
+        app,
+        "POST",
+        &format!("/api/tasks/{first}/claim"),
+        &forge.scout_token,
+        None,
+    )
+    .await;
+    assert_eq!(usage(&forge, "ada", "open_tasks").await, 1, "still held");
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/tasks",
+        "ada",
+        Some(json!({ "repo": "ada/demo", "title": "Second", "spec": "And again" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    // Finishing it frees the room, and taking it back up asks again.
+    api(
+        app,
+        "POST",
+        &format!("/api/tasks/{first}/state"),
+        "ada",
+        Some(json!({ "state": "abandoned" })),
+    )
+    .await;
+    assert_eq!(usage(&forge, "ada", "open_tasks").await, 0);
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/tasks",
+        "ada",
+        Some(json!({ "repo": "ada/demo", "title": "Second", "spec": "And again" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = api(
+        app,
+        "POST",
+        &format!("/api/tasks/{first}/state"),
+        "ada",
+        Some(json!({ "state": "open" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["kind"], "over_quota");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deleted_repositorys_work_stops_counting_against_nobody() {
+    let forge = boot().await;
+    let app = &forge.app;
+    quota(&forge, "ada", json!({ "open_tasks": 2 })).await;
+    for title in ["One", "Two"] {
+        api(
+            app,
+            "POST",
+            "/api/tasks",
+            "ada",
+            Some(json!({ "repo": "ada/demo", "title": title, "spec": "x" })),
+        )
+        .await;
+    }
+    assert_eq!(usage(&forge, "ada", "open_tasks").await, 2);
+
+    // Deleting the repository must not turn its open work into work
+    // that counts against nobody: make a repository, fill it with
+    // tasks, delete it, repeat, and the limit means nothing.
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/repos/ada/demo/delete",
+        "ada",
+        Some(json!({ "confirm": "ada/demo" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, tasks) = api(app, "GET", "/api/tasks", "ada", None).await;
+    let still_open = tasks
+        .as_array()
+        .map(|all| all.iter().filter(|t| t["state"] == "open").count())
+        .unwrap_or(0);
+    assert_eq!(still_open, 0, "the work is over, not homeless: {tasks}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ownership_moving_does_not_move_past_a_limit() {
+    let forge = boot().await;
+    let app = &forge.app;
+    api(
+        app,
+        "POST",
+        "/api/principals",
+        "ada",
+        Some(json!({ "id": "bee", "kind": "human", "display": "Bee" })),
+    )
+    .await;
+    // Bee is allowed one repository and already has it.
+    api(
+        app,
+        "POST",
+        "/api/repos",
+        "bee",
+        Some(json!({ "name": "theirs" })),
+    )
+    .await;
+    quota(&forge, "bee", json!({ "repos": 1 })).await;
+
+    api(
+        app,
+        "POST",
+        "/api/repos/ada/demo/transfer",
+        "ada",
+        Some(json!({ "to": "bee" })),
+    )
+    .await;
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/repos/ada/demo/transfer/accept",
+        "bee",
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["kind"], "over_quota");
+    let (_, repo) = api(app, "GET", "/api/repos/ada/demo", "ada", None).await;
+    assert_eq!(repo["owner"], "ada", "it stayed where it was");
+
+    // With room, the same offer is taken up.
+    quota(&forge, "bee", json!({ "repos": 2 })).await;
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/repos/ada/demo/transfer/accept",
+        "bee",
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}

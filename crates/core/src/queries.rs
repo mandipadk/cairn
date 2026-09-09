@@ -1402,9 +1402,12 @@ pub(crate) mod raw {
             params![owner],
             |row| row.get(0),
         )?;
+        // Claimed counts too. A task somebody is working on is more of a
+        // commitment than one nobody has picked up, and counting only
+        // the untouched ones would make "claim it" a way past the limit.
         let open_tasks: i64 = conn.query_row(
             "SELECT COUNT(*) FROM tasks
-               WHERE state = 'open'
+               WHERE state IN ('open', 'claimed')
                  AND repo IN (SELECT name FROM repos WHERE owner = ?)",
             params![owner],
             |row| row.get(0),

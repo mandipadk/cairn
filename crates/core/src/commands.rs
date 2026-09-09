@@ -481,6 +481,22 @@ impl Store {
                 if active { "active" } else { "deactivated" }
             )));
         }
+        // Coming back has to fit, or the limit is one on registering
+        // rather than on having: retire twenty-five, make twenty-five
+        // more, bring the first twenty-five back.
+        if active
+            && subject.kind == PrincipalKind::Agent
+            && let Some(owner) = subject.owner.as_ref()
+        {
+            within_quota(
+                &tx,
+                &self.default_quota,
+                owner,
+                "agents",
+                |q| q.agents,
+                |u| u.agents,
+            )?;
+        }
         let event = if active {
             Event::PrincipalReactivated {
                 principal: principal.clone(),
@@ -1872,6 +1888,34 @@ impl Store {
         require(may_accept, || {
             format!("{repo} has not been offered to {actor}")
         })?;
+        // What is offered still has to fit. Ownership moving is a way
+        // past the repository and disk limits otherwise, and a
+        // deliberate one: offer everything you hold to an account with
+        // room and accept it there.
+        within_quota(
+            &tx,
+            &self.default_quota,
+            &to,
+            "repositories",
+            |q| q.repos,
+            |u| u.repos,
+        )?;
+        let arriving: i64 = tx
+            .prepare_cached("SELECT COALESCE(bytes, 0) FROM repo_sizes WHERE repo = ?")
+            .and_then(|mut q| q.query_row(rusqlite::params![repo], |row| row.get(0)))
+            .unwrap_or(0);
+        let quota = raw::quota(&tx, to.as_str())?.unwrap_or_else(|| self.default_quota.clone());
+        if let Some(limit) = quota.disk {
+            let after = raw::usage(&tx, to.as_str())?
+                .disk
+                .saturating_add(arriving.max(0) as u64);
+            require(after <= limit, || {
+                format!("{to} does not have room on disk for {repo}")
+            })
+            .map_err(|_| {
+                CoreError::OverQuota(format!("{to} does not have room on disk for {repo}"))
+            })?;
+        }
         let short = crate::id::split_repo_name(repo)
             .map(|(_, short)| short.to_owned())
             .unwrap_or_else(|| repo.to_owned());
@@ -2699,6 +2743,25 @@ impl Store {
         require(state != TaskState::Claimed, || {
             "use claim_task to claim; claiming records who claimed".into()
         })?;
+        // Reopening is taking the work back up, so it has to fit the way
+        // opening it did. Without this, landing or abandoning tasks and
+        // reopening them is a way to hold any number at once.
+        if state == TaskState::Open
+            && current.state != TaskState::Open
+            && let Some(record) = current
+                .repo
+                .as_deref()
+                .and_then(|repo| raw::repo(&tx, repo).ok().flatten())
+        {
+            within_quota(
+                &tx,
+                &self.default_quota,
+                &record.owner,
+                "open tasks",
+                |q| q.open_tasks,
+                |u| u.open_tasks,
+            )?;
+        }
         let env = append(
             &tx,
             actor,

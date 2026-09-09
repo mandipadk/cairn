@@ -1992,6 +1992,15 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             )?;
         }
         Event::RepoDeleted { repo } => {
+            // Work in a repository that is gone is over. The text stays,
+            // because knowledge does; leaving it open would leave it
+            // counted against nobody, which is a way to hold any number
+            // of open tasks by making a repository and deleting it.
+            tx.execute(
+                "UPDATE tasks SET state = 'abandoned'
+                   WHERE repo = ? AND state IN ('open', 'claimed')",
+                params![repo],
+            )?;
             if table_exists(tx, "repo_sizes")? {
                 tx.execute("DELETE FROM repo_sizes WHERE repo = ?", params![repo])?;
             }

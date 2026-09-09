@@ -1487,6 +1487,25 @@ impl Store {
             .collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// The repository whose measurement is oldest, if it is older than
+    /// `cutoff`. One at a time, because measuring is a walk of a
+    /// directory and there is no hurry: git shrinks a repository on its
+    /// own schedule, and a number that catches up within the hour is a
+    /// number an owner can act on.
+    pub fn stalest_repo(&self, cutoff: &str) -> CoreResult<Option<String>> {
+        use rusqlite::OptionalExtension;
+        Ok(self
+            .conn
+            .prepare_cached(
+                "SELECT repo FROM repo_sizes
+                   WHERE measured < ?1
+                     AND repo IN (SELECT name FROM repos)
+                   ORDER BY measured LIMIT 1",
+            )?
+            .query_row(rusqlite::params![cutoff], |row| row.get::<_, String>(0))
+            .optional()?)
+    }
+
     pub fn is_team_member(&self, team: &PrincipalId, member: &PrincipalId) -> CoreResult<bool> {
         raw::is_team_member(&self.conn, team.as_str(), member.as_str())
     }

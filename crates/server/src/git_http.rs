@@ -64,6 +64,10 @@ fn git_protocol(headers: &HeaderMap) -> Option<String> {
 
 /// Request bodies from git clients may arrive gzip-compressed.
 fn request_body(headers: &HeaderMap, body: Bytes) -> ApiResult<Vec<u8>> {
+    unpacked(headers, body, crate::GIT_BODY_LIMIT as u64)
+}
+
+fn unpacked(headers: &HeaderMap, body: Bytes, ceiling: u64) -> ApiResult<Vec<u8>> {
     let gzipped = headers
         .get(header::CONTENT_ENCODING)
         .and_then(|v| v.to_str().ok())
@@ -71,8 +75,14 @@ fn request_body(headers: &HeaderMap, body: Bytes) -> ApiResult<Vec<u8>> {
     if !gzipped {
         return Ok(body.to_vec());
     }
+    // A compressed body says how big it is only by being decompressed,
+    // and gzip will happily turn a few megabytes into hundreds of
+    // gigabytes of this process's memory. Read one byte past what a push
+    // may carry and refuse there, so the ceiling is the same whether a
+    // client compressed its request or not.
     let mut decoded = Vec::new();
     flate2::read::GzDecoder::new(body.as_ref())
+        .take(ceiling + 1)
         .read_to_end(&mut decoded)
         .map_err(|e| {
             ApiError::new(
@@ -81,6 +91,16 @@ fn request_body(headers: &HeaderMap, body: Bytes) -> ApiResult<Vec<u8>> {
                 format!("bad gzip body: {e}"),
             )
         })?;
+    if decoded.len() as u64 > ceiling {
+        return Err(ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "invalid",
+            format!(
+                "the request body unpacks to more than {}",
+                crate::in_bytes(ceiling)
+            ),
+        ));
+    }
     Ok(decoded)
 }
 
@@ -225,6 +245,28 @@ fn challenge_basic(err: ApiError) -> Response {
         );
     }
     response
+}
+
+#[derive(Deserialize)]
+pub struct Room {
+    pub repo: String,
+}
+
+/// Whether this repository's owner has room for what is arriving.
+///
+/// Asked by the pre-receive hook, which is the last moment a refusal
+/// still costs the forge nothing: git holds a pushed pack in quarantine
+/// until pre-receive returns, and discards it if pre-receive refuses.
+/// By proc-receive time the objects have been migrated into the
+/// repository for good, so a refusal there rejects the ref and keeps
+/// the bytes — which is a disk quota that cannot refuse anything.
+pub async fn room(
+    State(app): State<AppState>,
+    _actor: crate::auth::Pusher,
+    Json(body): Json<Room>,
+) -> ApiResult<Json<Value>> {
+    room_on_disk(&app, &body.repo, 0)?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 #[derive(Deserialize)]
@@ -500,6 +542,65 @@ async fn mirror_default_branch(app: &AppState, repo: &str) {
     crate::queue::mirror_branch(app, repo, &record.default_branch, &tip).await;
 }
 
+/// Whether this owner has room for `arriving` more bytes.
+///
+/// Checked against the last measurement plus what is on the wire, which
+/// is what can be known before anything is stored. A pack expands when
+/// it lands, so this is a floor rather than the true cost — but git is
+/// told to keep a pushed pack packed, so the two are close, and the
+/// alternative is finding out after the bytes are permanent.
+pub(crate) fn room_on_disk(app: &AppState, repo: &str, arriving: u64) -> ApiResult<()> {
+    app.with_store(|s| {
+        let Some(record) = s.repo(repo)? else {
+            return Ok(());
+        };
+        let Some(limit) = s.quota(&record.owner)?.disk else {
+            return Ok(());
+        };
+        let used = s.usage(&record.owner)?.disk;
+        if used.saturating_add(arriving) <= limit {
+            return Ok(());
+        }
+        Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "over_quota",
+            format!(
+                "{} is using {} of git storage and this push carries {}, and this forge allows {}",
+                record.owner,
+                crate::in_bytes(used),
+                crate::in_bytes(arriving),
+                crate::in_bytes(limit)
+            ),
+        ))
+    })
+}
+
+/// Measure a repository when this goes out of scope, however it goes.
+///
+/// A fetch that failed or timed out has still written objects, and the
+/// number has to follow what is there rather than what was intended.
+pub(crate) struct MeasureOnDrop {
+    app: AppState,
+    repo: String,
+}
+
+impl MeasureOnDrop {
+    pub(crate) fn new(app: &AppState, repo: &str) -> Self {
+        MeasureOnDrop {
+            app: app.clone(),
+            repo: repo.to_owned(),
+        }
+    }
+}
+
+impl Drop for MeasureOnDrop {
+    fn drop(&mut self) {
+        let app = self.app.clone();
+        let repo = std::mem::take(&mut self.repo);
+        tokio::spawn(async move { remember_size(&app, &repo).await });
+    }
+}
+
 /// Measure what a repository takes on disk and remember it, so an
 /// owner's page and their disk quota have a number to work from.
 ///
@@ -549,32 +650,6 @@ pub async fn record_push(
             ),
         ));
     }
-    // Room to grow, measured at the last push rather than this one:
-    // what an unpacked push costs is not knowable in advance, so an
-    // owner already over their disk goes no further.
-    app.with_store(|s| {
-        let Some(record) = s.repo(&body.repo)? else {
-            return Ok(());
-        };
-        let quota = s.quota(&record.owner)?;
-        let Some(limit) = quota.disk else {
-            return Ok(());
-        };
-        let used = s.usage(&record.owner)?.disk;
-        if used < limit {
-            return Ok(());
-        }
-        Err(ApiError::new(
-            StatusCode::CONFLICT,
-            "over_quota",
-            format!(
-                "{} is using {} of git storage, and this forge allows {}",
-                record.owner,
-                crate::in_bytes(used),
-                crate::in_bytes(limit)
-            ),
-        ))
-    })?;
     // Stack identity across amends and rebases requires per-commit keys.
     if body.commits.len() > 1 && body.commits.iter().any(|c| c.change_id.is_none()) {
         return Err(ApiError::new(
@@ -830,4 +905,50 @@ pub async fn blame(
         "states": states,
         "debt_lines": debt,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn gzipped(bytes: &[u8]) -> Bytes {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        encoder.write_all(bytes).unwrap();
+        Bytes::from(encoder.finish().unwrap())
+    }
+
+    fn gzip_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::CONTENT_ENCODING, "gzip".parse().unwrap());
+        headers
+    }
+
+    /// A small gzip body can name a very large one. Reading it to the
+    /// end would be this process's memory, so the ceiling is the same
+    /// whether a client compressed its request or not.
+    #[test]
+    fn a_compressed_body_cannot_expand_past_the_ceiling() {
+        let enormous = vec![0u8; 64 * 1024];
+        let body = gzipped(&enormous);
+        assert!(
+            body.len() < 1024,
+            "the point of the test is that the body is small: {}",
+            body.len()
+        );
+        let refused = match unpacked(&gzip_headers(), body.clone(), 1024) {
+            Err(refused) => refused,
+            Ok(_) => panic!("a body that expands past the ceiling must be refused"),
+        };
+        assert_eq!(refused.status, StatusCode::PAYLOAD_TOO_LARGE);
+        // And a body that fits still arrives whole.
+        let ordinary = unpacked(&gzip_headers(), gzipped(b"hello"), 1024)
+            .unwrap_or_else(|_| panic!("a small body is allowed"));
+        assert_eq!(ordinary, b"hello");
+        // Exactly at the ceiling is not past it.
+        let exact = vec![7u8; 1024];
+        let allowed = unpacked(&gzip_headers(), gzipped(&exact), 1024)
+            .unwrap_or_else(|_| panic!("exactly at the ceiling is allowed"));
+        assert_eq!(allowed.len(), 1024);
+    }
 }

@@ -315,6 +315,29 @@ async fn an_allowance_is_the_owners_business() {
     assert_eq!(mine["usage"]["repos"], 1);
 }
 
+/// Every file under a repository's directory, counted. What a refused
+/// push must not change.
+fn objects_on_disk(repo: &std::path::Path) -> (usize, u64) {
+    let mut files = 0;
+    let mut bytes = 0;
+    let mut pending = vec![repo.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.is_dir() {
+                pending.push(entry.path());
+            } else {
+                files += 1;
+                bytes += meta.len();
+            }
+        }
+    }
+    (files, bytes)
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_push_from_an_owner_over_their_disk_is_refused_with_the_numbers() {
     let forge = boot().await;
@@ -339,11 +362,44 @@ async fn a_push_from_an_owner_over_their_disk_is_refused_with_the_numbers() {
 
     // Allow less than that, and the next push is refused by name.
     quota(&forge, "ada", json!({ "disk": 1 })).await;
+    let bare = forge._tmp.path().join("repos/ada/demo.git");
+    let before = objects_on_disk(&bare);
     commit_file(&wc, "two.txt", "2\n", "Second\n\nChange-Id: Itwo");
     let refusal = git_expect_fail(&wc, &["push", "origin", "HEAD:refs/for/main"]);
     assert!(
         refusal.contains("git storage") && refusal.contains("allows"),
         "the pusher should be told what is full: {refusal}"
+    );
+    // And the bytes did not arrive. Git moves a pushed pack out of
+    // quarantine before the hook that would refuse it runs, so a
+    // refusal that happens there rejects the ref and keeps the objects
+    // — which would let anybody over their limit fill the disk by
+    // pushing things that are always refused.
+    assert_eq!(
+        objects_on_disk(&bare),
+        before,
+        "a refused push must leave the repository exactly as it was"
+    );
+    // Not even after several. This is the loop the refusal has to close.
+    for n in 3..6 {
+        commit_file(
+            &wc,
+            &format!("f{n}.txt"),
+            "x\n",
+            &format!("More\n\nChange-Id: If{n}"),
+        );
+        git_expect_fail(&wc, &["push", "origin", "HEAD:refs/for/main"]);
+    }
+    assert_eq!(objects_on_disk(&bare), before, "nor after a loop of them");
+
+    // A tag goes through the same door, so it is refused the same way.
+    git(&wc, &["tag", "-a", "v1", "-m", "One"]);
+    let refusal = git_expect_fail(&wc, &["push", "origin", "v1"]);
+    assert!(refusal.contains("git storage"), "{refusal}");
+    assert_eq!(
+        objects_on_disk(&bare),
+        before,
+        "a tag push leaves nothing either"
     );
     let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
     assert_eq!(

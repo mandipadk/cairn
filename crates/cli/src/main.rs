@@ -135,6 +135,10 @@ enum Command {
     /// The proc-receive hook endpoint; spawned by git receive-pack.
     #[command(name = "internal-proc-receive", hide = true)]
     InternalProcReceive,
+    /// Asked by the pre-receive hook, while a pushed pack is still in
+    /// quarantine and refusing it still costs nothing.
+    #[command(name = "internal-pre-receive", hide = true)]
+    InternalPreReceive,
     /// Re-run claims and record what actually happened. With no
     /// change number, works through everything waiting on a runner —
     /// which is what a CI job should call.
@@ -831,6 +835,14 @@ async fn main() -> anyhow::Result<()> {
                 dry_run,
                 checkout,
             })?;
+        }
+        Command::InternalPreReceive => {
+            if let Err(err) = hook::room() {
+                // Written where git shows it: the pusher's terminal
+                // prefixes anything a hook says with "remote:".
+                eprintln!("cairn: {err}");
+                std::process::exit(1);
+            }
         }
         Command::InternalProcReceive => {
             hook::run()?;

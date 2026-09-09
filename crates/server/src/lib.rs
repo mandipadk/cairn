@@ -248,6 +248,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/inbox", get(routes::inbox))
         .route("/api/inbox/read", post(routes::mark_read))
         .route("/api/events/stream", get(sse::stream))
+        .route("/api/git/room", post(git_http::room))
         .route("/api/git/pushes", post(git_http::record_push))
         .route("/api/git/tags", post(git_http::record_tag))
         .route("/api/repos/{owner}/{name}/tags", get(routes::tags))

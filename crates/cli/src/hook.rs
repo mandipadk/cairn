@@ -25,6 +25,37 @@ use std::io::{Read, Write};
 
 const ZERO_OID_PREFIX: &str = "0000000000";
 
+/// Ask the forge whether this repository's owner has room, before git
+/// migrates the pushed objects out of quarantine.
+///
+/// Anything this prints reaches the pusher's terminal, so the refusal
+/// arrives as the forge worded it rather than as an HTTP status.
+pub fn room() -> anyhow::Result<()> {
+    let server = std::env::var("CAIRN_SERVER").context("CAIRN_SERVER not set")?;
+    let token = std::env::var("CAIRN_TOKEN").context("CAIRN_TOKEN not set")?;
+    let repo = std::env::var("CAIRN_REPO").context("CAIRN_REPO not set")?;
+    let client = Client {
+        server: &server,
+        token: &token,
+    };
+    match client.post("/api/git/room", &json!({ "repo": repo })) {
+        Ok((status, _)) if (200..300).contains(&status) => Ok(()),
+        Ok((_, body)) => bail!(
+            "{}",
+            body["error"]
+                .as_str()
+                .unwrap_or("this push was refused")
+                .to_owned()
+        ),
+        // A forge that cannot answer must not become a forge that
+        // cannot be pushed to; the quota is a limit, not a lock.
+        Err(err) => {
+            eprintln!("cairn: could not check the disk allowance ({err}); allowing the push");
+            Ok(())
+        }
+    }
+}
+
 pub fn run() -> anyhow::Result<()> {
     let server = std::env::var("CAIRN_SERVER").context("CAIRN_SERVER not set")?;
     let token = std::env::var("CAIRN_TOKEN").context("CAIRN_TOKEN not set")?;

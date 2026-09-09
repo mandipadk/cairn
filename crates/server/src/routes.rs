@@ -372,6 +372,14 @@ pub async fn import_history(
     // a caller's say-so - nor on behalf of somebody who may not import.
     app.with_store(|s| s.acting_as(actor.1.as_ref()).check_import(&actor.0, &name))?;
     cairn_core::Store::validate_import_source(&body.source, app.dev_identity())?;
+    // An import is the one way bytes arrive without a push, so it is the
+    // one place the push door's check has to be repeated. How much is
+    // coming is not knowable before fetching, so an owner already at
+    // their limit is refused and everyone else is measured afterwards.
+    crate::git_http::room_on_disk(&app, &name, 0)?;
+    // Whatever the fetch leaves behind is on disk from here on, so the
+    // measurement happens on the way out of every path below.
+    let _measure = crate::git_http::MeasureOnDrop::new(&app, &name);
     let (tip, commits) = git
         .store
         .fetch_history(&name, &body.source, &body.branch)

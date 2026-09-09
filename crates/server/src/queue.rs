@@ -53,6 +53,27 @@ async fn measure_unmeasured(state: &AppState) {
     }
 }
 
+/// How long a repository's measurement may stand before it is taken
+/// again. Long enough that a busy forge is not walking directories all
+/// day, short enough that an owner who deleted something sees it.
+const MEASUREMENT_STANDS: Duration = Duration::from_secs(3600);
+
+/// Re-measure one repository a tick, oldest measurement first.
+///
+/// Without this the number only ever goes up: git shrinks a repository
+/// by packing objects with nothing happening in the forge to record it,
+/// and an owner pushed over their limit is refused the very push that
+/// would have taken a fresh measurement.
+async fn measure_the_stalest(state: &AppState) {
+    let cutoff = (jiff::Timestamp::now() - MEASUREMENT_STANDS).to_string();
+    let stalest = state.with_store(|s| s.stalest_repo(&cutoff));
+    match stalest {
+        Ok(Some(repo)) => crate::git_http::remember_size(state, &repo).await,
+        Ok(None) => {}
+        Err(err) => tracing::warn!(error = %err, "could not ask which measurement is oldest"),
+    }
+}
+
 pub fn spawn_queue_processor(state: AppState) -> tokio::task::JoinHandle<()> {
     tokio::spawn(run(state))
 }
@@ -74,6 +95,7 @@ async fn run(state: AppState) {
     loop {
         retry_pending_advances(&state).await;
         process_lanes(&state).await;
+        measure_the_stalest(&state).await;
         if state.draws_automatically() {
             draw_attention(&state);
         }
@@ -176,6 +198,11 @@ async fn land(
         // No git hosting: nothing to advance; the queue is inert.
         return Ok(false);
     };
+    // However this ends. A rebase that conflicts has still written the
+    // conflicted trees into the repository, and a landing that failed
+    // halfway has still written whatever it wrote; the number follows
+    // what is on disk, not what was meant to happen.
+    let _measure = crate::git_http::MeasureOnDrop::new(state, &entry.repo);
 
     let change = state.with_store(|s| s.change(&entry.change))?;
     let Some(change) = change else {
@@ -269,7 +296,6 @@ async fn land(
     }
     carry_children(state, entry, &landed).await;
     crate::receipts::attach(state, &entry.repo, &entry.change, &landed).await;
-    crate::git_http::remember_size(state, &entry.repo).await;
     mirror_branch(state, &entry.repo, &entry.target, &landed).await;
     // Redraw the debt map at the new tip, so the burndown has its point
     // whether or not anybody opens the page.

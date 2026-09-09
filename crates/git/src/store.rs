@@ -141,8 +141,15 @@ while read old new ref; do
       ;;
   esac
 done
-exit $status
+[ "$status" -eq 0 ] || exit "$status"
+exec "${CAIRN_HOOK_BIN:?cairn hook binary not set}" internal-pre-receive
 "#;
+
+/// The largest pack one push may carry, said to receive-pack so git
+/// refuses it while reading rather than after storing it. Generous for
+/// an ordinary repository's first push and far below what an owner's
+/// disk quota is likely to be.
+pub const MAX_PACK_BYTES: u64 = 256 * 1024 * 1024;
 
 /// The oldest git this forge runs on.
 ///
@@ -472,6 +479,17 @@ impl GitStore {
                     .arg("-c")
                     .arg(format!("receive.procReceiveRefs={refs}"));
             }
+            // Keep a pushed pack a pack. Git's default explodes any push
+            // of a hundred objects or fewer into loose objects, which
+            // throws away delta compression: a few megabytes on the wire
+            // becomes tens on disk, and a disk quota counted from the
+            // disk cannot see it coming. Said here rather than written
+            // into each repository's config, so it holds for every
+            // repository this binary serves, old ones included.
+            command.arg("-c").arg("receive.unpackLimit=1");
+            command
+                .arg("-c")
+                .arg(format!("receive.maxInputSize={MAX_PACK_BYTES}"));
         }
         command
             .arg(service.subcommand())
@@ -1039,17 +1057,40 @@ fn directory_size(dir: &Path) -> GitResult<u64> {
     let mut total = 0u64;
     let mut pending = vec![dir.to_path_buf()];
     while let Some(path) = pending.pop() {
-        for entry in std::fs::read_dir(&path)? {
-            let entry = entry?;
-            let meta = entry.metadata()?;
+        // A directory that vanished under us is not a failure of the
+        // measurement: git removes its own temporary directories while
+        // this walks, and losing the whole answer to that would freeze
+        // the number at whatever it was last time.
+        let Ok(entries) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        for entry in entries {
+            let Ok(entry) = entry else { continue };
+            let Ok(meta) = entry.metadata() else { continue };
+            total = total.saturating_add(occupied(&meta));
             if meta.is_dir() {
                 pending.push(entry.path());
-            } else {
-                total = total.saturating_add(meta.len());
             }
         }
     }
     Ok(total)
+}
+
+/// What a file takes up, rather than what it says it is.
+///
+/// A git object is tens of bytes of content in a whole filesystem block,
+/// so on a repository of loose objects the apparent size understates the
+/// disk by two orders of magnitude — and a disk quota that trusts it is
+/// counting the wrong thing. Directories take room too.
+#[cfg(unix)]
+fn occupied(meta: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.blocks().saturating_mul(512)
+}
+
+#[cfg(not(unix))]
+fn occupied(meta: &std::fs::Metadata) -> u64 {
+    if meta.is_dir() { 0 } else { meta.len() }
 }
 
 #[cfg(test)]

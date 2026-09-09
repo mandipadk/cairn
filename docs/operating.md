@@ -374,11 +374,23 @@ have no limit on. An owner sees their own on their page.
 
 Disk is measured, not tracked: git changes the answer by packing
 objects, with nothing happening in the forge to record it. Each
-repository is measured after a push and after a landing, and a forge
-that has never measured any looks once at startup, so an upgrade does
-not report everybody at zero. What a push will cost is not knowable
-until it is unpacked — so a push from an owner already over their disk
-is refused, rather than the one that crossed the line.
+repository is measured after a push, after a landing however it ends, and
+after an import; a forge that has never measured any looks once at
+startup, and one repository an hour is measured again, so a repository
+that shrank is noticed without anybody pushing to it.
+
+A push from an owner with no room is refused in `pre-receive`, which is
+the last moment a refusal still costs the forge nothing: git holds a
+pushed pack aside until that hook answers and throws it away if the
+answer is no. A refusal any later — the hook that records the change,
+say — rejects the branch and keeps the objects, which is a disk quota
+that cannot actually refuse anything. Pushed packs are kept packed
+(`receive.unpackLimit=1`), because git's default explodes a small push
+into loose objects and multiplies what it takes on disk, and a pack
+larger than 256 MiB is refused by git while it is being read. Size is
+counted in blocks rather than bytes, since a git object is a few dozen
+bytes in a whole filesystem block. An import is checked the same way
+before the forge dials out, and measured after.
 
 ### What is yours, and what is the forge's
 

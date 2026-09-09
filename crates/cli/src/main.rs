@@ -104,18 +104,18 @@ enum Command {
         /// minute. 0 turns the allowance off.
         #[arg(long, default_value_t = cairn_server::DEFAULT_ANONYMOUS_READS_PER_MINUTE)]
         anonymous_reads_per_minute: u32,
-        /// Repositories one owner may have. 0 for no limit.
+        /// Repositories one owner may have; `none` for no limit.
         #[arg(long)]
-        quota_repos: Option<u32>,
-        /// Agents one owner may have. 0 for no limit.
+        quota_repos: Option<String>,
+        /// Agents one owner may have; `none` for no limit.
         #[arg(long)]
-        quota_agents: Option<u32>,
-        /// Open tasks one owner's repositories may hold at once. 0 for no limit.
+        quota_agents: Option<String>,
+        /// Open tasks one owner's repositories may hold at once; `none` for no limit.
         #[arg(long)]
-        quota_open_tasks: Option<u32>,
-        /// Disk one owner's repositories may take, in megabytes. 0 for no limit.
+        quota_open_tasks: Option<String>,
+        /// Disk one owner's repositories may take, in mebibytes; `none` for no limit.
         #[arg(long)]
-        quota_disk_mb: Option<u64>,
+        quota_disk_mb: Option<String>,
         /// The Ed25519 key that signs merge receipts; generated there when
         /// absent. Beside the database when unset.
         #[arg(long)]
@@ -242,9 +242,11 @@ enum AdminCommand {
         remove: Option<String>,
     },
     /// Show or set what one owner may take up here. Without any of the
-    /// limits, it prints what they may have and what they are using; a
-    /// limit given as 0 means no limit at all. Setting one replaces
-    /// this owner's quota entirely.
+    /// limits it only prints what they may have and what they are
+    /// using. A limit given is laid over what was already said about
+    /// this owner, so changing one changes one; `none` means no limit
+    /// at all, and a limit this command is not told about keeps
+    /// following the forge's own number.
     Quota {
         #[arg(long, default_value = "cairn.db")]
         db: PathBuf,
@@ -253,14 +255,18 @@ enum AdminCommand {
         /// Who the change is recorded as: an unscoped admin.
         #[arg(long = "as")]
         r#as: Option<String>,
+        /// Repositories one owner may have; `none` for no limit.
         #[arg(long)]
-        repos: Option<u32>,
+        repos: Option<String>,
+        /// Agents one owner may have; `none` for no limit.
         #[arg(long)]
-        agents: Option<u32>,
+        agents: Option<String>,
+        /// Open tasks their repositories may hold at once; `none` for no limit.
         #[arg(long)]
-        open_tasks: Option<u32>,
+        open_tasks: Option<String>,
+        /// Disk their repositories may take, in mebibytes; `none` for no limit.
         #[arg(long)]
-        disk_mb: Option<u64>,
+        disk_mb: Option<String>,
     },
     /// Give every repository named the old way, without its owner in
     /// front, its owner's name: `demo` becomes `ada/demo`, on the record
@@ -374,22 +380,35 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let git_version = cairn_git::preflight().context("checking the git on PATH")?;
             tracing::info!("cairn {}", cairn_core::VERSION);
-            // What an owner may take up here, before anybody's own
-            // quota is consulted. Absent leaves the built-in default
-            // standing; 0 means that particular limit does not exist.
+            // What an owner may take up here, before anything said
+            // about one owner in particular. Absent leaves the built-in
+            // number standing; `none` is no limit; 0 is zero, because
+            // an operator who types 0 means none allowed and reading it
+            // as "unlimited" is the wrong way round to be wrong.
             let mut quota = cairn_core::Quota::default();
-            let limit = |given: Option<u32>| given.map(|n| (n > 0).then_some(n));
-            if let Some(repos) = limit(quota_repos) {
-                quota.repos = repos;
+            let said = |given: Option<String>, what: &str| -> anyhow::Result<Option<Option<u64>>> {
+                match given.as_deref() {
+                    None => Ok(None),
+                    Some("none") => Ok(Some(None)),
+                    Some(number) => Ok(Some(Some(number.parse::<u64>().with_context(|| {
+                        format!("--{what} takes a number or the word none, not {number:?}")
+                    })?))),
+                }
+            };
+            let narrow = |given: Option<Option<u64>>| -> Option<Option<u32>> {
+                given.map(|value| value.map(|n| n.min(u64::from(u32::MAX)) as u32))
+            };
+            if let Some(value) = narrow(said(quota_repos, "quota-repos")?) {
+                quota.repos = value;
             }
-            if let Some(agents) = limit(quota_agents) {
-                quota.agents = agents;
+            if let Some(value) = narrow(said(quota_agents, "quota-agents")?) {
+                quota.agents = value;
             }
-            if let Some(tasks) = limit(quota_open_tasks) {
-                quota.open_tasks = tasks;
+            if let Some(value) = narrow(said(quota_open_tasks, "quota-open-tasks")?) {
+                quota.open_tasks = value;
             }
-            if let Some(disk) = quota_disk_mb.map(|mb| (mb > 0).then(|| mb * 1024 * 1024)) {
-                quota.disk = disk;
+            if let Some(value) = said(quota_disk_mb, "quota-disk-mb")? {
+                quota.disk = value.map(|mb| mb.saturating_mul(1024 * 1024));
             }
             let store = Store::open(&db)
                 .with_context(|| format!("opening forge database at {}", db.display()))?
@@ -623,36 +642,54 @@ async fn main() -> anyhow::Result<()> {
                     .with_context(|| format!("opening forge database at {}", db.display()))?;
                 let owner_id =
                     PrincipalId::new(&owner).context("the owner must be a valid slug")?;
-                let asked = [
-                    repos.is_some(),
-                    agents.is_some(),
-                    open_tasks.is_some(),
-                    disk_mb.is_some(),
-                ];
-                if asked.iter().any(|given| *given) {
+                // A confident table about somebody who does not exist is
+                // worse than a refusal: it is what an operator reads
+                // while working out why somebody is blocked.
+                let record = store
+                    .principal(&owner_id)?
+                    .with_context(|| format!("no principal named {owner}"))?;
+                anyhow::ensure!(
+                    record.kind != cairn_core::PrincipalKind::Agent,
+                    "{owner} is an agent; a quota belongs to a person or an organisation"
+                );
+                // `none` rather than 0, because 0 is a real answer: it
+                // means this owner may have none of that thing.
+                let said = |given: Option<&String>| -> anyhow::Result<Option<Option<u64>>> {
+                    match given.map(String::as_str) {
+                        None => Ok(None),
+                        Some("none") => Ok(Some(None)),
+                        Some(number) => {
+                            Ok(Some(Some(number.parse::<u64>().with_context(|| {
+                                format!("{number:?} is not a number, and not the word none")
+                            })?)))
+                        }
+                    }
+                };
+                let narrow = |given: Option<Option<u64>>| -> Option<Option<u32>> {
+                    given.map(|value| value.map(|n| n.min(u64::from(u32::MAX)) as u32))
+                };
+                let patch = cairn_core::QuotaOverride {
+                    repos: narrow(said(repos.as_ref())?),
+                    agents: narrow(said(agents.as_ref())?),
+                    open_tasks: narrow(said(open_tasks.as_ref())?),
+                    disk: said(disk_mb.as_ref())?
+                        .map(|mb| mb.map(|mb| mb.saturating_mul(1024 * 1024))),
+                };
+                if !patch.is_empty() {
                     let actor = PrincipalId::new(r#as.as_deref().unwrap_or(""))
                         .context("--as <admin> says who this is recorded as")?;
-                    let mut quota = store.quota(&owner_id)?;
-                    let limit = |given: Option<u32>| given.map(|n| (n > 0).then_some(n));
-                    if let Some(value) = limit(repos) {
-                        quota.repos = value;
-                    }
-                    if let Some(value) = limit(agents) {
-                        quota.agents = value;
-                    }
-                    if let Some(value) = limit(open_tasks) {
-                        quota.open_tasks = value;
-                    }
-                    if let Some(value) = disk_mb.map(|mb| (mb > 0).then(|| mb * 1024 * 1024)) {
-                        quota.disk = value;
-                    }
-                    store.set_quota(&actor, &owner_id, &quota)?;
+                    // Laid over what was already said about them, not
+                    // over what happens to hold today: merging over the
+                    // effective quota would freeze this moment's
+                    // defaults into a row they never escape.
+                    let merged = store.quota_override(&owner_id)?.and_then(&patch);
+                    store.set_quota(&actor, &owner_id, &merged)?;
                 }
                 let quota = store.quota(&owner_id)?;
                 let usage = store.usage(&owner_id)?;
                 let say = |what: &str, used: String, limit: Option<String>| {
                     println!(
-                        "{what:<12} {used:>10} of {}",
+                        "{what:<12} {used:>12} of {}",
                         limit.unwrap_or_else(|| "no limit".to_owned())
                     );
                 };
@@ -673,8 +710,8 @@ async fn main() -> anyhow::Result<()> {
                 );
                 say(
                     "disk",
-                    format!("{} MB", usage.disk / (1024 * 1024)),
-                    quota.disk.map(|b| format!("{} MB", b / (1024 * 1024))),
+                    cairn_server::in_bytes(usage.disk),
+                    quota.disk.map(cairn_server::in_bytes),
                 );
             }
             AdminCommand::AdoptOwners { db, repos, r#as } => {

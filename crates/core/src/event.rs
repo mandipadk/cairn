@@ -58,11 +58,11 @@ pub enum Event {
     },
 
     /// What one owner may take up here, set by whoever runs the forge.
-    /// Replaces that owner's quota entirely; a field the quota leaves
-    /// out is a thing they have no limit on.
+    /// A field the override leaves out is one this owner follows the
+    /// forge's own number on.
     QuotaSet {
         owner: PrincipalId,
-        quota: crate::types::Quota,
+        quota: crate::types::QuotaOverride,
     },
 
     /// A human set a password, theirs or (as an admin) someone's.

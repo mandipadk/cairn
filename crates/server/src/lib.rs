@@ -40,7 +40,7 @@ use axum::routing::{get, post};
 
 /// A size a person reads at a glance: three significant figures and a
 /// binary unit, since that is what disk is sold and measured in.
-pub(crate) fn in_bytes(bytes: u64) -> String {
+pub fn in_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut size = bytes as f64;
     let mut unit = 0;

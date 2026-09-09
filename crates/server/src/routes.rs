@@ -178,7 +178,11 @@ pub async fn get_quota(
         }
         Ok(Json(json!({
             "owner": record.id,
+            // What holds, what was said about them in particular, and
+            // what everyone else gets, so the reader can see which of
+            // the three a number came from.
             "quota": s.quota(&record.id)?,
+            "override": s.quota_override(&record.id)?,
             "usage": s.usage(&record.id)?,
             "default": s.default_quota(),
         })))
@@ -187,19 +191,31 @@ pub async fn get_quota(
 
 /// Say what one owner may take up. Whoever runs the forge decides; a
 /// bigger plan is a bigger quota and nothing else.
+///
+/// What arrives is laid over what was already said about them, field by
+/// field: a limit not mentioned is left alone, `null` is no limit at
+/// all, and a number is that number. Tightening one thing should not
+/// silently loosen three, which is what replacing the whole quota did.
 pub async fn set_quota(
     State(app): State<AppState>,
     actor: Actor,
     Path(id): Path<String>,
-    Json(quota): Json<cairn_core::Quota>,
+    Json(patch): Json<cairn_core::QuotaOverride>,
 ) -> ApiResult<Json<Value>> {
     let owner = principal_id(&id)?;
-    let env = app.with_store(|s| {
+    let (env, quota) = app.with_store(|s| {
         s.acting_as(actor.1.as_ref());
-        s.set_quota(&actor.0, &owner, &quota)
+        let merged = s.quota_override(&owner)?.and_then(&patch);
+        let env = s.set_quota(&actor.0, &owner, &merged)?;
+        let quota = s.quota(&owner)?;
+        Ok::<_, ApiError>((env, quota))
     })?;
     app.publish(&env);
-    Ok(committed(None, &env))
+    // Answer with what now holds, so nobody has to guess what a partial
+    // body did.
+    let mut body = committed(None, &env);
+    body.0["quota"] = json!(quota);
+    Ok(body)
 }
 
 #[derive(Deserialize)]

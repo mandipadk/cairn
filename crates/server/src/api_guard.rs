@@ -103,7 +103,17 @@ async fn remembered(
         )
         .into_response();
     };
-    if parts.status.is_success() || parts.status.is_client_error() {
+    // A refusal whose cause is somebody else's to change is not an
+    // answer worth keeping: an agent refused for want of room, retrying
+    // under the same key after the operator made room, would be handed
+    // the old refusal for a day.
+    let will_change_on_its_own = parts
+        .headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|kind| kind.contains("json"))
+        && String::from_utf8_lossy(&bytes).contains("\"over_quota\"");
+    if (parts.status.is_success() || parts.status.is_client_error()) && !will_change_on_its_own {
         let replay = Replay {
             fingerprint,
             status: parts.status.as_u16(),

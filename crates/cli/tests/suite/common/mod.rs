@@ -278,6 +278,52 @@ pub fn git_raw(dir: &Path, args: &[&str]) -> std::process::Output {
 /// a bearer token, with no dev header anywhere.
 /// A request with no identity at all: what a stranger's browser or a
 /// script without a token sends.
+/// A write under an idempotency key, as an agent that retries makes it.
+pub async fn call_keyed(
+    app: &Router,
+    path: &str,
+    key: &str,
+    body: Value,
+) -> (StatusCode, String, Value) {
+    let request = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("x-cairn-principal", "ada")
+        .header("idempotency-key", key)
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let response = tower::ServiceExt::oneshot(app.clone(), request)
+        .await
+        .unwrap();
+    let status = response.status();
+    let replayed = response
+        .headers()
+        .get("idempotent-replayed")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, replayed, value)
+}
+
+/// A write whose answer may not be JSON at all, for the doors where a
+/// body is refused before any handler sees it.
+pub async fn post_raw(app: &Router, path: &str, body: Value) -> StatusCode {
+    let request = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("x-cairn-principal", "ada")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    tower::ServiceExt::oneshot(app.clone(), request)
+        .await
+        .unwrap()
+        .status()
+}
+
 /// The status of one request, whatever the body turns out to be. For
 /// doors that answer with something that is not JSON — a git pack, a
 /// refusal in prose.

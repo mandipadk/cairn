@@ -9,7 +9,7 @@ use crate::common::*;
 use axum::http::StatusCode;
 use serde_json::json;
 
-/// Set what `owner` may take up. Whatever is left out is unlimited.
+/// Set what `owner` may take up. Whatever is left out is left alone.
 async fn quota(forge: &Forge, owner: &str, quota: serde_json::Value) {
     let (status, body) = api(
         &forge.app,
@@ -709,5 +709,82 @@ async fn ownership_moving_does_not_move_past_a_limit() {
         Some(json!({})),
     )
     .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn changing_one_limit_changes_one_limit() {
+    let forge = boot().await;
+    let app = &forge.app;
+    let (_, before) = api(app, "GET", "/api/principals/ada/quota", "ada", None).await;
+    assert_eq!(
+        before["quota"], before["default"],
+        "nothing said about ada yet"
+    );
+
+    // Tightening one thing must not quietly loosen the others. The
+    // whole quota used to be replaced, so naming one field granted
+    // unlimited everything else.
+    quota(&forge, "ada", json!({ "repos": 5 })).await;
+    let (_, after) = api(app, "GET", "/api/principals/ada/quota", "ada", None).await;
+    assert_eq!(after["quota"]["repos"], 5);
+    assert_eq!(
+        after["quota"]["agents"], before["default"]["agents"],
+        "the rest still follows the forge: {after}"
+    );
+    assert_eq!(after["quota"]["disk"], before["default"]["disk"]);
+    assert_eq!(
+        after["override"],
+        json!({ "repos": 5 }),
+        "and only what was said is remembered: {after}"
+    );
+
+    // Null is how you say no limit at all, and zero means zero.
+    quota(&forge, "ada", json!({ "agents": null, "open_tasks": 0 })).await;
+    let (_, after) = api(app, "GET", "/api/principals/ada/quota", "ada", None).await;
+    assert!(after["quota"]["agents"].is_null(), "{after}");
+    assert_eq!(after["quota"]["open_tasks"], 0);
+    assert_eq!(after["quota"]["repos"], 5, "and the earlier one stands");
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/tasks",
+        "ada",
+        Some(json!({ "repo": "ada/demo", "title": "x", "spec": "y" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "zero means zero: {body}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_misspelled_limit_is_refused_rather_than_granted() {
+    let forge = boot().await;
+    // Every field defaulting meant {"repo": 2} was a quota that said
+    // nothing, which replaced the row with no limits at all — a typo
+    // that removed every limit and answered 200.
+    let status = post_raw(
+        &forge.app,
+        "/api/principals/ada/quota",
+        json!({ "repo": 2 }),
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK, "a field nobody knows is a refusal");
+    let (_, seen) = api(&forge.app, "GET", "/api/principals/ada/quota", "ada", None).await;
+    assert_eq!(seen["quota"], seen["default"], "nothing changed: {seen}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refusal_that_somebody_else_can_lift_is_not_remembered() {
+    let forge = boot().await;
+    let app = &forge.app;
+    quota(&forge, "ada", json!({ "repos": 1 })).await;
+    let key = "the-same-intent";
+    let (status, _, _) = call_keyed(app, "/api/repos", key, json!({ "name": "another" })).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    // The operator makes room. Retrying the same intent must do the
+    // thing, not hand back the refusal it was given before.
+    quota(&forge, "ada", json!({ "repos": 2 })).await;
+    let (status, _, body) = call_keyed(app, "/api/repos", key, json!({ "name": "another" })).await;
     assert_eq!(status, StatusCode::OK, "{body}");
 }

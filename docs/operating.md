@@ -372,14 +372,23 @@ to delete something or ask for more, and arrives as `409` with
 The forge's own numbers are the defaults: 50 repositories, 25 agents,
 200 open tasks and 5 GiB of disk. Change them for the whole forge with
 `--quota-repos`, `--quota-agents`, `--quota-open-tasks` and
-`--quota-disk-mb`, where `0` means that limit does not exist. Set them
-for one owner with `cairn admin quota <owner> --as <admin> --repos 200`,
-which prints what they may have and what they are using; with no limits
-given it just prints. Over the API it is
-`GET /api/principals/{id}/quota`, readable by that owner and whoever
-runs the forge, and `POST` of a quota object to the same address, which
-replaces that owner's quota entirely — a field left out is a thing they
-have no limit on. An owner sees their own on their page.
+`--quota-disk-mb`. Each takes a number or the word `none` for no limit
+at all; `0` means zero, because an operator who types 0 means none
+allowed.
+
+What is said about one owner is laid over those numbers, field by
+field, so changing one limit changes one limit and everything else
+keeps following the forge. Over the API,
+`POST /api/principals/{id}/quota` takes `{"repos": 5}` to set one,
+`{"agents": null}` to lift one entirely, and leaves out what it does
+not mention; a field nobody knows is refused rather than quietly
+treated as "no limit". It answers with what now holds.
+`GET` on the same address gives what holds, what was said about that
+owner in particular, what they are using, and the forge's own numbers,
+and is readable by that owner, by the members of an organisation, and
+by whoever runs the forge. `cairn admin quota <owner> --as <admin>
+--repos 200` does the same offline and prints the result; with no
+limits given it only prints. An owner sees their own on their page.
 
 Disk is measured, not tracked: git changes the answer by packing
 objects, with nothing happening in the forge to record it. Each
@@ -643,9 +652,10 @@ Offline administration, against the database file (root authority):
   grant admin.
 - `cairn admin waitlist [--remove <email>]` — list the waitlist, or
   remove someone who asked to be forgotten.
-- `cairn admin quota <owner> [--as <admin>] [--repos n] [--agents n]
-  [--open-tasks n] [--disk-mb n]` — what one owner may take up and what
-  they are using; with no limits given, it only prints.
+- `cairn admin quota <owner> [--as <admin>] [--repos n|none]
+  [--agents n|none] [--open-tasks n|none] [--disk-mb n|none]` — what one
+  owner may take up and what they are using; with no limits given, it
+  only prints. `--as` is required whenever a limit is given.
 - `cairn admin reports [--dismiss <id>]` — what people reported broke,
   newest first; or dismiss one.
 - `cairn admin mail-check` — reach the relay and authenticate, sending
@@ -678,7 +688,8 @@ Other commands: `cairn serve`, `cairn mcp --server <url> --token <t>`,
   `--reads-per-minute <n>` (default 1200) and
   `--anonymous-reads-per-minute <n>` (default 240).
 - `--quota-repos`, `--quota-agents`, `--quota-open-tasks`,
-  `--quota-disk-mb` (defaults 50, 25, 200 and 5120; 0 for no limit).
+  `--quota-disk-mb` (defaults 50, 25, 200 and 5120 MiB; each takes a
+  number or `none`).
 - `--signing-key-file <path>` (default `signing.key` beside the database).
 
 Files beside the database: `signing.key` (owner-only). Under `--repos`:

@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 27;
+const SCHEMA_VERSION: i64 = 28;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -3001,7 +3001,7 @@ mod projection_shape {
         assert_eq!(
             (super::SCHEMA_VERSION, shape.as_str()),
             (
-                27,
+                28,
                 r#"{"require_executed_check":true,"independence":"human_or_two_models","require_runner_verification":false,"runner_quorum":1,"required_domains":[],"require_concerns_resolved":true,"attention_budget":null,"agents_act_in_sessions":false,"trust":null}"#
             ),
             "the policy's stored shape changed: bump SCHEMA_VERSION and pin the new shape here"
@@ -3043,7 +3043,7 @@ mod projection_shape {
         assert_eq!(
             (super::SCHEMA_VERSION, shape.as_str()),
             (
-                27,
+                28,
                 r#"{"repos":50,"agents":25,"open_tasks":200,"disk":5368709120}"#
             ),
             "the quota's stored shape changed: bump SCHEMA_VERSION and pin the new shape here"

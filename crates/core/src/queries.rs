@@ -1374,7 +1374,7 @@ pub(crate) mod raw {
     }
 
     /// The quota set for this owner, if the operator set one.
-    pub fn quota(conn: &Connection, owner: &str) -> CoreResult<Option<crate::Quota>> {
+    pub fn quota(conn: &Connection, owner: &str) -> CoreResult<Option<crate::QuotaOverride>> {
         let stored: Option<String> = conn
             .prepare_cached("SELECT quota FROM quotas WHERE owner = ?")?
             .query_row(params![owner], |row| row.get(0))
@@ -1459,10 +1459,16 @@ impl Store {
         raw::current_name_for(&self.conn, old)
     }
 
-    /// What this owner may take up: their own quota if the operator set
-    /// one, this forge's default otherwise.
+    /// What this owner may take up: the forge's numbers, with whatever
+    /// the operator said about this owner in particular laid on top.
     pub fn quota(&self, owner: &PrincipalId) -> CoreResult<crate::Quota> {
-        Ok(raw::quota(&self.conn, owner.as_str())?.unwrap_or_else(|| self.default_quota.clone()))
+        let over = raw::quota(&self.conn, owner.as_str())?.unwrap_or_default();
+        Ok(self.default_quota.under(&over))
+    }
+
+    /// Only what was said about this owner, with nothing filled in.
+    pub fn quota_override(&self, owner: &PrincipalId) -> CoreResult<crate::QuotaOverride> {
+        Ok(raw::quota(&self.conn, owner.as_str())?.unwrap_or_default())
     }
 
     /// This forge's quota for an owner nobody has said anything about.

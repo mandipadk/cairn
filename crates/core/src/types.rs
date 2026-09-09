@@ -281,6 +281,80 @@ impl Quota {
             disk: None,
         }
     }
+
+    /// This quota with `over` laid on top: a field the override does not
+    /// mention keeps following the forge's number, so an operator who
+    /// changes one limit changes one limit.
+    pub fn under(&self, over: &QuotaOverride) -> Quota {
+        Quota {
+            repos: over.repos.unwrap_or(self.repos),
+            agents: over.agents.unwrap_or(self.agents),
+            open_tasks: over.open_tasks.unwrap_or(self.open_tasks),
+            disk: over.disk.unwrap_or(self.disk),
+        }
+    }
+}
+
+/// What an operator has said about one owner in particular.
+///
+/// Each field is three-valued on purpose, because "the same as everyone
+/// else", "no limit at all" and "this number" are three different
+/// answers and a quota that cannot tell them apart makes the first two
+/// the same. Absent is the forge's default; `null` is no limit; a
+/// number is that number, and zero is zero.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuotaOverride {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "said"
+    )]
+    pub repos: Option<Option<u32>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "said"
+    )]
+    pub agents: Option<Option<u32>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "said"
+    )]
+    pub open_tasks: Option<Option<u32>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "said"
+    )]
+    pub disk: Option<Option<u64>>,
+}
+
+/// Tell "the caller wrote null" apart from "the caller wrote nothing",
+/// which serde otherwise flattens into the same `None`.
+fn said<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Deserialize::deserialize(deserializer).map(Some)
+}
+
+impl QuotaOverride {
+    /// This override with `newer` laid on top, field by field.
+    pub fn and_then(&self, newer: &QuotaOverride) -> QuotaOverride {
+        QuotaOverride {
+            repos: newer.repos.or(self.repos),
+            agents: newer.agents.or(self.agents),
+            open_tasks: newer.open_tasks.or(self.open_tasks),
+            disk: newer.disk.or(self.disk),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == QuotaOverride::default()
+    }
 }
 
 /// What an owner is actually taking up, counted from the projections.

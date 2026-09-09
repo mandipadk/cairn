@@ -326,7 +326,7 @@ fn within_quota(
     limit: impl Fn(&Quota) -> Option<u32>,
     have: impl Fn(&Usage) -> u32,
 ) -> CoreResult<()> {
-    let quota = raw::quota(tx, owner.as_str())?.unwrap_or_else(|| default.clone());
+    let quota = default.under(&raw::quota(tx, owner.as_str())?.unwrap_or_default());
     let Some(limit) = limit(&quota) else {
         return Ok(());
     };
@@ -1904,7 +1904,9 @@ impl Store {
             .prepare_cached("SELECT COALESCE(bytes, 0) FROM repo_sizes WHERE repo = ?")
             .and_then(|mut q| q.query_row(rusqlite::params![repo], |row| row.get(0)))
             .unwrap_or(0);
-        let quota = raw::quota(&tx, to.as_str())?.unwrap_or_else(|| self.default_quota.clone());
+        let quota = self
+            .default_quota
+            .under(&raw::quota(&tx, to.as_str())?.unwrap_or_default());
         if let Some(limit) = quota.disk {
             let after = raw::usage(&tx, to.as_str())?
                 .disk
@@ -2819,7 +2821,7 @@ impl Store {
         &mut self,
         actor: &PrincipalId,
         owner: &PrincipalId,
-        quota: &Quota,
+        quota: &crate::types::QuotaOverride,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
         authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;

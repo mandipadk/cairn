@@ -1,0 +1,132 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Ireads0104",
+      "id": "c-5hnv1k3hpn32jeetnk4mbbs59q",
+      "landed_oid": "8b2165d11635e6215a35cb43f1b0bb1f4b4a23a4",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 104,
+      "opened_at": "2026-09-09T23:11:03.291059282Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn/cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Meter the pack, not just the asking for it",
+      "updated_at": "2026-09-09T23:11:53.928076499Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-5hnv1k3hpn32jeetnk4mbbs59q",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-3zgjp6djzr8drj1gq5gv71aa5y",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 817,
+        "summary": "fmt, clippy -D warnings, the workspace suite and the first-run walk pass. A new test spends a small allowance on one pack transfer and finds the next one refused, which is the door that was free before.",
+        "unchecked": [
+          "What twenty units per pack feels like on a busy forge: the number is a judgement, not a measurement, and nothing here clones enough to find out.",
+          "The cost of resolving identity in the middleware is lower than it was but still paid twice per request; sharing one resolution with the handler is a change of its own.",
+          "IPv6 callers are still keyed by full address, so a residential prefix is many allowances; grouping by /64 follows."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "8b2165d11635e6215a35cb43f1b0bb1f4b4a23a4",
+    "landed_at": "2026-09-09T23:11:53.928076499Z",
+    "merged_by": "mandip",
+    "repo": "cairn/cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-5hnv1k3hpn32jeetnk4mbbs59q",
+      "commit_oid": "8b2165d11635e6215a35cb43f1b0bb1f4b4a23a4",
+      "message": "Meter the pack, not just the asking for it\n\nThe read allowance was written because a clone forks git and streams a\npack and nothing about being anonymous made that cheaper. It then\ncounted only GET, and the pack travels by POST — so the advertisement\nwas metered and the answer was free. A clone spends twenty units now,\nbecause a pack is not a page view, and the door that carries it is\ncounted like every other read.\n\nThree things around it were wrong in ways that only show under load.\nWorking out who is asking was rebuilding the viewer's whole sidebar,\nwhich walks every repository they can read, and the handler then did it\nagain; the allowance now asks only for a name. A credential that does\nnot resolve — revoked, expired, deactivated — was charged to the\naddress's allowance, so one agent looping on a dead token could exhaust\nwhat every visitor from that place had; it gets a bucket of its own\nnow. And the map of who has spent what was swept end to end on every\nsingle request, while holding the lock every other request was waiting\non, which is precisely backwards under the load this exists to survive.\n\nBehind a reverse proxy without --trust-proxy every visitor appears to\narrive from the proxy, so one allowance is shared by the whole internet\nand the forge looks broken to everybody at once. That is now said at\nstartup and in the guide, next to the allowance rather than three\nsections away under sign-in.\n\nChange-Id: Ireads0104\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "crates/cli/src/main.rs",
+        "crates/cli/tests/suite/common/mod.rs",
+        "crates/cli/tests/suite/quotas_flow.rs",
+        "crates/server/src/guard.rs",
+        "crates/server/src/state.rs",
+        "crates/server/src/web/mod.rs",
+        "docs/operating.md"
+      ],
+      "session": null
+    },
+    "seq": 820,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-3zgjp6djzr8drj1gq5gv71aa5y",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-3zgjp6djzr8drj1gq5gv71aa5y",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 107 judged claims, 98% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 6 path(s) outside docs/, *.md: crates/cli/src/main.rs, crates/cli/tests/suite/common/mod.rs, crates/cli/tests/suite/quotas_flow.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-5hnv1k3hpn32jeetnk4mbbs59q",
+        "claim": "cl-3zgjp6djzr8drj1gq5gv71aa5y",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "id": "vr-1zr0k4ngn9vr5k4arpn2d4qzmg",
+        "observed": "exit 0: Doc-tests cairn_server",
+        "revision": 1,
+        "seq": 818
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "Se6ckmXX1MAk7rMugWbrf2YOkmm/94OyD2H5lTGuGJq9YDDPEQA6VO5894xZehPODX/2ImIBqRi8AY97pJHmAA=="
+  }
+}

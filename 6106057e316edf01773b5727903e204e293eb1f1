@@ -1,0 +1,166 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Ihardening0106",
+      "id": "c-2d2ekmnf9af7f0byz3qdvkks26",
+      "landed_oid": "6106057e316edf01773b5727903e204e293eb1f1",
+      "landed_revision": 2,
+      "latest_revision": 2,
+      "number": 106,
+      "opened_at": "2026-09-10T04:30:52.389256577Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn/cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Assume everyone will try everything",
+      "updated_at": "2026-09-10T04:40:37.855690988Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-2d2ekmnf9af7f0byz3qdvkks26",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-180kn87rxmbmx05gq7x9zgk819",
+        "kind": "test",
+        "passed": true,
+        "revision": 2,
+        "seq": 835,
+        "summary": "Revision 2: the runner's ZFS reports a just-written file as nearly empty, so the measurement now takes the larger of allocated and logical size; git unit tests pass on that box. fmt, clippy, the suite and the first-run walk pass; schema 29 rehearsed.",
+        "unchecked": [
+          "Concurrent pushes reserving room against each other is covered by a unit test of the reservation, not by two real pushes racing.",
+          "The daily collection and the quarantine sweep ran under tests, not yet on the running forge.",
+          "A request body on /api is read with no timeout of its own; a client that drips one holds a connection, not a lock, and the read allowance still bounds how many.",
+          "The streaming clone was exercised by the suite's clones over real git; nothing measured the forge's memory while it did."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "6106057e316edf01773b5727903e204e293eb1f1",
+    "landed_at": "2026-09-10T04:40:37.855690988Z",
+    "merged_by": "mandip",
+    "repo": "cairn/cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-2d2ekmnf9af7f0byz3qdvkks26",
+      "commit_oid": "6106057e316edf01773b5727903e204e293eb1f1",
+      "message": "Assume everyone will try everything\n\nA second pass over the quota and authority work, done the way an\nattacker would do it: every door checked for the one shortcut that\nreaches the answer without asking. There were many, and each is now\nasked.\n\nRunning the forge is a person's. The admin grant is refused to an\nagent, an agent is refused a place on a team, and every act over\nprincipals — minting a token for somebody else, stopping or restarting\nthem, transferring a repository, inviting — is refused to an agent\nwhatever it holds, so an agent handed admin by an old log or a mistaken\nclick cannot become its operator. A session credential is refused every\nstanding act it used to reach by being its holder's own: setting a\npassword, creating a repository, accepting or declining a transfer,\nrevoking a token or a grant, linking an identity, and discussion on a\nchange outside its repository. The labels that make a token an\ninvitation are the forge's alone to write, so no API caller can mint a\nbrowser session for somebody. A stopped owner takes nothing new, a\nstopped team confers nothing, and a token for a stopped agent is not\nminted. When a person is deactivated, the standing tokens they drew for\nagents they do not own — a team's agent, kept in their own harness —\nare revoked with them, which needs the log's projection of tokens to\nremember who drew each (schema 29). A repository moves only by its\nowner's hand or the forge's: a grant of admin on it runs it and does\nnot carry it off, a member cannot offer an organisation's repository to\nthemselves, and the grants the old owner handed out are revoked by\nevents of their own that name the transfer. The owner of a repository\nmay revoke any grant scoped to it, whoever issued it.\n\nThe push door is measured, bound and swept. The pre-receive hook\nmeasures what git is holding in quarantine and sends the number, so the\nroom check counts what this push brings after thin-pack completion and\nwith the index files git writes, rather than a number from before any\npush started; and what each push in flight is bringing is reserved\nuntil its receive-pack ends, so fifty pushes fired at once no longer\neach pass on the same stale count. The hook's token now names the one\npush into the one repository it was issued for and dies with it, and\nthe hook's endpoints take nothing else. The measurement guard is held\nfrom before git is spawned, so a push the pusher abandons or the\ntimeout kills is still counted, and quarantines such a push leaves\nbehind are swept before the next count. The forge's git reads no\nconfiguration but its own, says where its hooks are on every receive,\nbounds the ref list of a push, checks pushed objects, and dies as a\nprocess group so a hook cannot outlive it; the hook gives the forge\nthirty seconds to answer and exits with its parent. A clone streams\nrather than being held whole, a push streams into receive-pack, and\ntransfers are served a few at a time per caller. Collection prunes only\nobjects older than an hour, so a push between quarantine and its ref is\nnever deleted, and runs once a day per repository from the queue.\n\nEvery refusal a program reads is in the API's shape: an unknown route or\nmethod under /api or /git, a query or path that does not fit, a passkey\nrefusal, a cross-site write. The page routes no longer take /api/nope\nfor a repository named nope, and a principal cannot be called by a name\nthe forge answers to itself. A refused write is no longer remembered\nfor its idempotency key: a retry asks again, since the room, the\nverdict or the grant it wanted may have arrived. The people page says\nhow many agents go down with a person, the agents page marks a retired\nagent, hides the controls that would only refuse, and can retire one;\nan organisation's members are shown to those signed in, not to\nstrangers; the too-many page arrives as a page.\n\nThe documents now say what the code does about all of this, including\nwhat an unscoped grant is, and the ones that said a team cannot own or\nthat the address is not charged say the opposite.\n\nChange-Id: Ihardening0106\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 2,
+      "paths": [
+        "Cargo.lock",
+        "README.md",
+        "crates/cli/src/hook.rs",
+        "crates/cli/src/main.rs",
+        "crates/cli/tests/suite/agent_api_flow.rs",
+        "crates/cli/tests/suite/agent_authority_flow.rs",
+        "crates/cli/tests/suite/hardening_flow.rs",
+        "crates/cli/tests/suite/main.rs",
+        "crates/cli/tests/suite/quotas_flow.rs",
+        "crates/cli/tests/suite/welcome_flow.rs",
+        "crates/client/src/mcp.rs",
+        "crates/core/src/commands.rs",
+        "crates/core/src/event.rs",
+        "crates/core/src/lib.rs",
+        "crates/core/src/queries.rs",
+        "crates/core/src/store.rs",
+        "crates/core/src/types.rs",
+        "crates/git/Cargo.toml",
+        "crates/git/src/lib.rs",
+        "crates/git/src/store.rs",
+        "crates/server/src/api_guard.rs",
+        "crates/server/src/auth.rs",
+        "crates/server/src/debt.rs",
+        "crates/server/src/error.rs",
+        "crates/server/src/git_http.rs",
+        "crates/server/src/guard.rs",
+        "crates/server/src/lib.rs",
+        "crates/server/src/oidc.rs",
+        "crates/server/src/passkeys.rs",
+        "crates/server/src/queue.rs",
+        "crates/server/src/receipts.rs",
+        "crates/server/src/routes.rs",
+        "crates/server/src/sse.rs",
+        "crates/server/src/state.rs",
+        "crates/server/src/web/mod.rs",
+        "crates/server/src/web/views.rs",
+        "crates/server/tests/api.rs",
+        "docs/architecture.md",
+        "docs/operating.md",
+        "scripts/first-run.sh"
+      ],
+      "session": null
+    },
+    "seq": 838,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 2 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-180kn87rxmbmx05gq7x9zgk819",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-180kn87rxmbmx05gq7x9zgk819",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 110 judged claims, 97% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 37 path(s) outside docs/, *.md: Cargo.lock, crates/cli/src/hook.rs, crates/cli/src/main.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-2d2ekmnf9af7f0byz3qdvkks26",
+        "claim": "cl-180kn87rxmbmx05gq7x9zgk819",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "id": "vr-3q3cpewankez0sqk6ejzgbv9t8",
+        "observed": "exit 0: Doc-tests cairn_server",
+        "revision": 2,
+        "seq": 836
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "wT5zG77j8iGaJQOAeEz2upnakNVh/jgNhKdMc2F61Ho4CW6xMJWx/ku32FgOrGZLvQveVyGW0dyByS/0Owg5Ag=="
+  }
+}

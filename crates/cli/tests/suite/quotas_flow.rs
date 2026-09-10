@@ -259,17 +259,6 @@ async fn open_tasks_are_counted_against_the_repositorys_owner() {
             .contains("open tasks"),
         "{body}"
     );
-    // A task that belongs to the forge rather than a repository is
-    // nobody's to be charged for.
-    let (status, body) = api(
-        app,
-        "POST",
-        "/api/tasks",
-        "ada",
-        Some(json!({ "title": "Forge-wide", "spec": "belongs to no repo" })),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -787,4 +776,185 @@ async fn a_refusal_that_somebody_else_can_lift_is_not_remembered() {
     quota(&forge, "ada", json!({ "repos": 2 })).await;
     let (status, _, body) = call_keyed(app, "/api/repos", key, json!({ "name": "another" })).await;
     assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_change_needs_no_push_and_is_counted_anyway() {
+    let forge = boot().await;
+    let app = &forge.app;
+    quota(&forge, "ada", json!({ "open_changes": 1 })).await;
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/changes",
+        "ada",
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "One" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/changes",
+        "ada",
+        Some(json!({ "repo": "ada/demo", "target": "main", "title": "Two" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["kind"], "over_quota");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tokens_are_rows_and_are_counted_against_whoever_they_are_for() {
+    let forge = boot().await;
+    let app = &forge.app;
+    let start = usage(&forge, "ada", "tokens").await;
+    quota(&forge, "ada", json!({ "tokens": start + 1 })).await;
+    // One more for ada herself fits; the next, for an agent of hers,
+    // is charged to her too and does not.
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/principals/ada/tokens",
+        "ada",
+        Some(json!({ "label": "one" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/principals/scout/tokens",
+        "ada",
+        Some(json!({ "label": "two" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["kind"], "over_quota");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unsaying_a_limit_is_not_the_same_as_lifting_it() {
+    let forge = boot().await;
+    let app = &forge.app;
+    let (_, before) = api(app, "GET", "/api/principals/ada/quota", "ada", None).await;
+    quota(&forge, "ada", json!({ "repos": 5, "agents": null })).await;
+
+    // Unsay one: it follows the forge again, the other stays lifted.
+    let (status, body) = api(
+        app,
+        "DELETE",
+        "/api/principals/ada/quota?field=repos",
+        "ada",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["quota"]["repos"], before["default"]["repos"]);
+    assert!(body["quota"]["agents"].is_null());
+
+    // Unsay everything.
+    let (status, body) = api(app, "DELETE", "/api/principals/ada/quota", "ada", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["quota"], before["default"]);
+    let (_, seen) = api(app, "GET", "/api/principals/ada/quota", "ada", None).await;
+    assert_eq!(seen["override"], json!({}));
+
+    // A limit nobody knows cannot be unsaid either.
+    let (status, _) = api(
+        app,
+        "DELETE",
+        "/api/principals/ada/quota?field=repo",
+        "ada",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_body_nobody_can_read_is_refused_in_the_documented_shape() {
+    let forge = boot().await;
+    // The one place the promise of {"kind", "error"} was not kept was
+    // a body refused before any handler saw it.
+    let (status, body) = api(
+        &forge.app,
+        "POST",
+        "/api/principals/ada/quota",
+        "ada",
+        Some(json!({ "repos": -1 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["kind"], "invalid", "{body}");
+    assert!(
+        body["error"].as_str().is_some_and(|e| !e.is_empty()),
+        "{body}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn work_belonging_to_the_forge_is_charged_to_whoever_made_it() {
+    let forge = boot().await;
+    let app = &forge.app;
+    quota(&forge, "ada", json!({ "open_tasks": 1 })).await;
+    // A task that belongs to no repository was "nobody's", which is
+    // where unbounded things hide. It is its maker's.
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/tasks",
+        "ada",
+        Some(json!({ "title": "Forge-wide", "spec": "belongs to no repo" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(usage(&forge, "ada", "open_tasks").await, 1);
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/tasks",
+        "ada",
+        Some(json!({ "title": "Another", "spec": "also nowhere" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fresh_credential_per_request_is_not_a_fresh_allowance() {
+    let forge = boot().await;
+    // In-process callers have no address, and every such request shares
+    // one bucket; that is exactly what a rotating garbage credential
+    // would try to escape. It must not.
+    let app = cairn_server::router(forge.state.clone().with_read_allowance(1000, 3));
+    api(
+        &app,
+        "POST",
+        "/api/repos/ada/demo/visibility",
+        "ada",
+        Some(json!({ "visibility": "public" })),
+    )
+    .await;
+    let mut refused = false;
+    for n in 0..6 {
+        let request = axum::http::Request::builder()
+            .method("GET")
+            .uri("/api/repos/ada/demo")
+            .header("authorization", format!("Bearer cairn_not_a_token_{n}"))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let status = tower::ServiceExt::oneshot(app.clone(), request)
+            .await
+            .unwrap()
+            .status();
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            refused = true;
+            break;
+        }
+    }
+    assert!(
+        refused,
+        "six requests under a three-a-minute allowance, each with a new bad credential, must run out"
+    );
 }

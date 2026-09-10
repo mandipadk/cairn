@@ -645,6 +645,18 @@ async fn sustained_concurrent_writes_keep_stream_and_pages_consistent() {
     // by design, so it is off here.
     let app = router(test_state().with_write_allowance(0));
     seed(&app).await; // the bootstrap grant, then the seeded world
+    // Fifteen hundred open tasks belonging to the forge are charged to
+    // the one who made them, which is the point of that rule; this
+    // probe is about the stream, so the room is lifted.
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/api/principals/ada/quota",
+        Some("ada"),
+        Some(json!({ "open_tasks": null })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -685,7 +697,8 @@ async fn sustained_concurrent_writes_keep_stream_and_pages_consistent() {
         writer.await.unwrap();
     }
 
-    let expected = (7 + WRITERS * PER_WRITER) as i64;
+    // Seven from seeding, one for lifting the room, then the writers.
+    let expected = (8 + WRITERS * PER_WRITER) as i64;
     let mut buffer = String::new();
     read_until_within(&mut stream, &mut buffer, Duration::from_secs(60), |b| {
         parse_sse(b).0.len() >= expected as usize

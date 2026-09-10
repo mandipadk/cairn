@@ -45,7 +45,9 @@ mod store;
 mod types;
 
 pub use attention::{AttentionItem, Draw, Signal, SignalKind};
-pub use commands::{password_acceptable, until_in_days, verify_password};
+pub use commands::{
+    INVITATION_LABEL, MAILED_INVITATION_LABEL, password_acceptable, until_in_days, verify_password,
+};
 pub use error::{CoreError, CoreResult};
 pub use event::{Envelope, Event, EventSeq};
 pub use id::{

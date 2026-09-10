@@ -79,9 +79,11 @@ async fn joining_twice_is_indistinguishable_from_joining_once() {
     assert_eq!(list[0].0, "ada@example.test");
 }
 
-/// Addresses are normalised and obvious rubbish is refused.
+/// Obvious rubbish is refused. Every attempt here comes from the one
+/// address in-process requests share, so the five of them are all the
+/// form's allowance holds; the case check below gets a forge of its own.
 #[tokio::test(flavor = "multi_thread")]
-async fn rubbish_is_refused_and_case_does_not_create_duplicates() {
+async fn rubbish_is_refused() {
     let forge = boot_token_only().await;
     for bad in [
         "",
@@ -96,6 +98,13 @@ async fn rubbish_is_refused_and_case_does_not_create_duplicates() {
             "{bad:?} should have been refused, got {location}"
         );
     }
+    assert!(forge.state.waitlist().unwrap().is_empty());
+}
+
+/// Addresses are normalised: a different case is the same person.
+#[tokio::test(flavor = "multi_thread")]
+async fn case_does_not_create_duplicates() {
+    let forge = boot_token_only().await;
     post_form(&forge.app, "/waitlist", "email=Ada%40Example.Test").await;
     post_form(&forge.app, "/waitlist", "email=ada%40example.test").await;
     let list = forge.state.waitlist().unwrap();

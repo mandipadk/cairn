@@ -64,15 +64,35 @@ const MEASUREMENT_STANDS: Duration = Duration::from_secs(3600);
 /// by packing objects with nothing happening in the forge to record it,
 /// and an owner pushed over their limit is refused the very push that
 /// would have taken a fresh measurement.
-async fn measure_the_stalest(state: &AppState) {
+async fn measure_the_stalest(
+    state: &AppState,
+    last_gc: &mut std::collections::HashMap<String, std::time::Instant>,
+) {
     let cutoff = (jiff::Timestamp::now() - MEASUREMENT_STANDS).to_string();
     let stalest = state.with_store(|s| s.stalest_repo(&cutoff));
     match stalest {
-        Ok(Some(repo)) => crate::git_http::remember_size(state, &repo).await,
+        Ok(Some(repo)) => {
+            // Objects a refused or abandoned push left behind are
+            // referred to by nothing, and only a collection reclaims
+            // them; once a day per repository is often enough, and the
+            // measurement after it counts what is really there.
+            if let Some(git) = state.git()
+                && last_gc.get(&repo).is_none_or(|at| at.elapsed() > GC_EVERY)
+            {
+                last_gc.insert(repo.clone(), std::time::Instant::now());
+                if let Err(err) = git.store.gc(&repo).await {
+                    tracing::warn!(error = %err, repo, "collecting garbage failed");
+                }
+            }
+            crate::git_http::remember_size(state, &repo).await;
+        }
         Ok(None) => {}
         Err(err) => tracing::warn!(error = %err, "could not ask which measurement is oldest"),
     }
 }
+
+/// How often one repository's unreferenced objects are collected.
+const GC_EVERY: Duration = Duration::from_secs(24 * 3600);
 
 pub fn spawn_queue_processor(state: AppState) -> tokio::task::JoinHandle<()> {
     tokio::spawn(run(state))
@@ -92,10 +112,11 @@ async fn run(state: AppState) {
     // nothing yet, and would report every owner at zero until their
     // next push. Look once, here, off the request path.
     measure_unmeasured(&state).await;
+    let mut last_gc = std::collections::HashMap::new();
     loop {
         retry_pending_advances(&state).await;
         process_lanes(&state).await;
-        measure_the_stalest(&state).await;
+        measure_the_stalest(&state, &mut last_gc).await;
         if state.draws_automatically() {
             draw_attention(&state);
         }

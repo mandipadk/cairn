@@ -57,10 +57,19 @@ pub enum Event {
         owner: Option<PrincipalId>,
     },
 
+    /// What one owner may take up here, as the first binaries wrote it:
+    /// a whole quota, where a field left out meant no limit at all. No
+    /// longer appended; kept so a log that holds one still replays to
+    /// what it meant when it was written.
+    QuotaSet {
+        owner: PrincipalId,
+        quota: crate::types::Quota,
+    },
+
     /// What one owner may take up here, set by whoever runs the forge.
     /// A field the override leaves out is one this owner follows the
-    /// forge's own number on.
-    QuotaSet {
+    /// forge's own number on; `null` is no limit at all.
+    QuotaOverridden {
         owner: PrincipalId,
         quota: crate::types::QuotaOverride,
     },
@@ -489,6 +498,7 @@ impl Event {
         match self {
             Event::PrincipalRegistered { .. } => "principal_registered",
             Event::QuotaSet { .. } => "quota_set",
+            Event::QuotaOverridden { .. } => "quota_overridden",
             Event::PasswordSet { .. } => "password_set",
             Event::PrincipalDeactivated { .. } => "principal_deactivated",
             Event::PrincipalReactivated { .. } => "principal_reactivated",

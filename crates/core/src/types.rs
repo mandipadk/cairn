@@ -255,6 +255,14 @@ pub struct Quota {
     /// Bytes of git storage across everything the owner holds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disk: Option<u64>,
+    /// Changes open across the owner's repositories. A change needs no
+    /// push to open, so without this the database grows at whatever
+    /// rate the write allowance permits and is counted against nobody.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_changes: Option<u32>,
+    /// Live standing tokens, the owner's own and their agents' together.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<u32>,
 }
 
 impl Default for Quota {
@@ -267,6 +275,8 @@ impl Default for Quota {
             agents: Some(25),
             open_tasks: Some(200),
             disk: Some(5 * 1024 * 1024 * 1024),
+            open_changes: Some(500),
+            tokens: Some(50),
         }
     }
 }
@@ -279,6 +289,8 @@ impl Quota {
             agents: None,
             open_tasks: None,
             disk: None,
+            open_changes: None,
+            tokens: None,
         }
     }
 
@@ -291,6 +303,8 @@ impl Quota {
             agents: over.agents.unwrap_or(self.agents),
             open_tasks: over.open_tasks.unwrap_or(self.open_tasks),
             disk: over.disk.unwrap_or(self.disk),
+            open_changes: over.open_changes.unwrap_or(self.open_changes),
+            tokens: over.tokens.unwrap_or(self.tokens),
         }
     }
 }
@@ -329,6 +343,18 @@ pub struct QuotaOverride {
         deserialize_with = "said"
     )]
     pub disk: Option<Option<u64>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "said"
+    )]
+    pub open_changes: Option<Option<u32>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "said"
+    )]
+    pub tokens: Option<Option<u32>>,
 }
 
 /// Tell "the caller wrote null" apart from "the caller wrote nothing",
@@ -349,7 +375,26 @@ impl QuotaOverride {
             agents: newer.agents.or(self.agents),
             open_tasks: newer.open_tasks.or(self.open_tasks),
             disk: newer.disk.or(self.disk),
+            open_changes: newer.open_changes.or(self.open_changes),
+            tokens: newer.tokens.or(self.tokens),
         }
+    }
+
+    /// This override with one thing unsaid, so that limit follows the
+    /// forge's number again. `None` unsays everything.
+    pub fn without(&self, field: Option<&str>) -> Result<QuotaOverride, String> {
+        let mut out = self.clone();
+        match field {
+            None => out = QuotaOverride::default(),
+            Some("repos") => out.repos = None,
+            Some("agents") => out.agents = None,
+            Some("open_tasks") => out.open_tasks = None,
+            Some("disk") => out.disk = None,
+            Some("open_changes") => out.open_changes = None,
+            Some("tokens") => out.tokens = None,
+            Some(other) => return Err(format!("{other:?} is not a limit")),
+        }
+        Ok(out)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -364,6 +409,8 @@ pub struct Usage {
     pub agents: u32,
     pub open_tasks: u32,
     pub disk: u64,
+    pub open_changes: u32,
+    pub tokens: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -64,7 +64,7 @@ curl -s -b "cairn_token=$TOKEN" "$URL/crew" | grep -q 'crew/shared' || { echo "!
 curl -s -b "cairn_token=$TOKEN" "$URL/crew" | grep -q 'Allowance' || { echo "!! the organisation's page does not show what it may take up"; exit 1; }
 
 echo "operating.md: an owner past what they may take up is refused by the numbers"
-expect "$(api principals/crew/quota "$TOKEN" '{"repos": 1}' | json "d['event']['kind']")" quota_set "set what the organisation may have"
+expect "$(api principals/crew/quota "$TOKEN" '{"repos": 1}' | json "d['event']['kind']")" quota_overridden "set what the organisation may have"
 REFUSAL=$(api repos "$TOKEN" '{"name": "second", "owner": "crew"}')
 for phrase in over_quota 'has 1 repositories' 'allows 1'; do
   case "$REFUSAL" in

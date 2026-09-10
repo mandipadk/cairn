@@ -141,6 +141,18 @@ fn may_discuss(
     change: &Change,
 ) -> CoreResult<Principal> {
     let principal = ensure_actor(tx, actor)?;
+    // The owner's shortcut below never consults the scope, so it is
+    // asked here: a credential drawn for one repository's work takes
+    // no part in another's discussion, even on its holder's own change.
+    if let Some(scope) = acting
+        && let Some(mine) = &scope.repo
+        && *mine != change.repo
+    {
+        return Err(CoreError::Forbidden(format!(
+            "a credential scoped to {mine} takes no part in {}",
+            change.repo
+        )));
+    }
     if change.owner == *actor {
         return Ok(principal);
     }
@@ -299,6 +311,15 @@ fn may_act_for(
     require(record.kind != PrincipalKind::Agent, || {
         format!("{owner} is an agent; a person or an organisation owns things here")
     })?;
+    // A stopped account takes nothing new. What is registered under it
+    // would be held by nobody: its holder cannot mint for it or retire
+    // it, and it would sit in the dead account's quota until an admin
+    // noticed.
+    if !record.active {
+        return Err(CoreError::Conflict(format!(
+            "{owner} is deactivated and takes nothing new"
+        )));
+    }
     if owner == actor {
         return Ok(());
     }
@@ -360,6 +381,14 @@ fn holds_agent(tx: &Transaction, actor: &PrincipalId, subject: &Principal) -> Co
     if subject.kind != PrincipalKind::Agent {
         return Ok(false);
     }
+    // An agent holds nothing: not its owner's other agents, and not the
+    // agents of a team somebody put it on. Holding is minting tokens and
+    // stopping, and an agent that could do that to its siblings could
+    // walk sideways into every grant they hold.
+    if raw::principal(tx, actor.as_str())?.is_none_or(|acting| acting.kind != PrincipalKind::Human)
+    {
+        return Ok(false);
+    }
     // The owner has to be somebody who can hold things now. A log from
     // before agents were owned can name an agent as an owner, or a
     // principal since deactivated, and neither should confer anything.
@@ -372,25 +401,51 @@ fn holds_agent(tx: &Transaction, actor: &PrincipalId, subject: &Principal) -> Co
     raw::owns(tx, actor.as_str(), owner.as_str())
 }
 
-/// Registering a principal is an act of running the forge, exactly as
-/// creating a repository is: a person does it for themselves, and
-/// anything else needs the grant that running the forge consists of.
-/// Without this an agent that merely belongs to a team could make more
-/// principals, because acting for an organisation you are in asks no
-/// capability of you.
+/// Registering a principal is a human act, the way delegation is. An
+/// agent does not make principals — not for itself, not for its owner,
+/// and not for anybody else even holding the grant that runs the forge,
+/// because an agent with that grant registering agents under other
+/// people's names and holding their tokens is a thing no operator
+/// meant to allow by handing an agent admin. Whatever runs on the
+/// operator's behalf acts as the operator, with the operator's own
+/// token, and is the operator's to answer for.
 fn may_make_principals(tx: &Transaction, actor: &PrincipalId) -> CoreResult<()> {
     let principal = ensure_actor(tx, actor)?;
     if principal.kind == PrincipalKind::Human {
         return Ok(());
     }
-    let grants = raw::effective_grants(tx, actor.as_str())?;
-    let now = jiff::Timestamp::now().to_string();
-    if raw::grants_cover(&grants, Capability::Admin, None, &now) {
+    Err(CoreError::Forbidden(format!(
+        "{actor} may not register principals: registering is a human act"
+    )))
+}
+
+/// The same rule, for every other act over principals: minting a
+/// token for somebody else, stopping or restarting them, moving a
+/// repository between them. The admin grant lets a person run the
+/// forge; it does not let an agent be the person, and an agent that
+/// holds it (a log from before the grant refused agents can say so)
+/// still finds these doors shut.
+fn human_act(tx: &Transaction, actor: &PrincipalId, what: &str) -> CoreResult<()> {
+    let principal = ensure_actor(tx, actor)?;
+    if principal.kind == PrincipalKind::Human {
         return Ok(());
     }
     Err(CoreError::Forbidden(format!(
-        "{actor} may not register principals: that needs an 'admin' grant"
+        "{actor} may not {what}: that is a human act"
     )))
+}
+
+/// Whether `actor` may push to `repo`, asked as a plain question. The
+/// push door asks it before git is even spawned, so a caller who may
+/// not push learns nothing about the repository's owner from the
+/// refusal that follows.
+pub(crate) fn may_push(
+    tx: &Transaction,
+    acting: Option<&Scope>,
+    actor: &PrincipalId,
+    repo: &str,
+) -> bool {
+    authorize(tx, acting, actor, Capability::Push, Some(repo)).is_ok()
 }
 
 /// Refuse a standing act to a session credential.
@@ -454,6 +509,10 @@ impl Store {
         active: bool,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
+        // Stopping and starting principals outlives any session, and
+        // holding an agent is reached without the authority check
+        // below, so the scope is asked first.
+        not_under_a_scope(self.acting.as_ref(), "stop or restart a principal")?;
         // Authority before existence, so somebody with none cannot use
         // this to find out which names are taken. Retiring an agent you
         // hold is yours to do, and is how the room it takes in your
@@ -469,6 +528,7 @@ impl Store {
                 None => false,
             };
         if !holds {
+            human_act(&tx, actor, "stop or restart another principal")?;
             authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
         }
         require(actor != principal, || {
@@ -497,6 +557,46 @@ impl Store {
                 |u| u.agents,
             )?;
         }
+        // Stopping a person or an organisation stops the agents they
+        // hold. Their tokens resolve through the agent's own record, so
+        // an owner whose agents kept running would be an owner who was
+        // not stopped at all — only inconvenienced.
+        if !active && subject.kind != PrincipalKind::Agent {
+            for agent in raw::active_agents_of(&tx, principal.as_str())? {
+                append(
+                    &tx,
+                    actor,
+                    self.acting.as_ref().and_then(|s| s.session.as_ref()),
+                    Event::PrincipalDeactivated {
+                        principal: PrincipalId(agent),
+                    },
+                )?;
+            }
+            // And the credentials they drew for agents they do not own:
+            // a member of a team mints a token for the team's agent and
+            // keeps it in their own harness, and their leaving the team
+            // would otherwise leave that token working. Their own
+            // agents' tokens stop through the agents' records above.
+            let drawn: Vec<String> = tx
+                .prepare_cached(
+                    "SELECT t.id FROM tokens t JOIN principals p ON p.id = t.principal
+                      WHERE t.minted_by = ?1 AND t.revoked = 0 AND t.session IS NULL
+                        AND p.kind = 'agent' AND p.owner IS NOT ?1
+                      ORDER BY t.rowid",
+                )?
+                .query_map(rusqlite::params![principal.as_str()], |row| row.get(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            for token in drawn {
+                append(
+                    &tx,
+                    actor,
+                    self.acting.as_ref().and_then(|s| s.session.as_ref()),
+                    Event::TokenRevoked {
+                        token: TokenId(token),
+                    },
+                )?;
+            }
+        }
         let event = if active {
             Event::PrincipalReactivated {
                 principal: principal.clone(),
@@ -514,6 +614,15 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(env)
+    }
+
+    /// Whether `actor` may push to `repo`, under the scope this handle
+    /// is acting in.
+    pub fn may_push(&self, actor: &PrincipalId, repo: &str) -> bool {
+        let Ok(tx) = self.conn.unchecked_transaction() else {
+            return false;
+        };
+        may_push(&tx, self.acting.as_ref(), actor, repo)
     }
 
     pub fn register_principal(
@@ -608,6 +717,14 @@ impl Store {
         if !bootstrap {
             not_under_a_scope(self.acting.as_ref(), "register a principal")?;
             may_make_principals(&tx, actor)?;
+            // A name that is also a page of the forge's own would be a
+            // principal with no page: /login is the sign-in form whoever is
+            // called login. Refused at registration rather than routed
+            // around, because a page that is sometimes a person is worse
+            // than a name that is not available.
+            require(!RESERVED_NAMES.contains(&id.as_str()), || {
+                format!("{id} is a name the forge uses itself; choose another")
+            })?;
             if kind == PrincipalKind::Agent {
                 may_act_for(&tx, self.acting.as_ref(), actor, owner)?;
                 within_quota(
@@ -657,6 +774,10 @@ impl Store {
         password: &str,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
+        // A password outlives every session; a leaked task credential
+        // that could set its holder's would be a takeover with a
+        // fifteen-minute fuse.
+        not_under_a_scope(self.acting.as_ref(), "set a password")?;
         let acting = ensure_actor(&tx, actor)?;
         let target = raw::principal(&tx, principal.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("principal {principal}")))?;
@@ -1558,6 +1679,8 @@ impl Store {
         default_branch: &str,
     ) -> CoreResult<()> {
         let tx = self.conn.transaction()?;
+        // A credential drawn for one repository's work makes no other.
+        not_under_a_scope(self.acting.as_ref(), "create a repository")?;
         may_create_repo(&tx, actor)?;
         let owner = owner.unwrap_or(actor);
         may_act_for(&tx, self.acting.as_ref(), actor, owner)?;
@@ -1585,6 +1708,8 @@ impl Store {
         object_format: ObjectFormat,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
+        // A credential drawn for one repository's work makes no other.
+        not_under_a_scope(self.acting.as_ref(), "create a repository")?;
         may_create_repo(&tx, actor)?;
         let owner = owner.unwrap_or(actor);
         may_act_for(&tx, self.acting.as_ref(), actor, owner)?;
@@ -1840,16 +1965,37 @@ impl Store {
         to: &PrincipalId,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        authorize(
-            &tx,
-            self.acting.as_ref(),
-            actor,
-            Capability::Admin,
-            Some(repo),
-        )?;
-        let record =
-            raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
+        not_under_a_scope(self.acting.as_ref(), "transfer a repository")?;
+        // Giving a repository away is the owner's to do, or the forge's.
+        // A grant of admin *on* the repository is not enough: that grant
+        // is what an owner hands somebody to run the repository, and
+        // running it must not include walking off with it — least of
+        // all by offering it to yourself. Ownership is read before
+        // authority is settled, but nothing is said about the
+        // repository until it is: a stranger meets the same refusal
+        // whether or not the name exists.
+        let record = raw::repo(&tx, repo)?;
+        let owns = match &record {
+            Some(record) => raw::owns(&tx, actor.as_str(), record.owner.as_str())?,
+            None => false,
+        };
+        let running = authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None).is_ok();
+        if !owns && !running {
+            return Err(CoreError::Forbidden(format!(
+                "{actor} may not transfer {repo}: its owner may, or whoever runs the forge"
+            )));
+        }
+        human_act(&tx, actor, "transfer a repository")?;
+        let record = record.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
         require(record.owner != *to, || "they already own it".to_owned())?;
+        // A member of the owning organisation offering its repository
+        // to themselves is a member taking it. Whoever runs the forge
+        // may still move a repository to their own name — a stopped
+        // owner's, say — because there is nobody else to move it.
+        require(*to != *actor || running, || {
+            "offer it to somebody else; taking an organisation's repository for yourself is not a transfer"
+                .to_owned()
+        })?;
         let recipient = raw::principal(&tx, to.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("principal {to}")))?;
         require(recipient.kind != PrincipalKind::Agent, || {
@@ -1878,6 +2024,7 @@ impl Store {
         repo: &str,
     ) -> CoreResult<Vec<Envelope>> {
         let tx = self.conn.transaction()?;
+        not_under_a_scope(self.acting.as_ref(), "accept a repository")?;
         ensure_actor(&tx, actor)?;
         let record =
             raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
@@ -1900,17 +2047,48 @@ impl Store {
             |q| q.repos,
             |u| u.repos,
         )?;
+        // Its open work comes with it. Counting one-more-fits would let
+        // two full accounts pass a repository holding hundreds of open
+        // tasks back and forth, resetting each other.
+        let arriving_tasks: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM tasks WHERE repo = ? AND state IN ('open', 'claimed')",
+            rusqlite::params![repo],
+            |row| row.get(0),
+        )?;
+        let arriving_changes: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM changes WHERE repo = ? AND state = 'open'",
+            rusqlite::params![repo],
+            |row| row.get(0),
+        )?;
+        let quota = self
+            .default_quota
+            .under(&raw::quota(&tx, to.as_str())?.unwrap_or_default());
+        let usage = raw::usage(&tx, to.as_str())?;
+        let fits = |have: u32, arriving: i64, limit: Option<u32>| -> bool {
+            limit.is_none_or(|limit| u64::from(have) + arriving.max(0) as u64 <= u64::from(limit))
+        };
+        require(fits(usage.open_tasks, arriving_tasks, quota.open_tasks), String::new)
+            .map_err(|_| {
+                CoreError::OverQuota(format!(
+                    "{to} has {} open tasks and {repo} brings {arriving_tasks}, and this forge allows {}",
+                    usage.open_tasks,
+                    quota.open_tasks.unwrap_or(u32::MAX)
+                ))
+            })?;
+        require(fits(usage.open_changes, arriving_changes, quota.open_changes), String::new)
+            .map_err(|_| {
+                CoreError::OverQuota(format!(
+                    "{to} has {} open changes and {repo} brings {arriving_changes}, and this forge allows {}",
+                    usage.open_changes,
+                    quota.open_changes.unwrap_or(u32::MAX)
+                ))
+            })?;
         let arriving: i64 = tx
             .prepare_cached("SELECT COALESCE(bytes, 0) FROM repo_sizes WHERE repo = ?")
             .and_then(|mut q| q.query_row(rusqlite::params![repo], |row| row.get(0)))
             .unwrap_or(0);
-        let quota = self
-            .default_quota
-            .under(&raw::quota(&tx, to.as_str())?.unwrap_or_default());
         if let Some(limit) = quota.disk {
-            let after = raw::usage(&tx, to.as_str())?
-                .disk
-                .saturating_add(arriving.max(0) as u64);
+            let after = usage.disk.saturating_add(arriving.max(0) as u64);
             require(after <= limit, || {
                 format!("{to} does not have room on disk for {repo}")
             })
@@ -1926,6 +2104,28 @@ impl Store {
             format!("{to} already has a repository named {short}")
         })?;
         let via = self.acting.as_ref().and_then(|s| s.session.as_ref());
+        // What the old owner handed out on it goes with the old owner,
+        // and it goes on the record: each grant is revoked by an event
+        // of its own, with the reason, so the grantee is told and the
+        // log says why a grant that was there is not. (The apply arm
+        // for the acceptance revokes them too, for logs written before
+        // this was said explicitly; on these it finds nothing left.)
+        let handed_out: Vec<String> = tx
+            .prepare_cached("SELECT id FROM grants WHERE repo = ? AND revoked = 0 ORDER BY rowid")?
+            .query_map(rusqlite::params![repo], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut envelopes = Vec::with_capacity(handed_out.len() + 2);
+        for grant in handed_out {
+            envelopes.push(append(
+                &tx,
+                actor,
+                via,
+                Event::GrantRevoked {
+                    grant: GrantId(grant),
+                    reason: format!("{repo} was transferred to {to}"),
+                },
+            )?);
+        }
         let accepted = append(
             &tx,
             actor,
@@ -1944,27 +2144,28 @@ impl Store {
             },
         )?;
         tx.commit()?;
-        Ok(vec![accepted, renamed])
+        envelopes.push(accepted);
+        envelopes.push(renamed);
+        Ok(envelopes)
     }
 
     /// Turn an offer down, or take it back: the offeree may decline, and
     /// whoever could have made the offer may withdraw it.
     pub fn decline_transfer(&mut self, actor: &PrincipalId, repo: &str) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
+        not_under_a_scope(self.acting.as_ref(), "decline or withdraw a transfer")?;
         ensure_actor(&tx, actor)?;
         let record =
             raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
         require(record.pending_owner.is_some(), || {
             format!("{repo} is not on offer")
         })?;
-        if record.pending_owner.as_ref() != Some(actor) {
-            authorize(
-                &tx,
-                self.acting.as_ref(),
-                actor,
-                Capability::Admin,
-                Some(repo),
-            )?;
+        // The offeree may decline; whoever could have offered — the
+        // owner, or the forge — may withdraw.
+        if record.pending_owner.as_ref() != Some(actor)
+            && !raw::owns(&tx, actor.as_str(), record.owner.as_str())?
+        {
+            authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
         }
         let env = append(
             &tx,
@@ -1998,6 +2199,14 @@ impl Store {
             .ok_or_else(|| CoreError::NotFound(format!("principal {member}")))?;
         require(who.kind != PrincipalKind::Team, || {
             "a team cannot join a team".to_owned()
+        })?;
+        // Membership is holding: every grant the team has, every agent
+        // it owns. An agent on a team would hold its siblings' tokens
+        // and, through a team that runs the forge, the forge. An agent
+        // that works for a team is registered as the team's own, or
+        // granted what it needs on the team's repositories.
+        require(who.kind == PrincipalKind::Human, || {
+            format!("{member} is an agent; a team's members are people")
         })?;
         let env = append(
             &tx,
@@ -2049,6 +2258,7 @@ impl Store {
         email: Option<&str>,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
+        not_under_a_scope(self.acting.as_ref(), "link an identity")?;
         let principal = ensure_actor(&tx, actor)?;
         require(principal.kind == PrincipalKind::Human, || {
             format!("{actor} is not a person; agents prove who they are as workloads")
@@ -2647,12 +2857,17 @@ impl Store {
                 .ok_or_else(|| CoreError::NotFound(format!("task {parent}")))?;
         }
         // Open work in a repository is that repository owner's; a task
-        // belonging to the forge itself is nobody's to be charged for.
-        if let Some(record) = repo.and_then(|repo| raw::repo(&tx, repo).ok().flatten()) {
+        // belonging to the forge itself is charged to whoever made it,
+        // which for an agent is the owner it belongs to.
+        let charged = match repo {
+            Some(repo) => raw::repo(&tx, repo)?.map(|record| record.owner),
+            None => raw::principal(&tx, actor.as_str())?.and_then(|p| p.owner),
+        };
+        if let Some(owner) = charged {
             within_quota(
                 &tx,
                 &self.default_quota,
-                &record.owner,
+                &owner,
                 "open tasks",
                 |q| q.open_tasks,
                 |u| u.open_tasks,
@@ -2748,21 +2963,23 @@ impl Store {
         // Reopening is taking the work back up, so it has to fit the way
         // opening it did. Without this, landing or abandoning tasks and
         // reopening them is a way to hold any number at once.
-        if state == TaskState::Open
-            && current.state != TaskState::Open
-            && let Some(record) = current
-                .repo
-                .as_deref()
-                .and_then(|repo| raw::repo(&tx, repo).ok().flatten())
-        {
-            within_quota(
-                &tx,
-                &self.default_quota,
-                &record.owner,
-                "open tasks",
-                |q| q.open_tasks,
-                |u| u.open_tasks,
-            )?;
+        if state == TaskState::Open && current.state != TaskState::Open {
+            // Charged as it was when made: to the repository's owner,
+            // or for work belonging to the forge, to whoever made it.
+            let charged = match current.repo.as_deref() {
+                Some(repo) => raw::repo(&tx, repo)?.map(|record| record.owner),
+                None => raw::principal(&tx, current.created_by.as_str())?.and_then(|p| p.owner),
+            };
+            if let Some(owner) = charged {
+                within_quota(
+                    &tx,
+                    &self.default_quota,
+                    &owner,
+                    "open tasks",
+                    |q| q.open_tasks,
+                    |u| u.open_tasks,
+                )?;
+            }
         }
         let env = append(
             &tx,
@@ -2834,7 +3051,7 @@ impl Store {
             &tx,
             actor,
             self.acting.as_ref().and_then(|s| s.session.as_ref()),
-            Event::QuotaSet {
+            Event::QuotaOverridden {
                 owner: owner.clone(),
                 quota: quota.clone(),
             },
@@ -2847,8 +3064,13 @@ impl Store {
     /// event: git changes the answer by packing objects, with nothing
     /// happening in the forge to record.
     pub fn record_repo_size(&mut self, repo: &str, bytes: u64) -> CoreResult<()> {
+        // Only for a repository that exists now. A measurement in flight
+        // while the repository is deleted or renamed would otherwise
+        // leave a row under a name that is nobody's, for the next
+        // repository of that name to inherit.
         self.conn.execute(
-            "INSERT OR REPLACE INTO repo_sizes (repo, bytes, measured) VALUES (?, ?, ?)",
+            "INSERT OR REPLACE INTO repo_sizes (repo, bytes, measured)
+               SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM repos WHERE name = ?1)",
             rusqlite::params![repo, bytes as i64, jiff::Timestamp::now().to_string()],
         )?;
         Ok(())
@@ -3059,12 +3281,23 @@ impl Store {
             Capability::Push,
             Some(&spec.repo),
         )?;
-        raw::repo(&tx, &spec.repo)?
+        let record = raw::repo(&tx, &spec.repo)?
             .ok_or_else(|| CoreError::NotFound(format!("repo {}", spec.repo)))?;
         ensure_writable(&tx, &spec.repo)?;
         require(valid_branch(&spec.target), || {
             format!("{:?} is not a valid branch name", spec.target)
         })?;
+        // A change needs no push to open, so it is the cheapest row
+        // anybody can make. Counted against the repository's owner, the
+        // way its tasks are.
+        within_quota(
+            &tx,
+            &self.default_quota,
+            &record.owner,
+            "open changes",
+            |q| q.open_changes,
+            |u| u.open_changes,
+        )?;
         require(!spec.title.trim().is_empty(), || {
             "change title must not be empty".into()
         })?;
@@ -4056,38 +4289,97 @@ impl Store {
     ) -> CoreResult<(TokenId, String, Envelope)> {
         let tx = self.conn.transaction()?;
         ensure_actor(&tx, actor)?;
-        let subject = raw::principal(&tx, principal.as_str())?
-            .ok_or_else(|| CoreError::NotFound(format!("principal {principal}")))?;
-        require(subject.kind != PrincipalKind::Team, || {
-            format!("{principal} is a team, and a team never signs in")
-        })?;
         // A standing token outlives every session and carries every
         // grant its principal holds, so drawing one is never something a
         // session credential does — including for itself, which is how a
         // fifteen-minute workload credential could have become permanent.
         not_under_a_scope(self.acting.as_ref(), "mint a standing token")?;
-        // A token is the principal's own credential. Minting one for
-        // somebody else is running the forge, not being a person; the
-        // old rule let any signed-in human mint an admin's token. The
-        // exception is an agent you hold: it is yours, and it cannot
-        // work without one.
-        if actor != principal && !holds_agent(&tx, actor, &subject)? {
+        if let Some(label) = label {
+            bounded("label", label, MAX_TITLE)?;
+            // An invitation is a token with a label the sign-in page
+            // spends for a browser session. That label is the forge's
+            // to write, never a caller's: a token minted with it would
+            // be a session for whoever the token was minted for.
+            require(!label.starts_with(INVITATION_LABEL), || {
+                format!("labels beginning with {INVITATION_LABEL:?} are the forge's own")
+            })?;
+        }
+        // Authority before existence, so a caller with none learns
+        // nothing about which names are taken from the shape of the
+        // refusal. A token is the principal's own credential; minting
+        // one for somebody else is running the forge, not being a
+        // person — except for an agent you hold, which is yours and
+        // cannot work without one.
+        let found = raw::principal(&tx, principal.as_str())?;
+        let holds = match &found {
+            Some(subject) => holds_agent(&tx, actor, subject)?,
+            None => false,
+        };
+        if actor != principal && !holds {
+            human_act(&tx, actor, "mint a token for another principal")?;
             authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
         }
-        let token = TokenId::generate();
-        let secret = random_token_secret();
-        let env = append(
-            &tx,
-            actor,
-            self.acting.as_ref().and_then(|s| s.session.as_ref()),
-            Event::TokenMinted {
-                token: token.clone(),
-                principal: principal.clone(),
-                label: label.map(str::to_owned),
-                hash: token_hash(&secret),
-                until: until.map(str::to_owned),
-            },
-        )?;
+        let subject = found.ok_or_else(|| CoreError::NotFound(format!("principal {principal}")))?;
+        require(subject.kind != PrincipalKind::Team, || {
+            format!("{principal} is a team, and a team never signs in")
+        })?;
+        // A token for a stopped principal would never sign in, and
+        // would still take a place in its owner's allowance.
+        if !subject.active {
+            return Err(CoreError::Conflict(format!(
+                "{principal} is deactivated; bring it back before minting for it"
+            )));
+        }
+        // Tokens are rows too, and a principal minting them without end
+        // is a principal filling the database. Charged to whoever the
+        // token is ultimately for: a person, or an agent's owner.
+        if let Some(owner) = subject.owner.as_ref() {
+            within_quota(
+                &tx,
+                &self.default_quota,
+                owner,
+                "tokens",
+                |q| q.tokens,
+                |u| u.tokens,
+            )?;
+        }
+        let (token, secret, env) = append_token(&tx, actor, principal, label, until)?;
+        tx.commit()?;
+        Ok((token, secret, env))
+    }
+
+    /// Mint an invitation: a token the sign-in page spends for a
+    /// browser session, for a person who has no other way in yet.
+    /// Whoever runs the forge does this, in person; `mailed` marks one
+    /// that went to the person's address, so following it proves the
+    /// address. Not a credential, and not counted as one.
+    pub fn mint_invitation(
+        &mut self,
+        actor: &PrincipalId,
+        principal: &PrincipalId,
+        mailed: bool,
+        until: Option<&str>,
+    ) -> CoreResult<(TokenId, String, Envelope)> {
+        let tx = self.conn.transaction()?;
+        not_under_a_scope(self.acting.as_ref(), "invite somebody")?;
+        human_act(&tx, actor, "invite somebody")?;
+        authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
+        let subject = raw::principal(&tx, principal.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("principal {principal}")))?;
+        require(subject.kind == PrincipalKind::Human, || {
+            format!("{principal} is not a person; only a person is invited to sign in")
+        })?;
+        if !subject.active {
+            return Err(CoreError::Conflict(format!(
+                "{principal} is deactivated; bring them back before inviting them"
+            )));
+        }
+        let label = if mailed {
+            MAILED_INVITATION_LABEL
+        } else {
+            INVITATION_LABEL
+        };
+        let (token, secret, env) = append_token(&tx, actor, principal, Some(label), until)?;
         tx.commit()?;
         Ok((token, secret, env))
     }
@@ -4095,16 +4387,23 @@ impl Store {
     /// Revoke a token, effective immediately. The owner or any human.
     pub fn revoke_token(&mut self, actor: &PrincipalId, token: &TokenId) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
+        not_under_a_scope(self.acting.as_ref(), "revoke a standing token")?;
         ensure_actor(&tx, actor)?;
-        let current = raw::token(&tx, token.as_str())?
-            .ok_or_else(|| CoreError::NotFound(format!("token {token}")))?;
-        if current.principal != *actor {
-            let subject = raw::principal(&tx, current.principal.as_str())?
-                .ok_or_else(|| CoreError::NotFound(format!("principal {}", current.principal)))?;
-            if !holds_agent(&tx, actor, &subject)? {
-                authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
-            }
+        // Authority before existence, as everywhere: your own, an agent
+        // you hold, or running the forge.
+        let found = raw::token(&tx, token.as_str())?;
+        let permitted = match &found {
+            Some(current) if current.principal == *actor => true,
+            Some(current) => match raw::principal(&tx, current.principal.as_str())? {
+                Some(subject) => holds_agent(&tx, actor, &subject)?,
+                None => false,
+            },
+            None => false,
+        };
+        if !permitted {
+            authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
         }
+        let current = found.ok_or_else(|| CoreError::NotFound(format!("token {token}")))?;
         if current.revoked {
             return Err(CoreError::Conflict(format!(
                 "token {token} is already revoked"
@@ -4143,7 +4442,7 @@ impl Store {
         // repository is enough for a grant scoped to it; anything wider
         // needs the admin grant that running the forge consists of.
         authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, repo)?;
-        raw::principal(&tx, grantee.as_str())?
+        let who = raw::principal(&tx, grantee.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("principal {grantee}")))?;
         if let Some(repo) = repo {
             raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
@@ -4151,6 +4450,15 @@ impl Store {
         require(!actions.is_empty(), || {
             "a grant must carry at least one capability".into()
         })?;
+        // Running the forge is a person's. An agent handed the admin
+        // grant would set policy, quotas and visibility as the forge,
+        // and every act over principals it is refused below would be
+        // one refusal away from a bypass. Grant it the capabilities its
+        // work needs, on the repositories where it does that work.
+        require(
+            who.kind != PrincipalKind::Agent || !actions.contains(&Capability::Admin),
+            || format!("{grantee} is an agent, and admin is never an agent's"),
+        )?;
         let mut actions = actions;
         actions.sort_by_key(|c| c.as_str());
         actions.dedup();
@@ -4189,7 +4497,10 @@ impl Store {
     /// API, where that circle should stay unbroken.
     pub fn grant_bootstrap_admin(&mut self, id: &PrincipalId) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        ensure_actor(&tx, id)?;
+        let who = ensure_actor(&tx, id)?;
+        require(who.kind == PrincipalKind::Human, || {
+            format!("{id} is not a person, and running the forge is a person's")
+        })?;
         let grant = GrantId::generate();
         let env = append(
             &tx,
@@ -4215,13 +4526,24 @@ impl Store {
         reason: &str,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
+        not_under_a_scope(self.acting.as_ref(), "revoke a grant")?;
         ensure_actor(&tx, actor)?;
         require(!reason.trim().is_empty(), || {
             "revocation reason must not be empty".into()
         })?;
         let current = raw::grant(&tx, grant.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("grant {grant}")))?;
-        if current.grantor != *actor && current.grantee != *actor {
+        // The grantor's, the grantee's, the owner's of the repository it
+        // is scoped to — whoever holds a repository decides who acts on
+        // it, whoever issued the grant — or the forge's.
+        let on_their_repo = match current.repo.as_deref() {
+            Some(repo) => match raw::repo(&tx, repo)? {
+                Some(record) => raw::owns(&tx, actor.as_str(), record.owner.as_str())?,
+                None => false,
+            },
+            None => false,
+        };
+        if current.grantor != *actor && current.grantee != *actor && !on_their_repo {
             authorize(&tx, self.acting.as_ref(), actor, Capability::Admin, None)?;
         }
         if current.revoked {
@@ -4241,6 +4563,47 @@ impl Store {
         tx.commit()?;
         Ok(env)
     }
+}
+
+/// The top-level paths the forge answers to itself, which a principal
+/// therefore cannot be called. Kept beside the registration that
+/// refuses them; the router is the other half of the same promise.
+pub const RESERVED_NAMES: &[&str] = &[
+    "agents", "api", "assets", "forgot", "git", "healthz", "inbox", "join", "log", "login",
+    "logout", "new", "passkeys", "people", "report", "reports", "reset", "search", "signin",
+    "tasks", "teams", "theme", "verify", "waitlist", "you",
+];
+
+/// The label that marks a token as an invitation rather than a
+/// credential: spent by the sign-in page for a browser session, and
+/// never accepted as a bearer token.
+pub const INVITATION_LABEL: &str = "invitation";
+/// An invitation that went out by mail: following it proves the address.
+pub const MAILED_INVITATION_LABEL: &str = "invitation:mailed";
+
+/// Write a token into the log and hand back the one copy of its secret.
+fn append_token(
+    tx: &Transaction,
+    actor: &PrincipalId,
+    principal: &PrincipalId,
+    label: Option<&str>,
+    until: Option<&str>,
+) -> CoreResult<(TokenId, String, Envelope)> {
+    let token = TokenId::generate();
+    let secret = random_token_secret();
+    let env = append(
+        tx,
+        actor,
+        None,
+        Event::TokenMinted {
+            token: token.clone(),
+            principal: principal.clone(),
+            label: label.map(str::to_owned),
+            hash: token_hash(&secret),
+            until: until.map(str::to_owned),
+        },
+    )?;
+    Ok((token, secret, env))
 }
 
 /// An expiry this many days from now, as the log records instants.

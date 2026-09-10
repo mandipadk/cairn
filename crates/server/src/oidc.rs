@@ -10,10 +10,11 @@
 //! do one thing: claim a task and open a session. From there the session
 //! draws its own credential, and no standing agent token need exist.
 
+use crate::error::Json;
+use crate::error::Query;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
-use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
 use base64::Engine;

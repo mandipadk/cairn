@@ -748,8 +748,9 @@ async fn forgot_submit(
     headers: HeaderMap,
     Form(form): Form<ForgotForm>,
 ) -> Response {
-    if let Some(peer) = client
-        && !app.reset_limiter.accept(peer)
+    if !app
+        .reset_limiter
+        .accept(client.unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)))
     {
         return crate::guard::too_many_attempts();
     }
@@ -1159,6 +1160,8 @@ pub struct PersonRow {
     pub admin: bool,
     /// The open invitation, if one is out.
     pub invitation: Option<cairn_core::TokenInfo>,
+    /// The live agents they hold, which stop with them.
+    pub agents: usize,
 }
 
 /// Who is here, and a way to bring somebody in. Running the forge is
@@ -1183,6 +1186,7 @@ async fn people_page(
                 has_password: store.has_password(&principal.id),
                 contact: store.contact_of(&principal.id)?,
                 admin: store.is_admin(&principal.id),
+                agents: store.active_agents_of(&principal.id)?.len(),
                 invitation: {
                     let now = jiff::Timestamp::now().to_string();
                     store.tokens_of(&principal.id)?.into_iter().rfind(|t| {
@@ -1318,16 +1322,11 @@ async fn people_action(
     let contact = app.with_store(|s| s.contact_of(&id)).unwrap_or_default();
     let destination = contact.email.clone().or(contact.pending.clone());
     let will_mail = app.mailer().is_some() && destination.is_some();
-    let label = if will_mail {
-        MAILED_INVITE_LABEL
-    } else {
-        INVITE_LABEL
-    };
     let secret = match app.with_store(|s| {
-        s.mint_token(
+        s.mint_invitation(
             &viewer.0,
             &id,
-            Some(label),
+            will_mail,
             Some(&cairn_core::until_in_days(INVITATION_DAYS)),
         )
     }) {
@@ -1390,10 +1389,10 @@ fn join_link(app: &AppState, headers: &HeaderMap, secret: &str) -> String {
     format!("{scheme}://{host}/join?token={}", urlencode(secret))
 }
 
-/// The label that marks a token as an invitation rather than a credential.
-const INVITE_LABEL: &str = "invitation";
-/// An invitation that went out by mail: following it proves the address.
-const MAILED_INVITE_LABEL: &str = "invitation:mailed";
+/// The labels that mark a token as an invitation rather than a
+/// credential; the store writes them, and refuses them from anyone else.
+const INVITE_LABEL: &str = cairn_core::INVITATION_LABEL;
+const MAILED_INVITE_LABEL: &str = cairn_core::MAILED_INVITATION_LABEL;
 /// How long an invitation stays open. A week is what everyone expects.
 const INVITATION_DAYS: i64 = 7;
 
@@ -1610,7 +1609,15 @@ async fn agent_action(
                             app.publish(&env);
                             back(None, Some(secret))
                         }
-                        Err(err) => back(Some(err.to_string()), None),
+                        // An agent with no token can do nothing and still
+                        // takes a place; better not to have made it.
+                        Err(err) => {
+                            if let Ok(env) = app.with_store(|s| s.set_active(&viewer.0, &id, false))
+                            {
+                                app.publish(&env);
+                            }
+                            back(Some(err.to_string()), None)
+                        }
                     }
                 }
                 Err(err) => back(Some(err.to_string()), None),
@@ -1656,6 +1663,28 @@ async fn agent_action(
             match app.with_store(|s| {
                 s.revoke_grant(&viewer.0, &cairn_core::GrantId(form.grant.clone()), &reason)
             }) {
+                Ok(env) => {
+                    app.publish(&env);
+                    back(None, None)
+                }
+                Err(err) => back(Some(err.to_string()), None),
+            }
+        }
+        "mint" => {
+            let agent = PrincipalId(form.grantee.clone());
+            match app
+                .with_store(|s| s.mint_token(&viewer.0, &agent, Some("from the agents page"), None))
+            {
+                Ok((_, secret, env)) => {
+                    app.publish(&env);
+                    back(None, Some(secret))
+                }
+                Err(err) => back(Some(err.to_string()), None),
+            }
+        }
+        "retire" => {
+            let agent = PrincipalId(form.grantee.clone());
+            match app.with_store(|s| s.set_active(&viewer.0, &agent, false)) {
                 Ok(env) => {
                     app.publish(&env);
                     back(None, None)
@@ -1927,7 +1956,10 @@ async fn owner_page(
         return not_found();
     }
     let organisation = principal.kind == cairn_core::PrincipalKind::Team;
-    let members = if organisation {
+    // Who is on an organisation is not a secret among the forge's own
+    // principals, and the API says so; to a stranger it is a list of
+    // names, which nothing else on the forge hands out for free.
+    let members = if organisation && matches!(who, Who::Signed(_)) {
         app.with_store(|s| s.members_of(&owner_id))
             .unwrap_or_default()
     } else {
@@ -2089,8 +2121,9 @@ async fn join_waitlist(
     crate::guard::ClientIp(client): crate::guard::ClientIp,
     Form(form): Form<WaitlistForm>,
 ) -> Response {
-    if let Some(peer) = client
-        && !app.waitlist_limiter.accept(peer)
+    if !app
+        .waitlist_limiter
+        .accept(client.unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)))
     {
         return crate::guard::too_many_attempts();
     }
@@ -2144,8 +2177,9 @@ async fn file_report(
     headers: HeaderMap,
     Form(form): Form<ReportForm>,
 ) -> Response {
-    if let Some(peer) = client
-        && !app.report_limiter.accept(peer)
+    if !app
+        .report_limiter
+        .accept(client.unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)))
     {
         return crate::guard::too_many_attempts();
     }
@@ -2375,8 +2409,9 @@ async fn login_link(
     let Some(mailer) = app.mailer() else {
         return Redirect::to("/login").into_response();
     };
-    if let Some(peer) = client
-        && !app.reset_limiter.accept(peer)
+    if !app
+        .reset_limiter
+        .accept(client.unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)))
     {
         return crate::guard::too_many_attempts();
     }
@@ -2458,8 +2493,9 @@ async fn login_submit(
     Form(form): Form<LoginForm>,
 ) -> Response {
     // Guessing a token should not be worth trying.
-    if let Some(peer) = client
-        && !app.login_limiter.accept(peer)
+    if !app
+        .login_limiter
+        .accept(client.unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)))
     {
         return crate::guard::too_many_attempts();
     }
@@ -2602,6 +2638,16 @@ pub(crate) async fn old_names(
     next: axum::middleware::Next,
 ) -> Response {
     let path = request.uri().path().to_owned();
+    // Assets and the health check are never a repository's old name, and
+    // are the paths a monitor or a browser hits most; they must not cost
+    // three store lookups on a miss.
+    let followable = matches!(
+        *request.method(),
+        axum::http::Method::GET | axum::http::Method::HEAD
+    ) || path.starts_with("/git/");
+    if !followable || path.starts_with("/assets/") || path == "/healthz" {
+        return next.run(request).await;
+    }
     let query = request.uri().query().map(|q| format!("?{q}"));
     let headers = request.headers().clone();
     let response = next.run(request).await;
@@ -2732,7 +2778,7 @@ pub(crate) fn not_found() -> Response {
         .into_response()
 }
 
-const FALLBACK: &str = "x-cairn-fallback";
+pub(crate) const FALLBACK: &str = "x-cairn-fallback";
 
 /// 404 and 500 pages are produced deep inside handlers that never saw
 /// the theme cookie. This runs after them: a marked fallback is rendered
@@ -2758,11 +2804,20 @@ pub(crate) async fn themed_fallbacks(
     let status = response.status();
     let page = match kind.as_str() {
         "not-found" => views::not_found_page(theme),
+        "too-many" => views::too_many_page(theme),
+        "not-from-here" => views::not_from_here_page(theme),
         _ => views::error_page(theme),
     };
     let mut fresh = (status, page).into_response();
+    // What the original said about itself as a body — its type and
+    // length — was true of the plain line it carried, not of the page.
+    // Everything else it said (how long to wait, what not to cache)
+    // holds.
     for (name, value) in response.headers() {
-        fresh.headers_mut().insert(name, value.clone());
+        if name == header::CONTENT_TYPE || name == header::CONTENT_LENGTH {
+            continue;
+        }
+        fresh.headers_mut().append(name, value.clone());
     }
     fresh
 }

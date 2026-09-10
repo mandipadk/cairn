@@ -11,22 +11,26 @@
 //! dev header — the same seam as the rest of the API.
 
 use crate::auth::{Actor, PRINCIPAL_HEADER};
+use crate::error::Json;
+use crate::error::Query;
 use crate::error::{ApiError, ApiResult};
 use crate::repo_path::RepoName;
 use crate::routes::committed;
 use crate::state::AppState;
-use axum::Json;
-use axum::body::Bytes;
-use axum::extract::{Query, State};
+use axum::body::{Body, Bytes};
+use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use base64::prelude::*;
 use cairn_core::{ChangeState, PrincipalId};
 use cairn_git::Service;
+use cairn_git::{RpcInput, RpcStream};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
+use std::net::{IpAddr, Ipv4Addr};
+use std::pin::Pin;
 
 /// Clone URLs may spell the repo with or without a `.git` suffix.
 fn repo_name(raw: &str) -> String {
@@ -43,18 +47,6 @@ fn git_enabled(app: &AppState) -> ApiResult<&crate::state::GitContext> {
     })
 }
 
-fn ensure_repo(app: &AppState, name: &str) -> ApiResult<()> {
-    app.with_store(|s| s.repo(name))?
-        .map(|_| ())
-        .ok_or_else(|| {
-            ApiError::new(
-                StatusCode::NOT_FOUND,
-                "not_found",
-                format!("repo {name} not found"),
-            )
-        })
-}
-
 fn git_protocol(headers: &HeaderMap) -> Option<String> {
     headers
         .get("git-protocol")
@@ -62,17 +54,157 @@ fn git_protocol(headers: &HeaderMap) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Request bodies from git clients may arrive gzip-compressed.
-fn request_body(headers: &HeaderMap, body: Bytes) -> ApiResult<Vec<u8>> {
-    unpacked(headers, body, crate::GIT_BODY_LIMIT as u64)
+/// Whether a request body says it is gzip-compressed. Git compresses
+/// the fetch negotiation it sends, never a pack it pushes.
+fn gzipped(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("gzip"))
+}
+
+/// The most a compressed request body may unpack to. What git
+/// compresses is the fetch negotiation — wants and haves, a line per
+/// ref — and a negotiation past this is not one.
+const GZIPPED_BODY_LIMIT: u64 = 64 * 1024 * 1024;
+
+/// The fetch negotiation, whole. Small, and decoded before git sees
+/// it when it came compressed.
+async fn negotiation(headers: &HeaderMap, body: Body) -> ApiResult<RpcInput> {
+    let raw = axum::body::to_bytes(body, GZIPPED_BODY_LIMIT as usize)
+        .await
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "invalid",
+                format!(
+                    "the request body is larger than {}",
+                    crate::in_bytes(GZIPPED_BODY_LIMIT)
+                ),
+            )
+        })?;
+    Ok(RpcInput::Whole(unpacked(headers, raw, GZIPPED_BODY_LIMIT)?))
+}
+
+/// A push, as it arrives: streamed into receive-pack rather than held,
+/// so a push of a large pack costs the forge no memory. Git refuses a
+/// pack past `receive.maxInputSize` while reading it; the count here
+/// is the backstop for a body that is not a pack at all. A push that
+/// came compressed (git never does) is decoded whole, under the same
+/// ceiling as anything else.
+async fn push_body(headers: &HeaderMap, body: Body) -> ApiResult<RpcInput> {
+    if gzipped(headers) {
+        let raw = axum::body::to_bytes(body, crate::GIT_BODY_LIMIT)
+            .await
+            .map_err(|_| {
+                ApiError::new(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "invalid",
+                    format!(
+                        "the request body is larger than {}",
+                        crate::in_bytes(crate::GIT_BODY_LIMIT as u64)
+                    ),
+                )
+            })?;
+        return Ok(RpcInput::Whole(unpacked(
+            headers,
+            raw,
+            crate::GIT_BODY_LIMIT as u64,
+        )?));
+    }
+    Ok(RpcInput::Streamed(Box::pin(Bounded {
+        inner: Box::pin(body.into_data_stream()),
+        seen: 0,
+        limit: crate::GIT_BODY_LIMIT as u64,
+    })))
+}
+
+/// A request body with a ceiling: past it, the stream ends in an error
+/// and git sees a truncated request, which it refuses.
+struct Bounded {
+    inner: Pin<Box<axum::body::BodyDataStream>>,
+    seen: u64,
+    limit: u64,
+}
+
+impl tokio_stream::Stream for Bounded {
+    type Item = std::io::Result<Bytes>;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+        let this = self.get_mut();
+        match this.inner.as_mut().poll_next(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(std::io::Error::other(err)))),
+            Poll::Ready(Some(Ok(chunk))) => {
+                this.seen = this.seen.saturating_add(chunk.len() as u64);
+                if this.seen > this.limit {
+                    return Poll::Ready(Some(Err(std::io::Error::other(format!(
+                        "the request body is larger than {}",
+                        crate::in_bytes(this.limit)
+                    )))));
+                }
+                Poll::Ready(Some(Ok(chunk)))
+            }
+        }
+    }
+}
+
+/// A transfer's output with the place it holds among the transfers
+/// being served, given back when the last byte has gone.
+struct Served {
+    stream: RpcStream,
+    _slot: crate::state::GitSlot,
+}
+
+impl tokio_stream::Stream for Served {
+    type Item = std::io::Result<Bytes>;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        Pin::new(&mut self.get_mut().stream).poll_next(cx)
+    }
+}
+
+/// Too many transfers at once, from everyone or from this caller.
+fn transfers_full() -> ApiError {
+    ApiError::new(
+        StatusCode::TOO_MANY_REQUESTS,
+        "rate_limited",
+        "too many git transfers are being served at once; try again in a few seconds",
+    )
+}
+
+/// Who a transfer is charged to: the principal, when the request named
+/// one; the address otherwise.
+fn transfer_caller(headers: &HeaderMap, client: Option<IpAddr>) -> String {
+    basic_user(headers).unwrap_or_else(|| {
+        format!(
+            "address:{}",
+            client.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+        )
+    })
+}
+
+/// The username of an HTTP Basic header, if there is one.
+fn basic_user(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Basic "))
+        .and_then(|b64| BASE64_STANDARD.decode(b64).ok())
+        .and_then(|raw| String::from_utf8(raw).ok())
+        .and_then(|creds| creds.split_once(':').map(|(user, _)| user.to_owned()))
 }
 
 fn unpacked(headers: &HeaderMap, body: Bytes, ceiling: u64) -> ApiResult<Vec<u8>> {
-    let gzipped = headers
-        .get(header::CONTENT_ENCODING)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("gzip"));
-    if !gzipped {
+    if !gzipped(headers) {
         return Ok(body.to_vec());
     }
     // A compressed body says how big it is only by being decompressed,
@@ -250,6 +382,11 @@ fn challenge_basic(err: ApiError) -> Response {
 #[derive(Deserialize)]
 pub struct Room {
     pub repo: String,
+    /// What the push holds in quarantine, in bytes, if the hook could
+    /// measure it. Zero when it could not: the check then only asks
+    /// whether the owner is already over.
+    #[serde(default)]
+    pub arriving: u64,
 }
 
 /// Whether this repository's owner has room for what is arriving.
@@ -262,11 +399,48 @@ pub struct Room {
 /// the bytes — which is a disk quota that cannot refuse anything.
 pub async fn room(
     State(app): State<AppState>,
-    _actor: crate::auth::Pusher,
+    pusher: crate::auth::Pusher,
     Json(body): Json<Room>,
 ) -> ApiResult<Json<Value>> {
-    room_on_disk(&app, &body.repo, 0)?;
+    this_push(&pusher, &body.repo)?;
+    // Only somebody who may push there may ask, because the answer
+    // names the owner's usage — and a repository that is not theirs to
+    // push to is a repository they learn nothing about.
+    let may = app.with_store(|s| {
+        s.acting_as(pusher.scope.as_ref())
+            .may_push(&pusher.principal, &body.repo)
+    });
+    if !may {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "repo not found",
+        ));
+    }
+    let owner = app
+        .with_store(|s| s.repo(&body.repo))?
+        .map(|record| record.owner)
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not_found", "repo not found"))?;
+    // Other pushes into this owner's repositories are counted as
+    // already there, and this one is counted from now on: what the
+    // measurement after each push will find, before it is found.
+    let elsewhere = app.arriving_elsewhere(&owner, &pusher.secret);
+    room_on_disk(&app, &body.repo, body.arriving, elsewhere)?;
+    app.reserve_for_push(&pusher.secret, body.arriving);
     Ok(Json(json!({ "ok": true })))
+}
+
+/// The hook's token was issued for one push into one repository, and
+/// it may speak only of that one.
+fn this_push(pusher: &crate::auth::Pusher, repo: &str) -> ApiResult<()> {
+    if pusher.repo == repo {
+        return Ok(());
+    }
+    Err(ApiError::new(
+        StatusCode::FORBIDDEN,
+        "forbidden",
+        format!("this push is into {}, not {repo}", pusher.repo),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -308,8 +482,9 @@ pub async fn info_refs(
 pub async fn upload_pack(
     State(app): State<AppState>,
     RepoName(repo): RepoName,
+    crate::guard::ClientIp(client): crate::guard::ClientIp,
     headers: HeaderMap,
-    body: Bytes,
+    body: Body,
 ) -> Response {
     let result: ApiResult<Response> = async {
         let git = git_enabled(&app)?;
@@ -317,14 +492,20 @@ pub async fn upload_pack(
         // Advertising refs and serving the pack are two requests; both
         // have to ask, or the second is an open door.
         may_read(&app, &name, &headers)?;
-        let input = request_body(&headers, body)?;
-        let output = git
+        let input = negotiation(&headers, body).await?;
+        let slot = app
+            .git_slot(&transfer_caller(&headers, client))
+            .ok_or_else(transfers_full)?;
+        // The pack goes out as git produces it: a clone of a large
+        // repository is a large response, and holding it whole would
+        // make the forge's memory the repository's size times the
+        // number of people cloning.
+        let stream = git
             .store
-            .serve_rpc(
+            .stream_rpc(
                 Service::UploadPack,
                 &name,
                 input,
-                Vec::new(),
                 git_protocol(&headers).as_deref(),
             )
             .await?;
@@ -333,7 +514,10 @@ pub async fn upload_pack(
                 header::CONTENT_TYPE,
                 Service::UploadPack.result_content_type(),
             )],
-            output,
+            Body::from_stream(Served {
+                stream,
+                _slot: slot,
+            }),
         )
             .into_response())
     }
@@ -347,7 +531,7 @@ pub async fn receive_pack(
     State(app): State<AppState>,
     RepoName(repo): RepoName,
     headers: HeaderMap,
-    body: Bytes,
+    body: Body,
 ) -> Response {
     let result: ApiResult<Response> = async {
         let git = git_enabled(&app)?;
@@ -355,17 +539,37 @@ pub async fn receive_pack(
         // Who first, then what: an anonymous caller learns nothing about
         // which repositories exist from the shape of the refusal.
         let (principal, scope) = push_principal(&app, &headers)?;
-        ensure_repo(&app, &name)?;
-        let input = request_body(&headers, body)?;
-        // The hook inherits this env and records pushes back through
-        // the API as the authenticated pusher, via an ephemeral token
-        // that outlives nothing but this receive-pack.
+        let owner = app
+            .with_store(|s| s.repo(&name))?
+            .map(|record| record.owner)
+            .ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    format!("repo {name} not found"),
+                )
+            })?;
+        let input = push_body(&headers, body).await?;
+        let _slot = app
+            .git_slot(principal.as_str())
+            .ok_or_else(transfers_full)?;
+        // Measured whatever happens next — a push the pusher abandons
+        // or the timeout kills has still written into the repository,
+        // and the number has to follow what is there. Held from before
+        // git is spawned, because a guard made after a failed await is
+        // a guard that is never made.
+        let _measure = MeasureOnDrop::new(&app, &name);
+        // The hooks inherit this env and record the push back through
+        // the API as the authenticated pusher, via a token that names
+        // this push and dies with it.
+        let secret = app.issue_push_token(&principal, scope.as_ref(), &name, &owner);
+        let _push = PushInFlight {
+            app: app.clone(),
+            secret: secret.clone(),
+        };
         let env = vec![
             ("CAIRN_SERVER".to_owned(), git.base_url.clone()),
-            (
-                "CAIRN_TOKEN".to_owned(),
-                app.issue_push_token(&principal, scope.as_ref()),
-            ),
+            ("CAIRN_TOKEN".to_owned(), secret),
             ("CAIRN_REPO".to_owned(), name.clone()),
         ];
         let output = git
@@ -385,7 +589,6 @@ pub async fn receive_pack(
         if reconcile_tag_refs(&app, &name).await {
             mirror_default_branch(&app, &name).await;
         }
-        remember_size(&app, &name).await;
         Ok((
             [(
                 header::CONTENT_TYPE,
@@ -397,6 +600,20 @@ pub async fn receive_pack(
     }
     .await;
     result.unwrap_or_else(challenge_basic)
+}
+
+/// The push token's life: issued before receive-pack, ended when the
+/// handler is done with it — by answering, by failing, or by being
+/// dropped when the pusher hung up.
+struct PushInFlight {
+    app: AppState,
+    secret: String,
+}
+
+impl Drop for PushInFlight {
+    fn drop(&mut self) {
+        self.app.end_push(&self.secret);
+    }
 }
 
 /// `refs/changes/<n>/<rev>` is a projection of the graph onto git,
@@ -477,12 +694,27 @@ pub struct RecordTag {
 /// has finished, by [`reconcile_tag_refs`].
 pub async fn record_tag(
     State(app): State<AppState>,
-    actor: crate::auth::Pusher,
+    pusher: crate::auth::Pusher,
     Json(body): Json<RecordTag>,
 ) -> ApiResult<Json<Value>> {
+    this_push(&pusher, &body.repo)?;
+    // A tag names landed history. The hook checks this in the
+    // repository it is running in; asked again here, so that the rule
+    // does not live only in the hook.
+    let git = git_enabled(&app)?;
+    if !git.store.on_a_branch(&body.repo, &body.commit_oid).await? {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid",
+            format!(
+                "tag {}: {} is on no branch, and a tag names landed history",
+                body.name, body.commit_oid
+            ),
+        ));
+    }
     let env = app.with_store(|s| {
-        s.acting_as(actor.1.as_ref()).push_tag(
-            &actor.0,
+        s.acting_as(pusher.scope.as_ref()).push_tag(
+            &pusher.principal,
             &body.repo,
             &body.name,
             &body.commit_oid,
@@ -523,7 +755,7 @@ pub(crate) async fn reconcile_tag_refs(app: &AppState, repo: &str) -> bool {
         let oid = tag.object_oid.as_deref().unwrap_or(&tag.commit_oid);
         match git.store.set_ref(repo, &refname, oid).await {
             Ok(()) => created = true,
-            Err(err) => tracing::debug!(%err, %refname, repo, "tag ref not creatable yet"),
+            Err(err) => tracing::warn!(%err, %refname, repo, "tag ref not creatable yet"),
         }
     }
     created
@@ -549,7 +781,12 @@ async fn mirror_default_branch(app: &AppState, repo: &str) {
 /// it lands, so this is a floor rather than the true cost — but git is
 /// told to keep a pushed pack packed, so the two are close, and the
 /// alternative is finding out after the bytes are permanent.
-pub(crate) fn room_on_disk(app: &AppState, repo: &str, arriving: u64) -> ApiResult<()> {
+pub(crate) fn room_on_disk(
+    app: &AppState,
+    repo: &str,
+    arriving: u64,
+    elsewhere: u64,
+) -> ApiResult<()> {
     app.with_store(|s| {
         let Some(record) = s.repo(repo)? else {
             return Ok(());
@@ -558,14 +795,22 @@ pub(crate) fn room_on_disk(app: &AppState, repo: &str, arriving: u64) -> ApiResu
             return Ok(());
         };
         let used = s.usage(&record.owner)?.disk;
-        if used.saturating_add(arriving) <= limit {
+        if used.saturating_add(elsewhere).saturating_add(arriving) <= limit {
             return Ok(());
         }
+        let others = if elsewhere > 0 {
+            format!(
+                ", {} more is arriving in other pushes",
+                crate::in_bytes(elsewhere)
+            )
+        } else {
+            String::new()
+        };
         Err(ApiError::new(
             StatusCode::CONFLICT,
             "over_quota",
             format!(
-                "{} is using {} of git storage and this push carries {}, and this forge allows {}",
+                "{} is using {} of git storage{others} and this push carries {}, and this forge allows {}",
                 record.owner,
                 crate::in_bytes(used),
                 crate::in_bytes(arriving),
@@ -601,6 +846,9 @@ impl Drop for MeasureOnDrop {
     }
 }
 
+/// How long one measurement may take before the last number stands.
+const MEASURE_WITHIN: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Measure what a repository takes on disk and remember it, so an
 /// owner's page and their disk quota have a number to work from.
 ///
@@ -609,7 +857,22 @@ impl Drop for MeasureOnDrop {
 /// is there and refuses the *next* push from an owner already over.
 pub(crate) async fn remember_size(app: &AppState, repo: &str) {
     let Some(git) = app.git() else { return };
-    match git.store.size(repo).await {
+    // What a dead push left in quarantine is nobody's: swept before the
+    // count, so that it is neither charged to the owner nor kept.
+    match git.store.sweep_quarantines(repo).await {
+        Ok(0) | Err(_) => {}
+        Ok(swept) => tracing::info!(repo, swept, "removed quarantines no push was using"),
+    }
+    // Bounded, because a walk with no bound pins a thread on a stalled
+    // disk forever, and the landing train waits behind it.
+    let measured = match tokio::time::timeout(MEASURE_WITHIN, git.store.size(repo)).await {
+        Ok(measured) => measured,
+        Err(_) => {
+            tracing::warn!(repo, "measuring took too long; keeping the last number");
+            return;
+        }
+    };
+    match measured {
         Ok(bytes) => {
             if let Err(err) = app.with_store(|s| s.record_repo_size(repo, bytes)) {
                 tracing::warn!(error = %err, repo, "could not remember a repository's size");
@@ -633,6 +896,7 @@ pub async fn record_push(
     actor: crate::auth::Pusher,
     Json(body): Json<RecordPush>,
 ) -> ApiResult<Json<Value>> {
+    this_push(&actor, &body.repo)?;
     if body.commits.is_empty() {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
@@ -665,9 +929,10 @@ pub async fn record_push(
     let mut last_seq = 0i64;
     for commit in &body.commits {
         let existing = match &commit.change_id {
-            Some(key) => {
-                app.with_store(|s| s.acting_as(actor.1.as_ref()).change_by_key(&body.repo, key))?
-            }
+            Some(key) => app.with_store(|s| {
+                s.acting_as(actor.scope.as_ref())
+                    .change_by_key(&body.repo, key)
+            })?,
             None => None,
         };
         // An attempt at a task that already has an open change is a
@@ -679,7 +944,7 @@ pub async fn record_push(
         let existing = match (existing, &task) {
             (Some(change), _) => Some(change),
             (None, Some(task)) => app
-                .with_store(|s| s.acting_as(actor.1.as_ref()).open_change_for_task(task))?
+                .with_store(|s| s.acting_as(actor.scope.as_ref()).open_change_for_task(task))?
                 .filter(|c| c.repo == body.repo && c.target == body.target),
             (None, None) => None,
         };
@@ -687,16 +952,16 @@ pub async fn record_push(
         // which attempt it came from.
         let session = match &task {
             Some(task) => app
-                .with_store(|s| s.acting_as(actor.1.as_ref()).sessions_for_task(task))?
+                .with_store(|s| s.acting_as(actor.scope.as_ref()).sessions_for_task(task))?
                 .into_iter()
-                .find(|s| s.agent == actor.0 && s.state == cairn_core::SessionState::Active)
+                .find(|s| s.agent == actor.principal && s.state == cairn_core::SessionState::Active)
                 .map(|s| s.id),
             None => None,
         };
         let (change, number, created) = match existing {
             Some(change) if change.state == ChangeState::Open && change.target == body.target => {
                 let unchanged = app
-                    .with_store(|s| s.acting_as(actor.1.as_ref()).revisions(&change.id))?
+                    .with_store(|s| s.acting_as(actor.scope.as_ref()).revisions(&change.id))?
                     .last()
                     .is_some_and(|r| r.commit_oid == commit.commit_oid);
                 if unchanged {
@@ -732,8 +997,10 @@ pub async fn record_push(
                     task: task.clone(),
                     ..cairn_core::ChangeSpec::new(&body.repo, &body.target, &commit.title)
                 };
-                let (id, number, env) =
-                    app.with_store(|s| s.acting_as(actor.1.as_ref()).open_change(&actor.0, spec))?;
+                let (id, number, env) = app.with_store(|s| {
+                    s.acting_as(actor.scope.as_ref())
+                        .open_change(&actor.principal, spec)
+                })?;
                 app.publish(&env);
                 (id, number, true)
             }
@@ -753,9 +1020,9 @@ pub async fn record_push(
             None => Vec::new(),
         };
         let (revision, pushed) = app.with_store(|s| {
-            s.acting_as(actor.1.as_ref());
+            s.acting_as(actor.scope.as_ref());
             s.push_revision_with_paths(
-                &actor.0,
+                &actor.principal,
                 &change,
                 &commit.commit_oid,
                 session.as_ref(),

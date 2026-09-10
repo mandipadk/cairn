@@ -8,10 +8,10 @@
 //! becomes "these lines shipped on a promise", by file.
 
 use crate::auth::MaybeActor;
+use crate::error::Json;
 use crate::error::{ApiError, ApiResult};
 use crate::repo_path::RepoName;
 use crate::state::AppState;
-use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use cairn_core::{
@@ -338,7 +338,7 @@ pub async fn history(
     State(app): State<AppState>,
     who: MaybeActor,
     RepoName(repo): RepoName,
-    axum::extract::Query(query): axum::extract::Query<HistoryQuery>,
+    crate::error::Query(query): crate::error::Query<HistoryQuery>,
 ) -> ApiResult<Json<Value>> {
     crate::routes::readable_repo_by(&app, &who, &repo)?;
     let points =
@@ -384,7 +384,9 @@ pub async fn create_pay_down_tasks(
     let record = app
         .with_store(|s| s.repo(repo))?
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not_found", "repo not found"))?;
-    if !app.with_store(|s| s.owns(actor, &record.owner))?
+    // Under the credential's scope throughout: a session credential is
+    // judged as what it carries, not as its holder's standing self.
+    if !app.with_store(|s| s.acting_as(acting).owns(actor, &record.owner))?
         && !app.with_store(|s| s.acting_as(acting).is_admin(actor))
     {
         return Err(ApiError::new(
@@ -393,16 +395,33 @@ pub async fn create_pay_down_tasks(
             "only the repository's owner or an admin turns debt into tasks",
         ));
     }
+    // Ask for the room once, before making any: a refusal partway
+    // through a loop leaves some made and reports that none were.
+    let room = app.with_store(|s| {
+        let quota = s.quota(&record.owner)?;
+        let usage = s.usage(&record.owner)?;
+        Ok::<_, cairn_core::CoreError>(quota.open_tasks.map_or(usize::MAX, |limit| {
+            limit.saturating_sub(usage.open_tasks) as usize
+        }))
+    })?;
+    if room == 0 {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "over_quota",
+            format!("{} has no room for another open task", record.owner),
+        ));
+    }
+    let count = count.min(room);
     let map = map(app, repo, &record.default_branch).await?;
     let mut created = Vec::new();
     for file in map
         .files
         .iter()
         .filter(|f| f.counts.debt() > 0 && f.task.is_none())
-        .take(count.clamp(1, 50))
+        .take(count.min(50))
     {
         let (task, env) = app.with_store(|s| {
-            s.create_task_with_attempts(
+            s.acting_as(acting).create_task_with_attempts(
                 actor,
                 Some(repo),
                 &format!("Verify {}", file.path),

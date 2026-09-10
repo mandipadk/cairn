@@ -332,6 +332,9 @@ dependencies = [
 name = "cairn-git"
 version = "0.1.0-alpha.1"
 dependencies = [
+ "bytes",
+ "futures-core",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
 ]

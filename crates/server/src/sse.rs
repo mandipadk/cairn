@@ -10,8 +10,9 @@
 //! never misses an event.
 
 use crate::auth::Actor;
+use crate::error::Query;
 use crate::state::AppState;
-use axum::extract::{Query, State};
+use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use cairn_core::{Envelope, EventSeq};
@@ -40,6 +41,13 @@ async fn drain_from_store(
     last: &mut i64,
 ) -> Result<bool, cairn_core::CoreError> {
     loop {
+        // A reader who has gone is not worth another batch, whatever
+        // they could or could not see of it: a scope that hides the
+        // whole log would otherwise walk all of it, holding the store
+        // lock per event, for nobody.
+        if tx.is_closed() {
+            return Ok(false);
+        }
         let batch = app.with_store(|s| s.events_after_scoped(EventSeq(*last), CATCH_UP_BATCH))?;
         if batch.is_empty() {
             return Ok(true);
@@ -64,7 +72,7 @@ pub async fn stream(
     actor: Actor,
     Query(query): Query<StreamQuery>,
     headers: HeaderMap,
-) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
+) -> axum::response::Response {
     // Reconnecting clients resume from Last-Event-ID per the SSE spec;
     // first connections use ?after=.
     let cursor = headers
@@ -79,7 +87,16 @@ pub async fn stream(
     let mut live = app.subscribe();
 
     let who = actor.0;
+    // A replay from the beginning walks the whole log, taking the store
+    // lock per event, and one token could open a thousand of them. A
+    // principal holds a few places; asking for more is refused up front
+    // with a wait, rather than answered with a stream that ends, so a
+    // client knows to come back later rather than at once.
+    let Some(place) = app.open_stream(&who) else {
+        return crate::guard::rate_limited_read(Duration::from_secs(5));
+    };
     tokio::spawn(async move {
+        let _place = place;
         let mut last = cursor;
         if !drain_from_store(&app, &who, &tx, &mut last)
             .await
@@ -88,7 +105,14 @@ pub async fn stream(
             return;
         }
         loop {
-            match live.recv().await {
+            // A reader who has gone is noticed now, not at the next
+            // event: on a quiet forge that could be hours, with this
+            // place held the whole time.
+            let received = tokio::select! {
+                received = live.recv() => received,
+                () = tx.closed() => return,
+            };
+            match received {
                 Ok(envelope) => {
                     if envelope.seq.0 <= last {
                         continue;
@@ -128,14 +152,18 @@ pub async fn stream(
     });
 
     let events = ReceiverStream::new(rx).map(|envelope| {
-        Ok(Event::default()
-            .id(envelope.seq.0.to_string())
-            .event(envelope.event.kind())
-            .data(serde_json::to_string(&envelope).expect("envelopes are always serializable")))
+        Ok::<_, Infallible>(
+            Event::default()
+                .id(envelope.seq.0.to_string())
+                .event(envelope.event.kind())
+                .data(serde_json::to_string(&envelope).expect("envelopes are always serializable")),
+        )
     });
-    Sse::new(events).keep_alive(
-        KeepAlive::new()
-            .interval(Duration::from_secs(15))
-            .text("keep-alive"),
+    axum::response::IntoResponse::into_response(
+        Sse::new(events).keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("keep-alive"),
+        ),
     )
 }

@@ -79,6 +79,18 @@ pub(crate) mod raw {
             .exists(rusqlite::params![team, member])?)
     }
 
+    /// The agents `owner` holds that are still running.
+    pub fn active_agents_of(conn: &Connection, owner: &str) -> CoreResult<Vec<String>> {
+        Ok(conn
+            .prepare_cached(
+                "SELECT id FROM principals
+                   WHERE kind = 'agent' AND active = 1 AND owner = ?
+                   ORDER BY id",
+            )?
+            .query_map(params![owner], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
     /// Whether `actor` holds what `owner` holds: they are the owner, or
     /// a member of the organisation that is.
     pub fn owns(conn: &Connection, actor: &str, owner: &str) -> CoreResult<bool> {
@@ -1021,9 +1033,10 @@ pub(crate) mod raw {
     ) -> CoreResult<Option<PrincipalId>> {
         Ok(conn
             .prepare_cached(
-                "SELECT principal FROM tokens
-                  WHERE hash = ? AND revoked = 0 AND (until_ts IS NULL OR until_ts > ?)
-                    AND (label IS NULL OR label NOT LIKE 'invitation%')",
+                "SELECT t.principal FROM tokens t JOIN principals p ON p.id = t.principal
+                  WHERE t.hash = ? AND t.revoked = 0 AND (t.until_ts IS NULL OR t.until_ts > ?)
+                    AND (t.label IS NULL OR t.label NOT LIKE 'invitation%')
+                    AND p.active = 1",
             )?
             .query_row(params![hash, jiff::Timestamp::now().to_string()], |row| {
                 row.get::<_, String>(0)
@@ -1111,9 +1124,15 @@ pub(crate) mod raw {
         .collect()
     }
 
+    /// The live teams somebody is on. A deactivated team confers
+    /// nothing — not its grants, not its agents, not a place in the
+    /// owners a member may register under — so it is not listed.
     pub fn teams_of(conn: &Connection, member: &str) -> CoreResult<Vec<String>> {
         Ok(conn
-            .prepare_cached("SELECT team FROM team_members WHERE member = ? ORDER BY team")?
+            .prepare_cached(
+                "SELECT m.team FROM team_members m JOIN principals p ON p.id = m.team
+                  WHERE m.member = ? AND p.active = 1 ORDER BY m.team",
+            )?
             .query_map(params![member], |row| row.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?)
     }
@@ -1405,11 +1424,39 @@ pub(crate) mod raw {
         // Claimed counts too. A task somebody is working on is more of a
         // commitment than one nobody has picked up, and counting only
         // the untouched ones would make "claim it" a way past the limit.
+        // A task in one of the owner's repositories is theirs. A task
+        // belonging to the forge rather than a repository is charged to
+        // whoever made it — them, or an agent of theirs — because it is
+        // still work somebody is holding open, and "nobody's" is where
+        // unbounded things hide.
         let open_tasks: i64 = conn.query_row(
             "SELECT COUNT(*) FROM tasks
                WHERE state IN ('open', 'claimed')
+                 AND (repo IN (SELECT name FROM repos WHERE owner = ?1)
+                      OR (repo IS NULL AND created_by IN
+                          (SELECT id FROM principals WHERE id = ?1 OR owner = ?1)))",
+            params![owner],
+            |row| row.get(0),
+        )?;
+        let open_changes: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM changes
+               WHERE state = 'open'
                  AND repo IN (SELECT name FROM repos WHERE owner = ?)",
             params![owner],
+            |row| row.get(0),
+        )?;
+        // Standing tokens only: a session credential dies with its
+        // session and is bounded there, and a retired agent's tokens
+        // answer nothing, so neither is room this owner is taking up.
+        let tokens: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM tokens
+               WHERE revoked = 0
+                 AND session IS NULL AND scope IS NULL
+                 AND (label IS NULL OR label NOT LIKE 'invitation%')
+                 AND (until_ts IS NULL OR until_ts > ?2)
+                 AND principal IN
+                     (SELECT id FROM principals WHERE active = 1 AND (id = ?1 OR owner = ?1))",
+            params![owner, jiff::Timestamp::now().to_string()],
             |row| row.get(0),
         )?;
         let disk: i64 = conn.query_row(
@@ -1423,6 +1470,8 @@ pub(crate) mod raw {
             agents: agents.max(0) as u32,
             open_tasks: open_tasks.max(0) as u32,
             disk: disk.max(0) as u64,
+            open_changes: open_changes.max(0) as u32,
+            tokens: tokens.max(0) as u32,
         })
     }
 
@@ -1503,6 +1552,12 @@ impl Store {
     /// number an owner can act on.
     pub fn stalest_repo(&self, cutoff: &str) -> CoreResult<Option<String>> {
         use rusqlite::OptionalExtension;
+        // A repository nobody has measured comes first: one renamed or
+        // transferred before its first measurement landed has no row at
+        // all, and would otherwise be invisible until the next restart.
+        if let Some(unmeasured) = self.unmeasured_repos()?.into_iter().next() {
+            return Ok(Some(unmeasured));
+        }
         Ok(self
             .conn
             .prepare_cached(
@@ -1609,6 +1664,11 @@ impl Store {
 
     pub fn teams_of(&self, member: &PrincipalId) -> CoreResult<Vec<String>> {
         raw::teams_of(&self.conn, member.as_str())
+    }
+
+    /// The live agents an owner holds: what stops when they do.
+    pub fn active_agents_of(&self, owner: &PrincipalId) -> CoreResult<Vec<String>> {
+        raw::active_agents_of(&self.conn, owner.as_str())
     }
 
     pub fn members_of(&self, team: &PrincipalId) -> CoreResult<Vec<PrincipalId>> {

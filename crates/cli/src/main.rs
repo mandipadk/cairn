@@ -49,6 +49,11 @@ enum Command {
         /// claim any address.
         #[arg(long)]
         trust_proxy: bool,
+        /// How many trusted proxies stand in front, when --trust-proxy is
+        /// given: the visitor's address is that many hops from the right
+        /// of X-Forwarded-For. One for a reverse proxy; two behind a CDN.
+        #[arg(long, default_value_t = 1)]
+        proxy_hops: u8,
         /// SMTP relay for outbound mail, credentials included:
         /// `smtps://user:pass@host:465`, or
         /// `smtp://user:pass@host:587?tls=required`. Read from
@@ -116,6 +121,12 @@ enum Command {
         /// Disk one owner's repositories may take, in mebibytes; `none` for no limit.
         #[arg(long)]
         quota_disk_mb: Option<String>,
+        /// Changes open across one owner's repositories; `none` for no limit.
+        #[arg(long)]
+        quota_open_changes: Option<String>,
+        /// Live tokens one owner and their agents may hold; `none` for no limit.
+        #[arg(long)]
+        quota_tokens: Option<String>,
         /// The Ed25519 key that signs merge receipts; generated there when
         /// absent. Beside the database when unset.
         #[arg(long)]
@@ -267,6 +278,24 @@ enum AdminCommand {
         /// Disk their repositories may take, in mebibytes; `none` for no limit.
         #[arg(long)]
         disk_mb: Option<String>,
+        /// Changes open across their repositories; `none` for no limit.
+        #[arg(long)]
+        open_changes: Option<String>,
+        /// Live tokens they and their agents may hold; `none` for no limit.
+        #[arg(long)]
+        tokens: Option<String>,
+    },
+    /// Reclaim disk that nothing refers to, in one repository or every
+    /// one, and measure again. Git prunes on its own only after two
+    /// weeks; this is for the owner who deleted things and wants their
+    /// number to say so now.
+    Gc {
+        #[arg(long, default_value = "cairn.db")]
+        db: PathBuf,
+        #[arg(long, default_value = "repos")]
+        repos: PathBuf,
+        /// One repository, as owner/name; every repository when absent.
+        repo: Option<String>,
     },
     /// Give every repository named the old way, without its owner in
     /// front, its owner's name: `demo` becomes `ada/demo`, on the record
@@ -358,6 +387,7 @@ async fn main() -> anyhow::Result<()> {
             secure_cookies,
             mirror_token,
             trust_proxy,
+            proxy_hops,
             smtp_url,
             mail_command,
             mail_from,
@@ -376,6 +406,8 @@ async fn main() -> anyhow::Result<()> {
             quota_agents,
             quota_open_tasks,
             quota_disk_mb,
+            quota_open_changes,
+            quota_tokens,
             signing_key_file,
         } => {
             let git_version = cairn_git::preflight().context("checking the git on PATH")?;
@@ -395,20 +427,31 @@ async fn main() -> anyhow::Result<()> {
                     })?))),
                 }
             };
-            let narrow = |given: Option<Option<u64>>| -> Option<Option<u32>> {
-                given.map(|value| value.map(|n| n.min(u64::from(u32::MAX)) as u32))
+            let narrow = |given: Option<Option<u64>>| -> anyhow::Result<Option<Option<u32>>> {
+                match given {
+                    Some(Some(n)) if n > u64::from(u32::MAX) => {
+                        anyhow::bail!("{n} is larger than a limit can be")
+                    }
+                    other => Ok(other.map(|value| value.map(|n| n as u32))),
+                }
             };
-            if let Some(value) = narrow(said(quota_repos, "quota-repos")?) {
+            if let Some(value) = narrow(said(quota_repos, "quota-repos")?)? {
                 quota.repos = value;
             }
-            if let Some(value) = narrow(said(quota_agents, "quota-agents")?) {
+            if let Some(value) = narrow(said(quota_agents, "quota-agents")?)? {
                 quota.agents = value;
             }
-            if let Some(value) = narrow(said(quota_open_tasks, "quota-open-tasks")?) {
+            if let Some(value) = narrow(said(quota_open_tasks, "quota-open-tasks")?)? {
                 quota.open_tasks = value;
             }
             if let Some(value) = said(quota_disk_mb, "quota-disk-mb")? {
                 quota.disk = value.map(|mb| mb.saturating_mul(1024 * 1024));
+            }
+            if let Some(value) = narrow(said(quota_open_changes, "quota-open-changes")?)? {
+                quota.open_changes = value;
+            }
+            if let Some(value) = narrow(said(quota_tokens, "quota-tokens")?)? {
+                quota.tokens = value;
             }
             let store = Store::open(&db)
                 .with_context(|| format!("opening forge database at {}", db.display()))?
@@ -455,7 +498,9 @@ async fn main() -> anyhow::Result<()> {
                 state = state.with_mirror_credential(token);
             }
             if trust_proxy {
-                state = state.trusting_proxy();
+                state = state.trusting_proxy(proxy_hops);
+            } else if proxy_hops != 1 {
+                tracing::warn!("--proxy-hops does nothing without --trust-proxy");
             }
             state = state
                 .with_write_allowance(api_writes_per_minute)
@@ -637,6 +682,8 @@ async fn main() -> anyhow::Result<()> {
                 agents,
                 open_tasks,
                 disk_mb,
+                open_changes,
+                tokens,
             } => {
                 let mut store = Store::open(&db)
                     .with_context(|| format!("opening forge database at {}", db.display()))?;
@@ -665,15 +712,22 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                 };
-                let narrow = |given: Option<Option<u64>>| -> Option<Option<u32>> {
-                    given.map(|value| value.map(|n| n.min(u64::from(u32::MAX)) as u32))
+                let narrow = |given: Option<Option<u64>>| -> anyhow::Result<Option<Option<u32>>> {
+                    match given {
+                        Some(Some(n)) if n > u64::from(u32::MAX) => {
+                            anyhow::bail!("{n} is larger than a limit can be")
+                        }
+                        other => Ok(other.map(|value| value.map(|n| n as u32))),
+                    }
                 };
                 let patch = cairn_core::QuotaOverride {
-                    repos: narrow(said(repos.as_ref())?),
-                    agents: narrow(said(agents.as_ref())?),
-                    open_tasks: narrow(said(open_tasks.as_ref())?),
+                    repos: narrow(said(repos.as_ref())?)?,
+                    agents: narrow(said(agents.as_ref())?)?,
+                    open_tasks: narrow(said(open_tasks.as_ref())?)?,
                     disk: said(disk_mb.as_ref())?
                         .map(|mb| mb.map(|mb| mb.saturating_mul(1024 * 1024))),
+                    open_changes: narrow(said(open_changes.as_ref())?)?,
+                    tokens: narrow(said(tokens.as_ref())?)?,
                 };
                 if !patch.is_empty() {
                     let actor = PrincipalId::new(r#as.as_deref().unwrap_or(""))
@@ -687,6 +741,14 @@ async fn main() -> anyhow::Result<()> {
                 }
                 let quota = store.quota(&owner_id)?;
                 let usage = store.usage(&owner_id)?;
+                // Offline, this handle knows the built-in numbers and not
+                // the flags the running forge was started with; say so,
+                // because this table is what an operator reads while
+                // working out why somebody is blocked.
+                println!(
+                    "limits not set for {owner} are the built-in defaults here; \
+                     the running forge's flags may differ (GET /api/principals/{owner}/quota is exact)"
+                );
                 let say = |what: &str, used: String, limit: Option<String>| {
                     println!(
                         "{what:<12} {used:>12} of {}",
@@ -713,6 +775,35 @@ async fn main() -> anyhow::Result<()> {
                     cairn_server::in_bytes(usage.disk),
                     quota.disk.map(cairn_server::in_bytes),
                 );
+                say(
+                    "open changes",
+                    usage.open_changes.to_string(),
+                    quota.open_changes.map(|n| n.to_string()),
+                );
+                say(
+                    "tokens",
+                    usage.tokens.to_string(),
+                    quota.tokens.map(|n| n.to_string()),
+                );
+            }
+            AdminCommand::Gc { db, repos, repo } => {
+                let mut store = Store::open(&db)
+                    .with_context(|| format!("opening forge database at {}", db.display()))?;
+                let git = GitStore::new(
+                    &repos,
+                    std::env::current_exe().context("locating own binary")?,
+                );
+                let names: Vec<String> = match repo {
+                    Some(one) => vec![one],
+                    None => store.repos()?.into_iter().map(|r| r.name).collect(),
+                };
+                let runtime = tokio::runtime::Runtime::new()?;
+                for name in names {
+                    runtime.block_on(git.gc(&name))?;
+                    let bytes = runtime.block_on(git.size(&name))?;
+                    store.record_repo_size(&name, bytes)?;
+                    println!("{name:<40} {}", cairn_server::in_bytes(bytes));
+                }
             }
             AdminCommand::AdoptOwners { db, repos, r#as } => {
                 let mut store = Store::open(&db)

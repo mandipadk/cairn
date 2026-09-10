@@ -347,10 +347,9 @@ fn dispatch(client: &ApiClient, name: &str, args: &Value) -> Result<(u16, Value)
             args,
         ),
         "debt" => client.get(&format!("/api/repos/{}/debt", need(args, "repo")?)),
-        "blame" => client.get(&format!(
-            "/api/repos/{}/blame?path={}",
-            need(args, "repo")?,
-            need(args, "path")?
+        "blame" => client.get(&with_query(
+            &format!("/api/repos/{}/blame", need(args, "repo")?),
+            &[("path", Some(need(args, "path")?.to_owned()))],
         )),
         "list_events" => {
             let after = args.get("after").and_then(Value::as_i64).unwrap_or(0);

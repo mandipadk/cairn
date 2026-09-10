@@ -7,9 +7,9 @@
 //! The credentials themselves are opaque JSON to the core: this module
 //! is the only code that reads them.
 
+use crate::error::Json;
 use crate::state::AppState;
 use crate::web::Viewer;
-use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
@@ -35,15 +35,16 @@ pub fn relying_party(public_url: &str) -> Result<Webauthn, String> {
 }
 
 fn bad(what: &str) -> Response {
-    (StatusCode::BAD_REQUEST, Json(json!({ "error": what }))).into_response()
+    crate::error::ApiError::new(StatusCode::BAD_REQUEST, "invalid", what).into_response()
 }
 
 fn off() -> Response {
-    (
+    crate::error::ApiError::new(
         StatusCode::NOT_FOUND,
-        Json(json!({ "error": "passkeys are not configured on this forge" })),
+        "not_found",
+        "passkeys are not configured on this forge",
     )
-        .into_response()
+    .into_response()
 }
 
 fn cred_id_string(id: &CredentialID) -> String {

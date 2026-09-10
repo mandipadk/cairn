@@ -11,12 +11,15 @@
 //! itself is created afterwards by server-side reconciliation — hooks
 //! cannot update refs while pushed objects are still in quarantine.
 
+use bytes::Bytes;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::process::Stdio;
+use std::task::{Context, Poll};
 use std::time::Duration;
 use thiserror::Error;
-use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
+use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 
 /// Plumbing commands answer in milliseconds; anything that takes a
 /// minute has hung, and holding the connection open helps nobody.
@@ -25,6 +28,165 @@ const PLUMBING_TIMEOUT: Duration = Duration::from_secs(60);
 /// Serving a pack legitimately takes a while on a large repository,
 /// so the wire protocol gets its own, looser bound.
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// A quarantine directory older than this belongs to no live push:
+/// no transfer runs that long, and git removed its own on every exit
+/// it controlled.
+const QUARANTINE_DEAD_AFTER: Duration = Duration::from_secs(2 * 600);
+
+/// How much of a transfer's stderr is kept for the error it may end in.
+const STDERR_KEPT: u64 = 16 * 1024;
+
+/// What one stateless-RPC round reads from the client: the request
+/// whole, when it is small and had to be decoded first, or as it
+/// arrives, so a push of a large pack costs the forge no memory.
+pub enum RpcInput {
+    Whole(Vec<u8>),
+    Streamed(Pin<Box<dyn futures_core::Stream<Item = std::io::Result<Bytes>> + Send>>),
+}
+
+/// A service's output as it is produced. Dropping it kills the
+/// process; reading it to the end reaps the process.
+pub struct RpcStream {
+    child: Option<Child>,
+    group: Option<ProcessGroup>,
+    stdout: ChildStdout,
+    stderr: Option<tokio::task::JoinHandle<String>>,
+    deadline: Pin<Box<tokio::time::Sleep>>,
+    buffer: Box<[u8]>,
+    args: String,
+}
+
+impl futures_core::Stream for RpcStream {
+    type Item = std::io::Result<Bytes>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.child.is_none() {
+            return Poll::Ready(None);
+        }
+        if this.deadline.as_mut().poll(cx).is_ready() {
+            // The guards below kill the process when they drop.
+            this.child = None;
+            this.group = None;
+            return Poll::Ready(Some(Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!(
+                    "git {} did not finish within {}s",
+                    this.args,
+                    TRANSFER_TIMEOUT.as_secs()
+                ),
+            ))));
+        }
+        let mut buf = ReadBuf::new(&mut this.buffer);
+        match Pin::new(&mut this.stdout).poll_read(cx, &mut buf) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(err)) => Poll::Ready(Some(Err(err))),
+            Poll::Ready(Ok(())) if buf.filled().is_empty() => {
+                // The service has said everything. Reap it off this
+                // path: the reader is a client, and a client waits for
+                // its bytes, not for the forge's bookkeeping.
+                if let (Some(mut child), Some(mut group), Some(stderr)) =
+                    (this.child.take(), this.group.take(), this.stderr.take())
+                {
+                    tokio::spawn(async move {
+                        let _ = child.wait().await;
+                        group.disarm();
+                        stderr.abort();
+                    });
+                }
+                Poll::Ready(None)
+            }
+            Poll::Ready(Ok(())) => Poll::Ready(Some(Ok(Bytes::copy_from_slice(buf.filled())))),
+        }
+    }
+}
+
+/// Every process a transfer spawned, killed together. `kill_on_drop`
+/// reaches the child; the hooks the child spawned, and the git
+/// commands the hooks spawned, would otherwise outlive it, holding a
+/// connection to the forge and a quarantine on disk.
+struct ProcessGroup(Option<u32>);
+
+impl ProcessGroup {
+    fn of(child: &Child) -> Self {
+        ProcessGroup(child.id())
+    }
+
+    /// The transfer ended on its own; the group is gone, and its id
+    /// may already be somebody else's.
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for ProcessGroup {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(pid) = self.0.take() {
+            // kill(1) with a negative id signals the whole process
+            // group; the group is the child's own, made at spawn, and
+            // the id is disarmed once the child has exited on its own.
+            // The utility rather than the system call, because this
+            // crate has no unsafe code and this is not the place to
+            // start.
+            let _ = std::process::Command::new("kill")
+                .args(["-9", "--", &format!("-{pid}")])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
+}
+
+/// Write the request to the service, however it arrives, and close
+/// its stdin so it knows the request has ended.
+async fn feed(input: RpcInput, mut stdin: ChildStdin) {
+    match input {
+        RpcInput::Whole(bytes) => {
+            let _ = stdin.write_all(&bytes).await;
+        }
+        RpcInput::Streamed(mut stream) => loop {
+            let next = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await;
+            match next {
+                Some(Ok(chunk)) => {
+                    if stdin.write_all(&chunk).await.is_err() {
+                        break;
+                    }
+                }
+                Some(Err(_)) | None => break,
+            }
+        },
+    }
+    let _ = stdin.shutdown().await;
+}
+
+/// Keep the start of what the service says on stderr, and read the
+/// rest so a chatty service never blocks on a full pipe.
+async fn drain_stderr(mut stderr: ChildStderr) -> String {
+    let mut kept = Vec::new();
+    let _ = (&mut stderr).take(STDERR_KEPT).read_to_end(&mut kept).await;
+    let mut sink = [0u8; 4096];
+    while let Ok(n) = stderr.read(&mut sink).await {
+        if n == 0 {
+            break;
+        }
+    }
+    String::from_utf8_lossy(&kept).trim().to_owned()
+}
+
+/// The forge's git is the forge's: nothing from the operator's own
+/// configuration reaches it. A `core.hooksPath` in somebody's
+/// ~/.gitconfig would otherwise replace the hooks that are the push
+/// door, and a receive-pack that read it would open every branch to
+/// a direct push with nothing logged.
+fn isolated(command: &mut Command) {
+    command
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_TERMINAL_PROMPT", "0");
+}
 
 #[derive(Debug, Error)]
 pub enum GitError {
@@ -151,6 +313,11 @@ exec "${CAIRN_HOOK_BIN:?cairn hook binary not set}" internal-pre-receive
 /// disk quota is likely to be.
 pub const MAX_PACK_BYTES: u64 = 256 * 1024 * 1024;
 
+/// The most a push's list of ref updates may take, said to
+/// receive-pack. About a hundred bytes each, so this is some ten
+/// thousand refs in one push, which nobody has ever meant.
+pub const MAX_COMMAND_BYTES: u64 = 1024 * 1024;
+
 /// The oldest git this forge runs on.
 ///
 /// Every git feature used here, with the release that introduced it:
@@ -161,6 +328,8 @@ pub const MAX_PACK_BYTES: u64 = 256 * 1024 * 1024;
 /// | `proc-receive` / `procReceiveRefs` | 2.29  |
 /// | `init --object-format`             | 2.29  |
 /// | `init --initial-branch`            | 2.28  |
+/// | `receive.maxCommandBytes`          | 2.14  |
+/// | `receive.maxInputSize`             | 2.11  |
 /// | `merge-base --is-ancestor`         | 1.8   |
 /// | everything else                    | < 2.0 |
 ///
@@ -287,14 +456,11 @@ impl GitStore {
 
     async fn run(&self, current_dir: Option<&Path>, args: &[&str]) -> GitResult<Vec<u8>> {
         let mut command = Command::new("git");
-        // The forge's git is the forge's: nothing from the operator's
-        // own configuration reaches it, and anything that writes a
-        // commit - a note, a rebase - has an identity to write it as.
-        // A CI runner with no ~/.gitconfig was how this was learned.
+        // Anything that writes a commit - a note, a rebase - has an
+        // identity to write it as. A CI runner with no ~/.gitconfig was
+        // how this was learned.
+        isolated(&mut command);
         command
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_AUTHOR_NAME", "cairn")
             .env("GIT_AUTHOR_EMAIL", "forge@cairn.invalid")
             .env("GIT_COMMITTER_NAME", "cairn")
@@ -363,7 +529,21 @@ impl GitStore {
             let hook_path = path.join("hooks").join(hook);
             let current = tokio::fs::read(&hook_path).await.ok();
             if current.as_deref() != Some(script.as_bytes()) {
-                tokio::fs::write(&hook_path, script).await?;
+                // Written beside and renamed over: two receives after an
+                // upgrade both install, and a receive-pack that execs a
+                // half-written hook is refused for no reason of the
+                // pusher's. A rename is whole or not there.
+                let staged = path
+                    .join("hooks")
+                    .join(format!(".{hook}.{}", std::process::id()));
+                tokio::fs::write(&staged, script).await?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    tokio::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))
+                        .await?;
+                }
+                tokio::fs::rename(&staged, &hook_path).await?;
             }
             #[cfg(unix)]
             {
@@ -399,9 +579,90 @@ impl GitStore {
     /// it runs off the async threads.
     pub async fn size(&self, name: &str) -> GitResult<u64> {
         let dir = self.existing_repo_path(name)?;
+        // An alternates file moves a repository's objects somewhere the
+        // walk does not go. This forge never writes one; one that
+        // appears was put there by hand, and a number that ignores it
+        // would be a number that ignores most of the repository.
+        if dir.join("objects/info/alternates").is_file() {
+            return Err(GitError::Io(std::io::Error::other(
+                "objects/info/alternates is present; storage outside the repository cannot be measured",
+            )));
+        }
         tokio::task::spawn_blocking(move || directory_size(&dir))
             .await
             .map_err(|err| GitError::Io(std::io::Error::other(err)))?
+    }
+
+    /// Reclaim what nothing refers to. A conflicting rebase, an import
+    /// that failed, a landing that did not finish: each leaves objects
+    /// behind that no ref names, and git prunes them on its own only
+    /// after two weeks and only past a threshold. An operator's command
+    /// for the owner who cleaned up and wants the number to say so.
+    /// Repack, and drop objects nothing refers to — but only objects
+    /// older than an hour. A push's objects are referred to by nothing
+    /// between leaving quarantine and the reconciliation that writes
+    /// their ref; `--prune=now` would delete a push in flight, and the
+    /// graph would go on naming a revision git no longer has.
+    pub async fn gc(&self, name: &str) -> GitResult<()> {
+        let dir = self.existing_repo_path(name)?;
+        self.run(Some(&dir), &["gc", "--prune=1.hour.ago", "--quiet"])
+            .await
+            .map(|_| ())
+    }
+
+    /// Remove quarantine directories no push is using. Git removes its
+    /// own on every exit it controls; a receive-pack killed at the
+    /// timeout, or when the pusher hung up, has no exit, and the pack
+    /// it had taken in sits under `objects/tmp_objdir-*` where the
+    /// measurement counts it and nothing else does. Returns how many
+    /// were removed.
+    pub async fn sweep_quarantines(&self, name: &str) -> GitResult<usize> {
+        let objects = self.existing_repo_path(name)?.join("objects");
+        let mut entries = match tokio::fs::read_dir(&objects).await {
+            Ok(entries) => entries,
+            Err(_) => return Ok(0),
+        };
+        let mut swept = 0;
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let file_name = entry.file_name();
+            let Some(text) = file_name.to_str() else {
+                continue;
+            };
+            if !text.starts_with("tmp_objdir-") {
+                continue;
+            }
+            let Ok(meta) = entry.metadata().await else {
+                continue;
+            };
+            if !meta.is_dir() {
+                continue;
+            }
+            // A live quarantine is being written to; its directory's
+            // modification time keeps moving. One that stopped moving
+            // longer ago than any transfer may run is dead.
+            let dead = meta
+                .modified()
+                .ok()
+                .and_then(|at| at.elapsed().ok())
+                .is_some_and(|age| age > QUARANTINE_DEAD_AFTER);
+            if dead && tokio::fs::remove_dir_all(entry.path()).await.is_ok() {
+                swept += 1;
+            }
+        }
+        Ok(swept)
+    }
+
+    /// Whether a commit is reachable from some branch: landed history,
+    /// which is what a tag may name.
+    pub async fn on_a_branch(&self, name: &str, commit: &str) -> GitResult<bool> {
+        let dir = self.existing_repo_path(name)?;
+        let out = self
+            .run(
+                Some(&dir),
+                &["branch", "--contains", commit, "--format=%(refname)"],
+            )
+            .await?;
+        Ok(!String::from_utf8_lossy(&out).trim().is_empty())
     }
 
     pub fn has_repo_dir(&self, name: &str) -> bool {
@@ -427,6 +688,7 @@ impl GitStore {
     ) -> GitResult<Vec<u8>> {
         let path = self.existing_repo_path(name)?;
         let mut command = Command::new("git");
+        isolated(&mut command);
         command
             .arg(service.subcommand())
             .arg("--stateless-rpc")
@@ -460,18 +722,31 @@ impl GitStore {
     /// One stateless-RPC round: the request body goes to the service's
     /// stdin, its stdout is the response body. `env` carries the forge
     /// context the proc-receive hook needs.
-    pub async fn serve_rpc(
+    /// The command for one stateless-RPC round, with everything the
+    /// forge says to git said on the command line rather than read
+    /// from any configuration.
+    async fn rpc_command(
         &self,
         service: Service,
-        name: &str,
-        input: Vec<u8>,
+        path: &Path,
         env: Vec<(String, String)>,
         git_protocol: Option<&str>,
-    ) -> GitResult<Vec<u8>> {
-        let path = self.existing_repo_path(name)?;
+    ) -> GitResult<Command> {
         let mut command = Command::new("git");
+        isolated(&mut command);
         if service == Service::ReceivePack {
-            self.install_hooks(&path).await?;
+            self.install_hooks(path).await?;
+            // The hooks are the push door, and where they are is this
+            // binary's decision; said here so that no configuration
+            // anywhere can point receive-pack at other ones. Absolute,
+            // because git resolves a relative hooks path from inside
+            // the repository, and a forge started with `--repos repos`
+            // names its repositories relatively.
+            let hooks =
+                std::path::absolute(path.join("hooks")).unwrap_or_else(|_| path.join("hooks"));
+            command
+                .arg("-c")
+                .arg(format!("core.hooksPath={}", hooks.display()));
             // Which refs the hook owns is this binary's decision, not the
             // repository's configuration, so it is said on every receive.
             for refs in ["refs/for", "refs/tags"] {
@@ -490,11 +765,21 @@ impl GitStore {
             command
                 .arg("-c")
                 .arg(format!("receive.maxInputSize={MAX_PACK_BYTES}"));
+            // One push may update many refs, and each costs the hook
+            // several git commands and the forge a write; a push naming
+            // millions of them is not a push. A megabyte is thousands.
+            command
+                .arg("-c")
+                .arg(format!("receive.maxCommandBytes={MAX_COMMAND_BYTES}"));
+            // What arrives is checked for being well-formed git before
+            // it is stored, so a malformed tree cannot be pushed in to
+            // break every later read of it.
+            command.arg("-c").arg("receive.fsckObjects=true");
         }
         command
             .arg(service.subcommand())
             .arg("--stateless-rpc")
-            .arg(&path)
+            .arg(path)
             .envs(env)
             .env("CAIRN_HOOK_BIN", &self.hook_bin)
             .stdin(Stdio::piped())
@@ -504,20 +789,41 @@ impl GitStore {
             command.env("GIT_PROTOCOL", version);
         }
         command.kill_on_drop(true);
+        // Its own process group, so that the hooks it spawns and the
+        // git commands they spawn die with it rather than being
+        // reparented to init when it is killed.
+        #[cfg(unix)]
+        command.process_group(0);
+        Ok(command)
+    }
+
+    /// One stateless-RPC round, answered whole: the request goes to the
+    /// service's stdin as it arrives, and its stdout comes back once it
+    /// has exited. For receive-pack, whose answer is a short report and
+    /// whose exit is what the forge waits for before writing refs.
+    pub async fn serve_rpc(
+        &self,
+        service: Service,
+        name: &str,
+        input: RpcInput,
+        env: Vec<(String, String)>,
+        git_protocol: Option<&str>,
+    ) -> GitResult<Vec<u8>> {
+        let path = self.existing_repo_path(name)?;
+        let mut command = self.rpc_command(service, &path, env, git_protocol).await?;
         let mut child = command.spawn()?;
-        let mut stdin = child.stdin.take().expect("stdin piped");
+        let mut group = ProcessGroup::of(&child);
+        let stdin = child.stdin.take().expect("stdin piped");
         // Feed the request concurrently with reading the response so a
         // large exchange in either direction cannot deadlock the pipes.
-        tokio::spawn(async move {
-            let _ = stdin.write_all(&input).await;
-            let _ = stdin.shutdown().await;
-        });
+        tokio::spawn(feed(input, stdin));
         let output = tokio::time::timeout(TRANSFER_TIMEOUT, child.wait_with_output())
             .await
             .map_err(|_| GitError::TimedOut {
                 args: format!("{} --stateless-rpc", service.subcommand()),
                 seconds: TRANSFER_TIMEOUT.as_secs(),
             })??;
+        group.disarm();
         if !output.status.success() {
             return Err(GitError::CommandFailed {
                 args: format!("{} --stateless-rpc", service.subcommand()),
@@ -525,6 +831,39 @@ impl GitStore {
             });
         }
         Ok(output.stdout)
+    }
+
+    /// One stateless-RPC round, answered as it is produced: the
+    /// service's stdout is handed back as a stream, so a clone of a
+    /// large repository costs the forge a buffer's worth of memory
+    /// rather than the repository's. For upload-pack, which has nothing
+    /// to do once the pack has been sent.
+    pub async fn stream_rpc(
+        &self,
+        service: Service,
+        name: &str,
+        input: RpcInput,
+        git_protocol: Option<&str>,
+    ) -> GitResult<RpcStream> {
+        let path = self.existing_repo_path(name)?;
+        let mut command = self
+            .rpc_command(service, &path, Vec::new(), git_protocol)
+            .await?;
+        let mut child = command.spawn()?;
+        let group = ProcessGroup::of(&child);
+        let stdin = child.stdin.take().expect("stdin piped");
+        let stdout = child.stdout.take().expect("stdout piped");
+        let stderr = child.stderr.take().expect("stderr piped");
+        tokio::spawn(feed(input, stdin));
+        Ok(RpcStream {
+            child: Some(child),
+            group: Some(group),
+            stdout,
+            stderr: Some(tokio::spawn(drain_stderr(stderr))),
+            deadline: Box::pin(tokio::time::sleep(TRANSFER_TIMEOUT)),
+            buffer: vec![0u8; 64 * 1024].into_boxed_slice(),
+            args: format!("{} --stateless-rpc", service.subcommand()),
+        })
     }
 
     /// All refs under a prefix, as (refname, oid).
@@ -1085,7 +1424,13 @@ fn directory_size(dir: &Path) -> GitResult<u64> {
 #[cfg(unix)]
 fn occupied(meta: &std::fs::Metadata) -> u64 {
     use std::os::unix::fs::MetadataExt;
-    meta.blocks().saturating_mul(512)
+    // Whichever is larger. Allocated blocks count the granularity a
+    // small file is stored at; the length counts what a filesystem
+    // has not yet said it allocated — ZFS reports a file just written
+    // as nearly empty until its transaction group syncs, which is
+    // exactly when a push is measured — and what compression hid,
+    // which is the pusher's bytes all the same.
+    meta.blocks().saturating_mul(512).max(meta.len())
 }
 
 #[cfg(not(unix))]
@@ -1104,6 +1449,77 @@ mod tests {
     fn preflight_accepts_the_git_we_test_with() {
         let found = preflight().expect("the test environment needs a supported git");
         assert!(found.contains("git version"), "unexpected output: {found}");
+    }
+
+    /// A quarantine a killed push left behind is removed once it is
+    /// older than any transfer can be; one a push is writing to now is
+    /// left alone.
+    #[test]
+    fn dead_quarantines_are_swept_and_live_ones_kept() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(sweep_scenario());
+    }
+
+    async fn sweep_scenario() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = GitStore::new(tmp.path().join("repos"), "/nonexistent/cairn");
+        store.create_repo("ada/demo", "main", "sha1").await.unwrap();
+        let objects = tmp.path().join("repos/ada/demo.git/objects");
+        let dead = objects.join("tmp_objdir-incoming-dead");
+        let live = objects.join("tmp_objdir-incoming-live");
+        std::fs::create_dir_all(&dead).unwrap();
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::write(dead.join("pack"), b"x").unwrap();
+        let long_ago =
+            std::time::SystemTime::now() - QUARANTINE_DEAD_AFTER - Duration::from_secs(60);
+        std::fs::File::open(&dead)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+        assert_eq!(store.sweep_quarantines("ada/demo").await.unwrap(), 1);
+        assert!(!dead.exists(), "the dead one is gone");
+        assert!(live.exists(), "the live one is not touched");
+        assert_eq!(store.sweep_quarantines("ada/demo").await.unwrap(), 0);
+    }
+
+    /// Bytes no filesystem can compress away: the measurement is what
+    /// the disk holds, and a filesystem that compresses (ZFS, where
+    /// the forge runs) would hold a run of one letter in nothing.
+    fn incompressible(len: usize) -> Vec<u8> {
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        (0..len)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state as u8
+            })
+            .collect()
+    }
+
+    /// The measurement counts every file under the directory, however
+    /// deep, and nothing a symlink points at: a link planted into
+    /// somebody else's tree neither inflates the number nor walks out.
+    #[test]
+    fn directory_size_counts_what_is_inside_and_follows_no_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let inside = tmp.path().join("repo");
+        std::fs::create_dir_all(inside.join("objects/ab")).unwrap();
+        std::fs::write(inside.join("HEAD"), incompressible(10_000)).unwrap();
+        std::fs::write(inside.join("objects/ab/cdef"), incompressible(20_000)).unwrap();
+        let outside = tmp.path().join("elsewhere");
+        std::fs::write(&outside, incompressible(4_000_000)).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, inside.join("objects/link")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(tmp.path(), inside.join("objects/up")).unwrap();
+        let measured = directory_size(&inside).unwrap();
+        assert!(measured >= 30_000, "every file is counted: {measured}");
+        assert!(measured < 4_000_000, "the link's target is not: {measured}");
+        assert_eq!(directory_size(&tmp.path().join("nowhere")).unwrap(), 0);
     }
 
     #[test]

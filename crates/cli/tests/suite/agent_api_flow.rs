@@ -129,7 +129,9 @@ async fn a_write_asked_twice_is_done_once() {
     assert_eq!(status, StatusCode::OK);
     assert!(header(&headers, "idempotent-replayed").is_none());
 
-    // A refusal is an answer too, and is replayed as one.
+    // A refusal did nothing, so a retry asks again rather than being
+    // handed the old answer: what was refused for want of room, a
+    // verdict or a grant may be possible by now.
     let (status, _, refused) = call(
         app,
         "POST",
@@ -140,7 +142,7 @@ async fn a_write_asked_twice_is_done_once() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
-    let (status, headers, replayed) = call(
+    let (status, headers, again) = call(
         app,
         "POST",
         "/api/tasks/no-such-task/claim",
@@ -150,8 +152,8 @@ async fn a_write_asked_twice_is_done_once() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(header(&headers, "idempotent-replayed"), Some("true"));
-    assert_eq!(refused, replayed);
+    assert!(header(&headers, "idempotent-replayed").is_none());
+    assert_eq!(refused, again);
 
     // The key has to be a key.
     let (status, _, body) = call(

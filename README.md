@@ -185,7 +185,8 @@ instance is planned; the waitlist at
 What is not here yet, so nobody has to find out the hard way: a way to
 join without an invitation, and billing for a forge that would need it. What is here is tested at the boundaries where a forge
 is usually wrong — authority, concurrency, crash recovery, hostile input,
-resource limits — and `fsck` runs clean on the instance serving this page.
+what one owner may take up, and how fast anyone may ask — and `fsck`
+runs clean on the instance serving this page.
 When something breaks anyway, say so at
 [cairn.mandip.dev/report](https://cairn.mandip.dev/report); it reaches
 whoever runs the forge, and a self-hosted forge has the same form.

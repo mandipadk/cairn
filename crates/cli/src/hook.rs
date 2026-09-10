@@ -25,12 +25,40 @@ use std::io::{Read, Write};
 
 const ZERO_OID_PREFIX: &str = "0000000000";
 
+/// How long the forge may take to answer one of the hook's calls.
+const FORGE_ANSWERS_WITHIN_SECS: u64 = 30;
+
+/// The most refs one push may update. Each costs the hook a few git
+/// commands and the forge a write; the server bounds the bytes of the
+/// command list, and this bounds the count in the same spirit.
+const MAX_REFS_PER_PUSH: usize = 1000;
+
+/// Exit when the receive-pack that spawned this hook is gone. A hook
+/// killed by its parent's death would be the natural order; killing
+/// the parent does not kill the child, and a hook left waiting on the
+/// forge would hold a connection and a runtime for nobody.
+fn die_with_receive_pack() {
+    #[cfg(unix)]
+    {
+        let parent = std::os::unix::process::parent_id();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                if std::os::unix::process::parent_id() != parent {
+                    std::process::exit(1);
+                }
+            }
+        });
+    }
+}
+
 /// Ask the forge whether this repository's owner has room, before git
 /// migrates the pushed objects out of quarantine.
 ///
 /// Anything this prints reaches the pusher's terminal, so the refusal
 /// arrives as the forge worded it rather than as an HTTP status.
 pub fn room() -> anyhow::Result<()> {
+    die_with_receive_pack();
     let server = std::env::var("CAIRN_SERVER").context("CAIRN_SERVER not set")?;
     let token = std::env::var("CAIRN_TOKEN").context("CAIRN_TOKEN not set")?;
     let repo = std::env::var("CAIRN_REPO").context("CAIRN_REPO not set")?;
@@ -38,7 +66,19 @@ pub fn room() -> anyhow::Result<()> {
         server: &server,
         token: &token,
     };
-    match client.post("/api/git/room", &json!({ "repo": repo })) {
+    // What this push brings, as far as it can be known here: git holds
+    // the received objects in a quarantine directory until pre-receive
+    // answers, and that directory's size is the push's. Without it the
+    // check can only say whether the owner is already over, and fifty
+    // pushes at once would each pass on the same stale number.
+    let arriving = std::env::var("GIT_QUARANTINE_PATH")
+        .ok()
+        .map(|dir| occupied(std::path::Path::new(&dir)))
+        .unwrap_or(0);
+    match client.post(
+        "/api/git/room",
+        &json!({ "repo": repo, "arriving": arriving }),
+    ) {
         Ok((status, _)) if (200..300).contains(&status) => Ok(()),
         Ok((_, body)) => bail!(
             "{}",
@@ -47,16 +87,50 @@ pub fn room() -> anyhow::Result<()> {
                 .unwrap_or("this push was refused")
                 .to_owned()
         ),
-        // A forge that cannot answer must not become a forge that
-        // cannot be pushed to; the quota is a limit, not a lock.
-        Err(err) => {
-            eprintln!("cairn: could not check the disk allowance ({err}); allowing the push");
-            Ok(())
-        }
+        // A check that could not be made is not a check that passed.
+        // The forge answering this is the same process serving the
+        // push, so it is up; if it is too slow to answer, somebody may
+        // be making it slow on purpose, and a push that waves itself
+        // through under load is the exact push a quota exists to stop.
+        Err(err) => bail!("could not check the disk allowance ({err}); push again in a moment"),
     }
 }
 
+/// Every file under `dir`, in blocks, the way the forge measures a
+/// repository. An entry that cannot be read is skipped rather than
+/// failing the measurement.
+fn occupied(dir: &std::path::Path) -> u64 {
+    let mut total = 0u64;
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else { continue };
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                // The larger of allocated and logical: a pack git has
+                // just written is what this is measuring, and a
+                // filesystem that allocates lazily (ZFS) reports it as
+                // nearly empty for a few seconds.
+                total = total.saturating_add(meta.blocks().saturating_mul(512).max(meta.len()));
+            }
+            #[cfg(not(unix))]
+            {
+                total = total.saturating_add(meta.len());
+            }
+            if meta.is_dir() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    total
+}
+
 pub fn run() -> anyhow::Result<()> {
+    die_with_receive_pack();
     let server = std::env::var("CAIRN_SERVER").context("CAIRN_SERVER not set")?;
     let token = std::env::var("CAIRN_TOKEN").context("CAIRN_TOKEN not set")?;
     let repo = std::env::var("CAIRN_REPO").context("CAIRN_REPO not set")?;
@@ -86,6 +160,25 @@ fn conversation(
     let commands = pkt::read_text_until_flush(&mut input)?;
 
     let client = Client { server, token };
+    if commands.len() > MAX_REFS_PER_PUSH {
+        // Every command is answered, because receive-pack waits for
+        // each: all of them with the same refusal.
+        for command in &commands {
+            if let Some(ref_name) = command.split(' ').nth(2) {
+                pkt::write_data(
+                    &mut output,
+                    format!(
+                        "ng {ref_name} this push updates {} refs; at most {MAX_REFS_PER_PUSH} in one push\n",
+                        commands.len()
+                    )
+                    .as_bytes(),
+                )?;
+            }
+        }
+        pkt::write_flush(&mut output)?;
+        output.flush()?;
+        return Ok(());
+    }
     for command in &commands {
         let mut parts = command.split(' ');
         let (Some(old), Some(new), Some(ref_name)) = (parts.next(), parts.next(), parts.next())
@@ -352,8 +445,15 @@ impl Client<'_> {
     }
 
     fn post(&self, path: &str, body: &Value) -> Result<(u16, Value), String> {
+        // The forge answering is the process that spawned this push;
+        // an answer that takes longer than this is not coming, and a
+        // hook that waits for it holds the pusher, a receive-pack and
+        // a quarantine until git's own timeout kills them all.
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
+            .timeout_global(Some(std::time::Duration::from_secs(
+                FORGE_ANSWERS_WITHIN_SECS,
+            )))
             .build()
             .into();
         let mut response = agent

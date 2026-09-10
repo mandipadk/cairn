@@ -1,4 +1,4 @@
-use axum::Json;
+use axum::Json as AxumJson;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use cairn_core::CoreError;
@@ -81,6 +81,133 @@ impl IntoResponse for ApiError {
         if let Some(detail) = self.detail {
             body["detail"] = detail;
         }
-        (self.status, Json(body)).into_response()
+        (self.status, AxumJson(body)).into_response()
+    }
+}
+
+/// JSON in and out, with a refusal that looks like every other refusal.
+///
+/// axum's own extractor answers a malformed or mistyped body with a
+/// line of plain text, which is the one place the API's promise of
+/// `{"kind": ..., "error": ...}` was not kept — and it is the place a
+/// caller who typed a limit wrong meets first.
+pub struct Json<T>(pub T);
+
+impl<S, T> axum::extract::FromRequest<S> for Json<T>
+where
+    axum::Json<T>:
+        axum::extract::FromRequest<S, Rejection = axum::extract::rejection::JsonRejection>,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(
+        request: axum::extract::Request,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        match axum::Json::<T>::from_request(request, state).await {
+            Ok(axum::Json(value)) => Ok(Json(value)),
+            Err(rejection) => Err(refused_body(&rejection)),
+        }
+    }
+}
+
+/// A body that could not be taken, refused in the API's own words. A
+/// body that does not fit is invalid the way a value out of range is
+/// invalid, and answers 400 with it; too large, or not JSON at all,
+/// keep the statuses that say exactly that.
+fn refused_body(rejection: &axum::extract::rejection::JsonRejection) -> ApiError {
+    let status = match rejection.status() {
+        StatusCode::PAYLOAD_TOO_LARGE | StatusCode::UNSUPPORTED_MEDIA_TYPE => rejection.status(),
+        _ => StatusCode::BAD_REQUEST,
+    };
+    ApiError::new(status, "invalid", rejection.body_text())
+}
+
+/// Query strings, refused the same way when they do not fit.
+pub struct Query<T>(pub T);
+
+impl<S, T> axum::extract::FromRequestParts<S> for Query<T>
+where
+    T: serde::de::DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        match <axum::extract::Query<T> as axum::extract::FromRequestParts<S>>::from_request_parts(
+            parts, state,
+        )
+        .await
+        {
+            Ok(axum::extract::Query(value)) => Ok(Query(value)),
+            Err(rejection) => Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid",
+                rejection.body_text(),
+            )),
+        }
+    }
+}
+
+/// Path segments, likewise.
+pub struct Path<T>(pub T);
+
+impl<S, T> axum::extract::FromRequestParts<S> for Path<T>
+where
+    T: serde::de::DeserializeOwned + Send,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        match <axum::extract::Path<T> as axum::extract::FromRequestParts<S>>::from_request_parts(
+            parts, state,
+        )
+        .await
+        {
+            Ok(axum::extract::Path(value)) => Ok(Path(value)),
+            Err(rejection) => Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid",
+                rejection.body_text(),
+            )),
+        }
+    }
+}
+
+/// The same, for a handler that takes a body or none: absent stays
+/// absent, and a body that is there but wrong is refused the same way.
+impl<S, T> axum::extract::OptionalFromRequest<S> for Json<T>
+where
+    axum::Json<T>:
+        axum::extract::OptionalFromRequest<S, Rejection = axum::extract::rejection::JsonRejection>,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(
+        request: axum::extract::Request,
+        state: &S,
+    ) -> Result<Option<Self>, Self::Rejection> {
+        match <axum::Json<T> as axum::extract::OptionalFromRequest<S>>::from_request(request, state)
+            .await
+        {
+            Ok(Some(axum::Json(value))) => Ok(Some(Json(value))),
+            Ok(None) => Ok(None),
+            Err(rejection) => Err(refused_body(&rejection)),
+        }
+    }
+}
+
+impl<T: serde::Serialize> IntoResponse for Json<T> {
+    fn into_response(self) -> Response {
+        axum::Json(self.0).into_response()
     }
 }

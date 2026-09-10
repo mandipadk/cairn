@@ -79,12 +79,22 @@ impl FromRequestParts<AppState> for MaybeActor {
     }
 }
 
-/// Identity for the one endpoint a proc-receive hook calls.
+/// Identity for the endpoints the receive-pack hooks call.
 ///
-/// Accepts the ephemeral push secret as well as a real token, and is
-/// used nowhere else — so a leaked hook credential buys a push it was
-/// already authorised to make, and nothing further.
-pub struct Pusher(pub PrincipalId, pub Option<cairn_core::Scope>);
+/// Only the ephemeral push secret is accepted, and only while its
+/// receive-pack runs: the token names the repository the push is
+/// into, so a leaked hook credential buys nothing outside the one
+/// push it was issued for, and nothing after it. A standing token is
+/// refused here; what these endpoints do is done through the API
+/// proper, where the checks that live in the hooks are asked again.
+pub struct Pusher {
+    pub principal: PrincipalId,
+    pub scope: Option<cairn_core::Scope>,
+    /// The repository the push is into.
+    pub repo: String,
+    /// The secret itself, which is what the push is known by.
+    pub secret: String,
+}
 
 impl FromRequestParts<AppState> for Pusher {
     type Rejection = ApiError;
@@ -96,10 +106,17 @@ impl FromRequestParts<AppState> for Pusher {
         let Some(token) = bearer(parts) else {
             return Err(unauthenticated("the push hook must present its token"));
         };
-        if let Some((principal, scope)) = state.resolve_push_token(token) {
-            return Ok(Pusher(principal, scope));
+        match state.resolve_push_token(token) {
+            Some(identity) => Ok(Pusher {
+                principal: identity.principal,
+                scope: identity.scope,
+                repo: identity.repo,
+                secret: token.to_owned(),
+            }),
+            None => Err(unauthenticated(
+                "this is the push hook's door, and the push it was given a token for has ended",
+            )),
         }
-        resolve_bearer(state, token).map(|(principal, scope)| Pusher(principal, scope))
     }
 }
 
@@ -165,6 +182,44 @@ mod tests {
             .status()
     }
 
+    /// The hook's door takes the push token and nothing else: a standing
+    /// token is not a push, and a push token speaks only of the
+    /// repository its push is into.
+    #[tokio::test]
+    async fn the_hook_door_takes_only_the_push_it_was_issued_for() {
+        let (state, real) = forge();
+        let ada = PrincipalId::new("ada").unwrap();
+        let push_token = state.issue_push_token(&ada, None, "ada/demo", &ada);
+        for (token, repo, expected) in [
+            (real.as_str(), "ada/demo", StatusCode::UNAUTHORIZED),
+            (push_token.as_str(), "ada/other", StatusCode::FORBIDDEN),
+        ] {
+            let request = Request::builder()
+                .method("POST")
+                .uri("/api/git/room")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(format!(r#"{{"repo":"{repo}"}}"#)))
+                .unwrap();
+            let response = router(state.clone()).oneshot(request).await.unwrap();
+            assert_eq!(response.status(), expected, "{repo} with {token}");
+        }
+        state.end_push(&push_token);
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/git/room")
+            .header("authorization", format!("Bearer {push_token}"))
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"repo":"ada/demo"}"#))
+            .unwrap();
+        let response = router(state.clone()).oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "a push that ended took its token with it"
+        );
+    }
+
     /// The hook credential exists to authenticate one receive-pack. It
     /// must not open the rest of the API, or the web UI, for the ten
     /// minutes it stays alive.
@@ -172,7 +227,7 @@ mod tests {
     async fn a_push_token_is_not_a_general_credential() {
         let (state, real) = forge();
         let ada = PrincipalId::new("ada").unwrap();
-        let push_token = state.issue_push_token(&ada, None);
+        let push_token = state.issue_push_token(&ada, None, "demo", &ada);
 
         assert_eq!(
             status_with_bearer(&state, "/api/principals/ada", &real).await,

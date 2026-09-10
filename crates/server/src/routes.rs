@@ -6,11 +6,12 @@
 //! all lives in the core, where it is tested.
 
 use crate::auth::{Actor, MaybeActor};
+use crate::error::Json;
 use crate::error::{ApiError, ApiResult};
+use crate::error::{Path, Query};
 use crate::repo_path::RepoName;
 use crate::state::AppState;
-use axum::Json;
-use axum::extract::{Path, Query, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use cairn_core::{Anchor, Resolution, ThreadId, ThreadKind};
@@ -176,6 +177,20 @@ pub async fn get_quota(
                 "principal not found",
             ));
         }
+        // An agent has no quota of its own; numbers for one would read
+        // as an allowance it does not have.
+        if record.kind == cairn_core::PrincipalKind::Agent {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid",
+                match &record.owner {
+                    Some(held_by) => format!(
+                        "{owner} is an agent; a quota belongs to a person or an organisation — ask about {held_by}"
+                    ),
+                    None => format!("{owner} is an agent; a quota belongs to a person or an organisation"),
+                },
+            ));
+        }
         Ok(Json(json!({
             "owner": record.id,
             // What holds, what was said about them in particular, and
@@ -213,6 +228,52 @@ pub async fn set_quota(
     app.publish(&env);
     // Answer with what now holds, so nobody has to guess what a partial
     // body did.
+    let mut body = committed(None, &env);
+    body.0["quota"] = json!(quota);
+    Ok(body)
+}
+
+pub struct Unsay {
+    /// One limit to hand back to the forge's number; all of them when absent.
+    pub field: Option<String>,
+}
+
+/// Unsay what was said about an owner: one limit, or all of them, so
+/// they follow the forge's own numbers again. Setting a limit to null
+/// is "no limit at all", which is a different thing.
+pub async fn unset_quota(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<String>,
+    Query(keys): Query<std::collections::HashMap<String, String>>,
+) -> ApiResult<Json<Value>> {
+    let owner = principal_id(&id)?;
+    // A mistyped key must not become "unsay everything": the body path
+    // refuses a field nobody knows, and so does this one.
+    let unsay = match keys.len() {
+        0 => Unsay { field: None },
+        1 if keys.contains_key("field") => Unsay {
+            field: keys.get("field").cloned(),
+        },
+        _ => {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid",
+                "the only query this takes is field=<limit>, or none to unsay everything",
+            ));
+        }
+    };
+    let (env, quota) = app.with_store(|s| {
+        s.acting_as(actor.1.as_ref());
+        let narrowed = s
+            .quota_override(&owner)?
+            .without(unsay.field.as_deref())
+            .map_err(|why| ApiError::new(StatusCode::BAD_REQUEST, "invalid", why))?;
+        let env = s.set_quota(&actor.0, &owner, &narrowed)?;
+        let quota = s.quota(&owner)?;
+        Ok::<_, ApiError>((env, quota))
+    })?;
+    app.publish(&env);
     let mut body = committed(None, &env);
     body.0["quota"] = json!(quota);
     Ok(body)
@@ -392,7 +453,7 @@ pub async fn import_history(
     // one place the push door's check has to be repeated. How much is
     // coming is not knowable before fetching, so an owner already at
     // their limit is refused and everyone else is measured afterwards.
-    crate::git_http::room_on_disk(&app, &name, 0)?;
+    crate::git_http::room_on_disk(&app, &name, 0, 0)?;
     // Whatever the fetch leaves behind is on disk from here on, so the
     // measurement happens on the way out of every path below.
     let _measure = crate::git_http::MeasureOnDrop::new(&app, &name);

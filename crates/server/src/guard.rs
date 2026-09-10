@@ -68,7 +68,9 @@ pub async fn same_origin_writes(request: Request, next: Next) -> Response {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         match fetch_site {
-            "cross-site" => return refused("cross-site writes are not accepted"),
+            "cross-site" => {
+                return refused(request.uri().path(), "cross-site writes are not accepted");
+            }
             "same-origin" => {}
             _ => {
                 // An older browser, or a sibling site: `Origin` has to
@@ -82,7 +84,12 @@ pub async fn same_origin_writes(request: Request, next: Next) -> Response {
                         .or_else(|| request.uri().authority().map(|a| a.to_string()));
                     match host {
                         Some(host) if origin_matches(origin, &host) => {}
-                        _ => return refused("this write did not come from here"),
+                        _ => {
+                            return refused(
+                                request.uri().path(),
+                                "this write did not come from here",
+                            );
+                        }
                     }
                 }
             }
@@ -100,8 +107,23 @@ fn origin_matches(origin: &str, host: &str) -> bool {
         .eq_ignore_ascii_case(host)
 }
 
-fn refused(why: &'static str) -> Response {
-    (StatusCode::FORBIDDEN, why).into_response()
+/// The origin check's refusal, in the shape its reader expects: the
+/// API's on the API, and a page for a browser — which is who sends
+/// the headers that fail this check.
+fn refused(path: &str, why: &'static str) -> Response {
+    if path.starts_with("/api/") || path.starts_with("/git/") {
+        return crate::error::ApiError::new(StatusCode::FORBIDDEN, "forbidden", why)
+            .into_response();
+    }
+    (
+        StatusCode::FORBIDDEN,
+        [(
+            axum::http::HeaderName::from_static(crate::web::FALLBACK),
+            "not-from-here",
+        )],
+        why,
+    )
+        .into_response()
 }
 
 /// What a reader is allowed, before being told to wait.
@@ -123,38 +145,66 @@ pub async fn read_allowance(
     next: Next,
 ) -> Response {
     let path = request.uri().path().to_owned();
-    // A clone is two requests: an advertisement, which is a GET, and the
-    // pack itself, which is a POST. Counting only the first would meter
-    // the asking and leave the answering — the part that forks git and
-    // streams however much history there is — free. Writes have their
-    // own allowance under /api/, so the door to count here is git's.
-    let pack = path.starts_with("/git/") && *request.method() == Method::POST;
-    let reading = matches!(*request.method(), Method::GET | Method::HEAD) || pack;
-    let counted = reading && !path.starts_with("/assets/") && path != "/healthz";
-    if !counted {
+    let method = request.method().clone();
+    if path.starts_with("/assets/") {
         return next.run(request).await;
     }
-    // A pack is not a page view. Charging it once would let a thousand
-    // clones an hour through the same allowance as a thousand page
-    // loads, and one of those is a great deal more work than the other.
+    // The health check is what a monitor polls, so it must not run out
+    // with everything else — but it takes the store lock, and a free
+    // path to the lock is a door. It has an allowance of its own,
+    // generous for any monitor and closed to a loop.
+    if path == "/healthz" {
+        return match app.health_limiter.check(caller_address(&app, &request)) {
+            Ok(()) => next.run(request).await,
+            Err(wait) => rate_limited_read(wait),
+        };
+    }
+    // Every request costs something. Writes under /api/ have their own
+    // allowance and are not charged twice; everything else — a page, an
+    // advertisement, a form, a method nobody routes — spends here, so
+    // no door reaches the store lock for free. A clone is two requests:
+    // an advertisement, which is a GET, and the pack itself, which is a
+    // POST, and the pack is the part that forks git.
+    let pack = path.starts_with("/git/") && method == Method::POST;
+    let api_write = path.starts_with("/api/") && !matches!(method, Method::GET | Method::HEAD);
+    if api_write {
+        return next.run(request).await;
+    }
     let cost = if pack { PACK_COSTS } else { 1 };
     let json = path.starts_with("/api/") || path.starts_with("/git/");
     let refused = match crate::web::requester(&app, &path, request.headers()) {
         Some(who) => app.read_limiter.spend(who, cost).err(),
-        // In-process callers have no address and no identity, and there
-        // is no anonymous network in front of them to protect against.
         None => {
-            bucket(&app, &request).and_then(|key| app.anonymous_read_limiter.spend(key, cost).err())
+            // The address is always charged: a caller who can invent a
+            // fresh identity per request must not be able to invent a
+            // fresh allowance with it. A credential that was offered and
+            // did not resolve — revoked, expired, deactivated — is charged
+            // a small allowance of its own on top, so a loop on a dead
+            // token is told to stop sooner and does not spend what every
+            // visitor from the same place has.
+            let address = caller_address(&app, &request);
+            let over_address = app.anonymous_read_limiter.spend(address, cost).err();
+            let over_credential = offered_credential(&request)
+                .and_then(|hash| app.bad_credential_limiter.check(hash).err());
+            over_address.or(over_credential)
         }
     };
     match refused {
         Some(wait) if json => rate_limited_read(wait),
+        // Marked for the theme pass, so a person sees a page in their
+        // theme rather than a line of text.
         Some(wait) => (
             StatusCode::TOO_MANY_REQUESTS,
-            [(
-                header::RETRY_AFTER,
-                wait.as_secs_f64().ceil().max(1.0).to_string(),
-            )],
+            [
+                (
+                    header::RETRY_AFTER,
+                    wait.as_secs_f64().ceil().max(1.0).to_string(),
+                ),
+                (
+                    axum::http::HeaderName::from_static("x-cairn-fallback"),
+                    "too-many".to_owned(),
+                ),
+            ],
             "Too many requests. Wait a moment and try again.",
         )
             .into_response(),
@@ -162,66 +212,138 @@ pub async fn read_allowance(
     }
 }
 
+/// Whether the missing-address warning has been given.
+static NO_ADDRESS_SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Whether the short-header warning has been given.
+static SHORT_FORWARDED_SAID: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// How many units a pack transfer spends. A clone forks git and streams
 /// history; a page load does not.
 const PACK_COSTS: u32 = 20;
 
-/// Somebody with no name here: an address, or a credential that did not
-/// resolve to one.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Caller {
-    From(IpAddr),
-    Credential(String),
+/// The address a request came from, as one caller. Never absent: a
+/// request with no peer address — an embedding that serves without
+/// connection information — shares one bucket rather than escaping
+/// every bucket, and the first such request says so in the log.
+pub(crate) fn caller_address(app: &crate::AppState, request: &Request) -> IpAddr {
+    match client_ip(app, request) {
+        Some(address) => address,
+        None => {
+            if !NO_ADDRESS_SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!(
+                    "a request arrived with no peer address; every such request shares one allowance"
+                );
+            }
+            IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
+        }
+    }
 }
 
-/// Which bucket an unidentified caller spends from.
-///
-/// A caller that offered a credential which did not resolve — revoked,
-/// expired, or for a deactivated principal — is not a stranger, and
-/// putting them in the strangers' bucket lets one agent looping on a
-/// dead token exhaust the allowance for everybody arriving from the
-/// same address. They get a bucket of their own, keyed by what they
-/// offered, so the loop only starves itself.
-fn bucket(app: &crate::AppState, request: &Request) -> Option<Caller> {
-    if let Some(offered) = request
+/// A fingerprint of whatever credential was offered, for the extra
+/// allowance a dead credential spends. Not a bucket in its own right —
+/// see `read_allowance` — because a fresh header per request would
+/// otherwise be a fresh allowance per request.
+fn offered_credential(request: &Request) -> Option<String> {
+    let offered = request
         .headers()
         .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-    {
-        let mut hasher = Sha256::new();
-        hasher.update(offered.as_bytes());
-        let digest = hasher
+        .and_then(|v| v.to_str().ok())?;
+    let mut hasher = Sha256::new();
+    hasher.update(offered.as_bytes());
+    Some(
+        hasher
             .finalize()
             .iter()
             .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        return Some(Caller::Credential(digest));
-    }
-    client_ip(app, request).map(Caller::From)
+            .collect(),
+    )
 }
 
 /// The caller's address, read off a whole request rather than its
 /// parts, for middleware that has not taken it apart yet.
 fn client_ip(app: &crate::AppState, request: &Request) -> Option<IpAddr> {
-    let connected = request
-        .extensions()
-        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-        .map(|connected| connected.0.ip());
-    match app.proxy_trust() {
-        ProxyTrust::ForwardedHeader => forwarded(request.headers()).or(connected),
+    resolve_address(
+        app.proxy_trust(),
+        request.headers(),
+        request
+            .extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|connected| connected.0.ip()),
+    )
+}
+
+/// One rule for every place that asks who is connecting, so a limiter
+/// keyed by the extractor and one keyed by the middleware agree.
+fn resolve_address(
+    trust: ProxyTrust,
+    headers: &axum::http::HeaderMap,
+    connected: Option<IpAddr>,
+) -> Option<IpAddr> {
+    let address = match trust {
+        ProxyTrust::ForwardedHeader { hops } => match forwarded(headers, hops) {
+            Some(address) => Some(address),
+            None => {
+                // Fewer hops than the operator said. Believing the header
+                // here would mean believing an entry a client wrote, so
+                // the connection is taken instead — which behind a proxy
+                // is the proxy, and everybody shares it. Said once, so
+                // the misconfiguration is findable.
+                if headers.contains_key("x-forwarded-for")
+                    && !SHORT_FORWARDED_SAID.swap(true, std::sync::atomic::Ordering::Relaxed)
+                {
+                    tracing::warn!(
+                        hops,
+                        "X-Forwarded-For had fewer entries than --proxy-hops; keying on the connection"
+                    );
+                }
+                connected
+            }
+        },
         ProxyTrust::Connection => connected,
+    };
+    address.map(as_one_caller)
+}
+
+/// The part of an address that is one caller. A home gets a whole IPv6
+/// /64, so keying on the full address hands every host in it — and an
+/// attacker rotating through 2^64 of them — a fresh allowance each.
+fn as_one_caller(address: IpAddr) -> IpAddr {
+    match address {
+        IpAddr::V4(v4) => IpAddr::V4(v4),
+        // A v4 client on a dual-stack socket arrives as ::ffff:a.b.c.d,
+        // whose top 64 bits are all zero; grouping it by /64 would put
+        // the whole IPv4 internet in one bucket. It is a v4 address.
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let mut octets = v6.octets();
+                octets[8..].fill(0);
+                IpAddr::V6(std::net::Ipv6Addr::from(octets))
+            }
+        },
     }
 }
 
-/// A fixed-window limiter, keyed by whoever is asking: a source address
-/// for the forms a stranger can post to, a principal for API writes.
-/// Deliberately small: it exists to make guessing and runaway loops
-/// pointless, not to be a traffic shaper.
+/// A token bucket per caller: a source address for the forms a stranger
+/// can post to, a principal for API traffic. Each caller holds up to
+/// `allowed` units and earns them back evenly over `window`, so a
+/// burst is bounded at every moment rather than only within a fixed
+/// window — the fixed kind lets twice the allowance through in the
+/// second that straddles a boundary. Deliberately small: it exists to
+/// make guessing and runaway loops pointless, not to shape traffic.
 #[derive(Clone)]
 pub struct Limiter<K: Eq + Hash> {
-    attempts: Arc<Mutex<HashMap<K, (u32, Instant)>>>,
+    attempts: Arc<Mutex<Buckets<K>>>,
     allowed: u32,
     window: Duration,
+}
+
+/// Per caller: units spent that have not yet been earned back, and when
+/// that was last brought up to date; and when the map was last swept.
+struct Buckets<K> {
+    attempts: HashMap<K, (f64, Instant)>,
+    swept: Instant,
 }
 
 /// How many callers one limiter remembers at once. A window's worth of
@@ -229,7 +351,7 @@ pub struct Limiter<K: Eq + Hash> {
 /// keeps a flood of them from becoming this process's memory.
 const MOST_CALLERS: usize = 50_000;
 
-/// How many may accumulate before the map is swept.
+/// How many may accumulate before the map is swept at all.
 const SWEEP_AT: usize = 1024;
 
 /// Sign-in and the other public forms are keyed by source address.
@@ -244,7 +366,10 @@ impl Default for LoginLimiter {
 impl<K: Eq + Hash> Limiter<K> {
     pub fn new(allowed: u32, window: Duration) -> Self {
         Limiter {
-            attempts: Arc::new(Mutex::new(HashMap::new())),
+            attempts: Arc::new(Mutex::new(Buckets {
+                attempts: HashMap::new(),
+                swept: Instant::now(),
+            })),
             allowed,
             window,
         }
@@ -267,43 +392,76 @@ impl<K: Eq + Hash> Limiter<K> {
         self.spend(from, 1)
     }
 
-    /// Record work worth `cost` attempts.
+    /// Record work worth `cost` units. A refusal says how long until
+    /// enough has been earned back for this much, which is what
+    /// `Retry-After` tells the caller.
     pub fn spend(&self, from: K, cost: u32) -> Result<(), Duration> {
-        let mut attempts = match self.attempts.lock() {
-            Ok(attempts) => attempts,
+        if self.allowed == u32::MAX {
+            return Ok(());
+        }
+        if self.allowed == 0 {
+            // Nothing is ever earned back, so nothing is ever allowed;
+            // the arithmetic below would divide by that.
+            return Err(self.window);
+        }
+        let mut state = match self.attempts.lock() {
+            Ok(state) => state,
             // A poisoned lock must not lock everyone out.
             Err(poisoned) => poisoned.into_inner(),
         };
         let now = Instant::now();
-        // Sweeping the whole map on every request is work proportional
-        // to how many callers there are, done while holding the lock
-        // every other request is waiting on — which is exactly backwards
-        // under the load this exists to survive. Sweep once it has grown
-        // instead, and drop the oldest if a flood of distinct callers
-        // outpaces even that.
-        if attempts.len() >= SWEEP_AT {
-            attempts.retain(|_, (_, started)| now.duration_since(*started) < self.window);
-            if attempts.len() >= MOST_CALLERS {
-                let cutoff = now - self.window / 2;
-                attempts.retain(|_, (_, started)| *started > cutoff);
-            }
+        let per_second = f64::from(self.allowed) / self.window.as_secs_f64().max(f64::EPSILON);
+        // Sweeping the whole map is work proportional to how many callers
+        // there are, done while holding the lock every other request is
+        // waiting on. So it happens on a clock, not per request: at most
+        // once a second, dropping callers whose debt has drained. If a
+        // flood of distinct callers still fills it, newcomers wait
+        // rather than the map growing without end — under that kind of
+        // load, a stranger waiting is the right outcome.
+        if state.attempts.len() >= SWEEP_AT
+            && now.duration_since(state.swept) >= Duration::from_secs(1)
+        {
+            state.swept = now;
+            state.attempts.retain(|_, (spent, at)| {
+                *spent - now.duration_since(*at).as_secs_f64() * per_second > 0.0
+            });
         }
-        let entry = attempts.entry(from).or_insert((0, now));
-        if now.duration_since(entry.1) >= self.window {
-            *entry = (0, now);
+        if state.attempts.len() >= MOST_CALLERS && !state.attempts.contains_key(&from) {
+            return Err(Duration::from_secs(1));
         }
-        entry.0 = entry.0.saturating_add(cost);
-        if entry.0 <= self.allowed {
+        let allowed = f64::from(self.allowed);
+        let (spent, at) = state.attempts.entry(from).or_insert((0.0, now));
+        // Earn back what the time since the last visit is worth.
+        *spent = (*spent - now.duration_since(*at).as_secs_f64() * per_second).max(0.0);
+        *at = now;
+        let asking = f64::from(cost);
+        // A single unit of work larger than the whole allowance cannot
+        // be metered, only rationed: it is served when the bucket is
+        // empty, and refused until it is.
+        if asking > allowed {
+            return if *spent <= 0.0 {
+                *spent = allowed;
+                Ok(())
+            } else {
+                Err(Duration::from_secs_f64((*spent / per_second).max(0.001)))
+            };
+        }
+        if *spent + asking <= allowed {
+            *spent += asking;
             Ok(())
         } else {
-            Err(self.window.saturating_sub(now.duration_since(entry.1)))
+            // The refusal is not charged: a caller told to wait is not
+            // made to wait longer for having asked.
+            let short = *spent + asking - allowed;
+            Err(Duration::from_secs_f64((short / per_second).max(0.001)))
         }
     }
 }
 
 /// The caller's address. In-process callers (tests, embedded use)
-/// have none, and are not rate limited — there is no anonymous
-/// network in front of them to protect against.
+/// have none, and share one bucket under the unspecified address:
+/// an allowance that a request with no address escapes is an
+/// allowance that any request can escape.
 ///
 /// Behind a reverse proxy every connection appears to come from the
 /// proxy, which would put every caller in one bucket. The forwarded
@@ -317,22 +475,30 @@ pub struct ClientIp(pub Option<IpAddr>);
 pub enum ProxyTrust {
     /// Only the connection itself.
     Connection,
-    /// The last hop recorded in X-Forwarded-For, which is the one the
-    /// trusted proxy appended and the only one a client cannot forge.
-    ForwardedHeader,
+    /// The address recorded in X-Forwarded-For by the trusted proxies,
+    /// `hops` of them deep: one means the nearest proxy's own client,
+    /// which is the only entry a client cannot forge.
+    ForwardedHeader { hops: u8 },
 }
 
 /// Read the address a trusted proxy recorded. The rightmost entry is
 /// the one the nearest proxy added; entries further left were supplied
 /// by whatever came before it, including the client.
-fn forwarded(headers: &axum::http::HeaderMap) -> Option<IpAddr> {
+/// The address a trusted proxy recorded. Each proxy appends the address
+/// it received from, so the rightmost entry is the nearest proxy's
+/// client; behind two proxies the nearest proxy's client is the far
+/// proxy, and the visitor is one hop further left. Nothing left of the
+/// trusted hops is believed, because a client writes that part itself.
+fn forwarded(headers: &axum::http::HeaderMap, hops: u8) -> Option<IpAddr> {
+    let hops = hops.max(1);
     headers
         .get("x-forwarded-for")?
         .to_str()
         .ok()?
         .rsplit(',')
         .map(str::trim)
-        .find_map(|hop| hop.parse().ok())
+        .nth(usize::from(hops) - 1)
+        .and_then(|hop| hop.parse().ok())
 }
 
 impl axum::extract::FromRequestParts<crate::AppState> for ClientIp {
@@ -346,17 +512,25 @@ impl axum::extract::FromRequestParts<crate::AppState> for ClientIp {
             .extensions
             .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
             .map(|connected| connected.0.ip());
-        Ok(ClientIp(match state.proxy_trust() {
-            ProxyTrust::ForwardedHeader => forwarded(&parts.headers).or(connected),
-            ProxyTrust::Connection => connected,
-        }))
+        Ok(ClientIp(resolve_address(
+            state.proxy_trust(),
+            &parts.headers,
+            connected,
+        )))
     }
 }
 
 pub fn too_many_attempts() -> Response {
     (
         StatusCode::TOO_MANY_REQUESTS,
-        [(header::RETRY_AFTER, "60")],
+        [
+            (header::RETRY_AFTER, "60"),
+            // A form's refusal is read in a browser, and gets the page.
+            (
+                axum::http::HeaderName::from_static(crate::web::FALLBACK),
+                "too-many",
+            ),
+        ],
         "Too many sign-in attempts. Wait a minute and try again.",
     )
         .into_response()
@@ -399,6 +573,107 @@ pub fn rate_limited(wait: Duration) -> Response {
 mod tests {
     use super::*;
 
+    /// A fixed window lets twice the allowance through in the second
+    /// that straddles a boundary. A bucket does not: what was spent is
+    /// earned back evenly, so a full burst is followed by a wait.
+    #[test]
+    fn a_burst_is_followed_by_a_wait_not_a_second_burst() {
+        let limiter: Limiter<&str> = Limiter::new(10, Duration::from_secs(10));
+        for _ in 0..10 {
+            assert!(limiter.check("a").is_ok());
+        }
+        let wait = limiter.check("a").expect_err("the eleventh waits");
+        // One unit is earned back per second, so the wait is about that.
+        assert!(wait <= Duration::from_secs(1), "{wait:?}");
+        assert!(wait > Duration::from_millis(500), "{wait:?}");
+        // A refusal is not charged: asking again does not lengthen it.
+        let again = limiter.check("a").expect_err("still waiting");
+        assert!(again <= wait, "{again:?} > {wait:?}");
+        // Somebody else is unaffected.
+        assert!(limiter.check("b").is_ok());
+    }
+
+    #[test]
+    fn a_pack_spends_more_than_a_page() {
+        let limiter: Limiter<&str> = Limiter::new(25, Duration::from_secs(60));
+        assert!(limiter.spend("a", 20).is_ok());
+        assert!(
+            limiter.spend("a", 20).is_err(),
+            "two packs are more than the allowance"
+        );
+        assert!(
+            limiter.check("a").is_ok(),
+            "a page still fits in what is left"
+        );
+    }
+
+    /// A single unit of work larger than the whole allowance cannot be
+    /// metered, only rationed: served on an empty bucket, refused until
+    /// it drains, never refused forever with a wait that lies.
+    #[test]
+    fn a_unit_larger_than_the_allowance_is_rationed_not_refused_forever() {
+        let limiter: Limiter<&str> = Limiter::new(10, Duration::from_secs(10));
+        assert!(
+            limiter.spend("a", 20).is_ok(),
+            "an empty bucket serves it once"
+        );
+        let wait = limiter.spend("a", 20).expect_err("and then it waits");
+        assert!(wait <= Duration::from_secs(10), "{wait:?}");
+        assert!(limiter.check("a").is_err(), "the bucket is full meanwhile");
+    }
+
+    /// An allowance of nothing must not divide by nothing.
+    #[test]
+    fn an_allowance_of_zero_refuses_without_panicking() {
+        let limiter: Limiter<&str> = Limiter::new(0, Duration::from_secs(10));
+        assert!(limiter.check("a").is_err());
+        assert!(limiter.spend("a", 5).is_err());
+    }
+
+    /// A v4 client on a dual-stack socket arrives as ::ffff:a.b.c.d. Its
+    /// top 64 bits are zero, and grouping it by /64 would put the whole
+    /// IPv4 internet in one bucket.
+    #[test]
+    fn a_mapped_v4_address_is_its_own_v4_address() {
+        let mapped: IpAddr = "::ffff:203.0.113.4".parse().unwrap();
+        let other: IpAddr = "::ffff:198.51.100.9".parse().unwrap();
+        assert_ne!(as_one_caller(mapped), as_one_caller(other));
+        assert_eq!(
+            as_one_caller(mapped),
+            "203.0.113.4".parse::<IpAddr>().unwrap()
+        );
+    }
+
+    #[test]
+    fn an_address_is_its_home_on_v6() {
+        let one: IpAddr = "2001:db8:1:2:aaaa:bbbb:cccc:dddd".parse().unwrap();
+        let other: IpAddr = "2001:db8:1:2:1111:2222:3333:4444".parse().unwrap();
+        let elsewhere: IpAddr = "2001:db8:1:3::1".parse().unwrap();
+        assert_eq!(as_one_caller(one), as_one_caller(other));
+        assert_ne!(as_one_caller(one), as_one_caller(elsewhere));
+        let v4: IpAddr = "203.0.113.4".parse().unwrap();
+        assert_eq!(as_one_caller(v4), v4);
+    }
+
+    #[test]
+    fn the_visitor_is_as_many_hops_from_the_right_as_there_are_proxies() {
+        let request = axum::http::Request::builder()
+            .header("x-forwarded-for", "10.0.0.1, 198.51.100.9, 203.0.113.4")
+            .body(())
+            .unwrap();
+        let (parts, ()) = request.into_parts();
+        assert_eq!(
+            forwarded(&parts.headers, 2),
+            Some("198.51.100.9".parse().unwrap()),
+            "behind a CDN and a proxy, the visitor is two from the right"
+        );
+        assert_eq!(
+            forwarded(&parts.headers, 9),
+            None,
+            "past the list is nobody"
+        );
+    }
+
     #[test]
     fn the_forwarded_address_is_read_from_the_nearest_hop() {
         let request = axum::http::Request::builder()
@@ -409,14 +684,14 @@ mod tests {
             .unwrap();
         let (parts, ()) = request.into_parts();
         assert_eq!(
-            forwarded(&parts.headers),
+            forwarded(&parts.headers, 1),
             Some("203.0.113.4".parse().unwrap()),
             "the rightmost hop is the one a client cannot forge"
         );
 
         let empty = axum::http::Request::builder().body(()).unwrap();
         let (parts, ()) = empty.into_parts();
-        assert_eq!(forwarded(&parts.headers), None);
+        assert_eq!(forwarded(&parts.headers, 1), None);
     }
 
     #[test]
@@ -429,9 +704,11 @@ mod tests {
         let wait = limiter
             .check(caller)
             .expect_err("the fourth attempt is refused");
+        // A bucket earns one attempt back every window/allowed: twenty
+        // seconds here. The wait names that, not the rest of a minute.
         assert!(
-            wait > Duration::from_secs(55) && wait <= Duration::from_secs(60),
-            "the refusal says how long the window has left: {wait:?}"
+            wait > Duration::from_secs(15) && wait <= Duration::from_secs(20),
+            "the refusal says how long until the next attempt is earned: {wait:?}"
         );
         // One caller's noise never costs another their allowance.
         let other: IpAddr = "203.0.113.8".parse().unwrap();

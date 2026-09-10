@@ -11,7 +11,8 @@ Cairn records the causal chain as structured, subscribable data.
   is addressed as `/owner/repo` everywhere; an organisation is a team
   that can own, its members hold what it holds, and names are unique
   per owner. An owner has a quota — repositories, agents, open tasks,
-  disk — and a refusal names what they have and what is allowed.
+  open changes, standing tokens, disk — and a refusal names what they
+  have and what is allowed.
 - **Tasks** — durable statements of intent. A task may allow more than
   one attempt; the attempts arrive as revisions of one change and are
   compared, not merged separately.
@@ -387,8 +388,10 @@ open to them.
 A team is a principal that never acts: it holds grants, and its members
 act with them. Every authority check reads a principal's own grants and
 their teams' as one list, so joining a team is effective at once and
-leaving it is too. A team cannot sign in, cannot join a team, and cannot
-own a repository; only a person owns one. Ownership is offered rather
+leaving it is too. A team cannot sign in, cannot join a team, and has
+only people as members — an agent on a team would hold every grant and
+every agent the team holds. A team owns repositories and agents through
+its members, who act for it. Ownership is offered rather
 than assigned — the owner offers, the person is told, and nothing moves
 until they accept, because owning carries every capability on the
 repository and whatever is in it.

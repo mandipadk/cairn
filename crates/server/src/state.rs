@@ -52,7 +52,53 @@ pub(crate) struct GitContext {
 /// ever bites, the event-sourced design ports to a pooled backend
 /// without touching the API layer.
 /// Who a hook acts as, under what scope, and since when.
-type PushToken = (PrincipalId, Option<cairn_core::Scope>, Instant);
+/// A receive-pack in flight, as the hook it spawned will present it:
+/// who is pushing, under what scope, into which repository — and how
+/// much the hook said the push carries, once it had measured the
+/// quarantine, so that the next push's room check counts this one.
+pub(crate) struct PushToken {
+    principal: PrincipalId,
+    scope: Option<cairn_core::Scope>,
+    repo: String,
+    owner: PrincipalId,
+    reserved: u64,
+    issued: Instant,
+}
+
+/// The identity a push token resolves to.
+pub(crate) struct PushIdentity {
+    pub principal: PrincipalId,
+    pub scope: Option<cairn_core::Scope>,
+    pub repo: String,
+}
+
+/// How many git transfers the forge serves at once, and how many one
+/// caller may hold of them. A transfer is a process and a pipe; a
+/// caller opening hundreds is not cloning.
+const GIT_TRANSFERS_AT_ONCE: usize = 64;
+const GIT_TRANSFERS_PER_CALLER: u32 = 6;
+
+/// A place among the transfers being served, given back when dropped.
+pub(crate) struct GitSlot {
+    _permit: tokio::sync::OwnedSemaphorePermit,
+    callers: Arc<Mutex<HashMap<String, u32>>>,
+    caller: String,
+}
+
+impl Drop for GitSlot {
+    fn drop(&mut self) {
+        let mut callers = self
+            .callers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(held) = callers.get_mut(&self.caller) {
+            *held -= 1;
+            if *held == 0 {
+                callers.remove(&self.caller);
+            }
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -79,7 +125,17 @@ pub struct AppState {
     /// Reads, per principal, and per source address for a stranger:
     /// two allowances, so neither can exhaust the other.
     pub(crate) read_limiter: crate::guard::Limiter<PrincipalId>,
-    pub(crate) anonymous_read_limiter: crate::guard::Limiter<crate::guard::Caller>,
+    pub(crate) anonymous_read_limiter: crate::guard::LoginLimiter,
+    /// A credential that was offered and did not resolve spends this on
+    /// top of its address's allowance, so a loop on a dead token is
+    /// told to stop sooner.
+    pub(crate) bad_credential_limiter: crate::guard::Limiter<String>,
+    /// The health check's own allowance, per address: a monitor never
+    /// runs out, and a loop on it does not reach the store lock for free.
+    pub(crate) health_limiter: crate::guard::LoginLimiter,
+    /// Event streams open right now, per principal, so one token cannot
+    /// hold a thousand replays of the whole log at once.
+    pub(crate) streams_open: Arc<Mutex<HashMap<PrincipalId, u32>>>,
     /// Writes under an idempotency key that have not answered yet, so a
     /// second copy arriving meanwhile is refused rather than done twice.
     writes_in_flight: Arc<Mutex<HashSet<(PrincipalId, String)>>>,
@@ -100,6 +156,8 @@ pub struct AppState {
     /// Ephemeral secrets handed to proc-receive hooks, mapped to the
     /// authenticated pusher. In-memory only, expiring, never logged.
     push_tokens: Arc<Mutex<HashMap<String, PushToken>>>,
+    git_slots: Arc<tokio::sync::Semaphore>,
+    git_callers: Arc<Mutex<HashMap<String, u32>>>,
     /// Branches whose advance failed after the merge was recorded, so
     /// the next tick can replay the decision the log already holds.
     refs_needing_advancing: Arc<Mutex<Vec<(String, String)>>>,
@@ -135,11 +193,16 @@ impl AppState {
                 DEFAULT_ANONYMOUS_READS_PER_MINUTE,
                 Duration::from_secs(60),
             ),
+            health_limiter: crate::guard::LoginLimiter::new(120, Duration::from_secs(60)),
+            bad_credential_limiter: crate::guard::Limiter::new(30, Duration::from_secs(60)),
+            streams_open: Arc::new(Mutex::new(HashMap::new())),
             writes_in_flight: Arc::new(Mutex::new(HashSet::new())),
             mailer: None,
             webauthn: None,
             public_url: None,
             push_tokens: Arc::new(Mutex::new(HashMap::new())),
+            git_slots: Arc::new(tokio::sync::Semaphore::new(GIT_TRANSFERS_AT_ONCE)),
+            git_callers: Arc::new(Mutex::new(HashMap::new())),
             refs_needing_advancing: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -232,9 +295,26 @@ impl AppState {
     /// Believe the forwarded address recorded by whatever sits in
     /// front. Only set this when something trustworthy does, since an
     /// unfiltered header lets any caller claim any address.
-    pub fn trusting_proxy(mut self) -> Self {
-        self.proxy_trust = crate::guard::ProxyTrust::ForwardedHeader;
+    /// Believe the address a proxy recorded, `hops` proxies deep.
+    pub fn trusting_proxy(mut self, hops: u8) -> Self {
+        self.proxy_trust = crate::guard::ProxyTrust::ForwardedHeader { hops };
         self
+    }
+
+    /// Hold a place among the event streams `who` has open. `None`
+    /// means they have enough already.
+    pub(crate) fn open_stream(&self, who: &PrincipalId) -> Option<StreamPlace> {
+        const AT_ONCE: u32 = 4;
+        let mut open = self.streams_open.lock().unwrap_or_else(|e| e.into_inner());
+        let count = open.entry(who.clone()).or_insert(0);
+        if *count >= AT_ONCE {
+            return None;
+        }
+        *count += 1;
+        Some(StreamPlace {
+            streams: self.streams_open.clone(),
+            who: who.clone(),
+        })
     }
 
     pub(crate) fn proxy_trust(&self) -> crate::guard::ProxyTrust {
@@ -250,9 +330,9 @@ impl AppState {
             crate::guard::Limiter::new(per_minute, Duration::from_secs(60))
         };
         self.anonymous_read_limiter = if anonymous == 0 {
-            crate::guard::Limiter::unlimited()
+            crate::guard::LoginLimiter::unlimited()
         } else {
-            crate::guard::Limiter::new(anonymous, Duration::from_secs(60))
+            crate::guard::LoginLimiter::new(anonymous, Duration::from_secs(60))
         };
         self
     }
@@ -284,38 +364,113 @@ impl AppState {
             .remove(&(principal.clone(), key.to_owned()));
     }
 
-    /// Issue an ephemeral token for a hook spawned on behalf of an
-    /// already-authenticated pusher.
+    /// Issue an ephemeral token for the hooks of one receive-pack,
+    /// spawned on behalf of an already-authenticated pusher into one
+    /// repository. It lives until the receive-pack ends, or until a
+    /// transfer could no longer be running.
     pub(crate) fn issue_push_token(
         &self,
         principal: &PrincipalId,
         scope: Option<&cairn_core::Scope>,
+        repo: &str,
+        owner: &PrincipalId,
     ) -> String {
         let secret = format!("cairnpush_{:032x}", rand::random::<u128>());
         let mut tokens = self
             .push_tokens
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        tokens.retain(|_, (_, _, issued)| issued.elapsed() < PUSH_TOKEN_TTL);
+        tokens.retain(|_, token| token.issued.elapsed() < PUSH_TOKEN_TTL);
         tokens.insert(
             secret.clone(),
-            (principal.clone(), scope.cloned(), Instant::now()),
+            PushToken {
+                principal: principal.clone(),
+                scope: scope.cloned(),
+                repo: repo.to_owned(),
+                owner: owner.clone(),
+                reserved: 0,
+                issued: Instant::now(),
+            },
         );
         secret
     }
 
-    pub(crate) fn resolve_push_token(
-        &self,
-        secret: &str,
-    ) -> Option<(PrincipalId, Option<cairn_core::Scope>)> {
+    pub(crate) fn resolve_push_token(&self, secret: &str) -> Option<PushIdentity> {
         let tokens = self
             .push_tokens
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         tokens
             .get(secret)
-            .filter(|(_, _, issued)| issued.elapsed() < PUSH_TOKEN_TTL)
-            .map(|(principal, scope, _)| (principal.clone(), scope.clone()))
+            .filter(|token| token.issued.elapsed() < PUSH_TOKEN_TTL)
+            .map(|token| PushIdentity {
+                principal: token.principal.clone(),
+                scope: token.scope.clone(),
+                repo: token.repo.clone(),
+            })
+    }
+
+    /// The push behind this token has been measured: this many bytes
+    /// are arriving, and every room check until it ends counts them.
+    pub(crate) fn reserve_for_push(&self, secret: &str, bytes: u64) {
+        let mut tokens = self
+            .push_tokens
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(token) = tokens.get_mut(secret) {
+            token.reserved = bytes;
+        }
+    }
+
+    /// What other pushes into this owner's repositories are bringing
+    /// right now. Fifty pushes fired at once would otherwise each be
+    /// checked against the same number from before any of them.
+    pub(crate) fn arriving_elsewhere(&self, owner: &PrincipalId, except: &str) -> u64 {
+        let tokens = self
+            .push_tokens
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        tokens
+            .iter()
+            .filter(|(secret, token)| {
+                secret.as_str() != except
+                    && token.owner == *owner
+                    && token.issued.elapsed() < PUSH_TOKEN_TTL
+            })
+            .map(|(_, token)| token.reserved)
+            .fold(0u64, u64::saturating_add)
+    }
+
+    /// The receive-pack this token was issued for has ended, however it
+    /// ended. The token stops working, and what it reserved is released:
+    /// the measurement that follows the push counts what actually
+    /// arrived.
+    pub(crate) fn end_push(&self, secret: &str) {
+        self.push_tokens
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(secret);
+    }
+
+    /// A place among the git transfers being served, or none when the
+    /// forge or this caller already holds as many as it may.
+    pub(crate) fn git_slot(&self, caller: &str) -> Option<GitSlot> {
+        let permit = self.git_slots.clone().try_acquire_owned().ok()?;
+        let mut callers = self
+            .git_callers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let held = callers.entry(caller.to_owned()).or_insert(0);
+        if *held >= GIT_TRANSFERS_PER_CALLER {
+            return None;
+        }
+        *held += 1;
+        drop(callers);
+        Some(GitSlot {
+            _permit: permit,
+            callers: self.git_callers.clone(),
+            caller: caller.to_owned(),
+        })
     }
 
     /// Enable git hosting. `base_url` must be reachable from spawned
@@ -594,5 +749,81 @@ impl AppState {
 
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<Envelope> {
         self.events.subscribe()
+    }
+}
+
+/// One open event stream; giving it back is dropping it.
+pub(crate) struct StreamPlace {
+    streams: Arc<Mutex<HashMap<PrincipalId, u32>>>,
+    who: PrincipalId,
+}
+
+impl Drop for StreamPlace {
+    fn drop(&mut self) {
+        let mut open = self.streams.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = open.get_mut(&self.who) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                open.remove(&self.who);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cairn_core::Store;
+
+    fn state() -> AppState {
+        AppState::new(Store::open_in_memory().unwrap())
+    }
+
+    /// A push token names one push into one repository, counts what
+    /// that push brings for every other push into the same owner's
+    /// repositories, and is gone when the push is.
+    #[test]
+    fn a_push_token_is_one_push_and_its_reservation_ends_with_it() {
+        let app = state();
+        let ada = PrincipalId::new("ada").unwrap();
+        let bee = PrincipalId::new("bee").unwrap();
+        let first = app.issue_push_token(&ada, None, "ada/demo", &ada);
+        let second = app.issue_push_token(&ada, None, "ada/other", &ada);
+        let elsewhere = app.issue_push_token(&bee, None, "bee/demo", &bee);
+        let resolved = app.resolve_push_token(&first).expect("live");
+        assert_eq!(resolved.repo, "ada/demo");
+        assert_eq!(resolved.principal, ada);
+
+        app.reserve_for_push(&first, 1000);
+        app.reserve_for_push(&second, 20);
+        app.reserve_for_push(&elsewhere, 500);
+        // From the second push's point of view, the first is arriving;
+        // its own reservation and bee's are not.
+        assert_eq!(app.arriving_elsewhere(&ada, &second), 1000);
+        assert_eq!(app.arriving_elsewhere(&ada, &first), 20);
+        assert_eq!(app.arriving_elsewhere(&bee, &elsewhere), 0);
+
+        app.end_push(&first);
+        assert!(app.resolve_push_token(&first).is_none());
+        assert_eq!(app.arriving_elsewhere(&ada, &second), 0);
+        // A secret nobody issued resolves to nobody.
+        assert!(app.resolve_push_token("cairnpush_nope").is_none());
+    }
+
+    /// One caller holds a few transfers, not all of them.
+    #[test]
+    fn transfers_are_shared_out_per_caller() {
+        let app = state();
+        let mut held = Vec::new();
+        for _ in 0..GIT_TRANSFERS_PER_CALLER {
+            held.push(app.git_slot("ada").expect("a place"));
+        }
+        assert!(app.git_slot("ada").is_none(), "the caller's share is spent");
+        assert!(app.git_slot("bee").is_some(), "and nobody else's is");
+        drop(held.pop());
+        assert!(
+            app.git_slot("ada").is_some(),
+            "a place given back is a place"
+        );
     }
 }

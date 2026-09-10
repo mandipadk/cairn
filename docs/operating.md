@@ -123,9 +123,13 @@ Some actions spend the operator's resources and are therefore the
 operator's to authorise, not a repository owner's: setting a mirror (the
 push carries the forge's mirror credential), importing history (the forge
 connects out on the caller's behalf; only `https://` sources are
-accepted), and registering agents. Minting a token for somebody else,
-and revoking another person's token or grant, are likewise the unscoped
-admin's.
+accepted). Minting a token for a principal that is not yours and not an
+agent you hold, and revoking a grant you neither issued nor received on
+a repository that is not yours, are likewise the unscoped admin's — and
+the admin grant itself is only ever a person's: it is refused to an
+agent, an agent is refused a place on a team, and every act over
+principals (registering, minting for another, stopping, transferring a
+repository, inviting) is refused to an agent whatever it holds.
 
 Responses carry a strict content policy, frame and sniffing protections,
 and HSTS. Sign-in attempts are rate limited per source address — behind a
@@ -162,14 +166,37 @@ account behind it, with `429` and `Retry-After` saying how long, set by
 with `0`. A clone spends twenty, because it forks git and streams
 history and a page load does not; that is the transfer itself, not just
 the ref advertisement. Assets and `/healthz` are not counted, so a
-monitor polling the forge is never what runs out. A caller whose
-credential does not resolve — revoked, expired, deactivated — spends
-its own allowance rather than the address's, so one agent looping on a
-dead token cannot use up what visitors from the same place have.
+monitor polling the forge is never what runs out. The address is
+always charged, whatever credential came with the request, because a
+credential is a header and a fresh header per request must not be a
+fresh allowance; a credential that does not resolve — revoked, expired,
+deactivated — spends a small allowance of its own on top, so an agent
+looping on a dead token is stopped sooner than the address would be.
+Git transfers are served a few at a time per caller and some dozens in
+all; past that a clone or push answers `429` and is retried by the
+client. A clone streams: the forge holds a buffer's worth of the pack,
+not the pack.
 
 **Behind a proxy, pass `--trust-proxy`.** Without it every visitor
 appears to arrive from the proxy, so the whole internet shares one
-anonymous allowance and the forge looks broken to everybody at once. Not defended: a principal that holds
+anonymous allowance and the forge looks broken to everybody at once.
+Behind two — a CDN and then a reverse proxy — pass `--proxy-hops 2`,
+because each proxy appends the address it received from and the
+visitor is that many entries from the right. Get the count right: too
+high and a client can write its own entry into the trusted position;
+too low and everybody behind the far proxy is one caller. A header
+with fewer entries than the count is not believed at all, and the
+connection is keyed instead, which is said once in the log. Every
+request outside the API's own write allowance is counted, whatever its
+method, so nothing reaches the forge for free; a credential that does
+not resolve is charged against its address like any stranger, with a
+small allowance of its own on top so a loop on a dead token is told to
+stop sooner. An IPv6 visitor is
+counted by their /64, since a home gets one and every host in it would
+otherwise be a fresh allowance. The health check has an allowance of
+its own, generous for any monitor, so it is never what a person runs
+out of and never a free path to the store either. A principal may hold
+a few event streams open at once, not any number. Not defended: a principal that holds
 legitimate capabilities and abuses them. Grants are the tool for that,
 and they are only as narrow as whoever issues them.
 
@@ -260,7 +287,9 @@ repository from its settings page or over the API
 `/unarchive`, `/delete {"confirm": "<name>"}`). A rename changes only the
 part after the owner and moves everything, including the git directory.
 Transferring a repository to another owner renames it under that owner's
-name once they accept. Every address a repository ever had redirects to
+name once they accept, and revokes every grant scoped to it: what the
+old owner handed out on it goes with the old owner, and the new one
+grants afresh. Every address a repository ever had redirects to
 its current one, on the pages, on the API and for git, so an old clone
 URL still clones; the redirect is for whoever may read the repository
 where it is now, and to anyone else an old name is as empty as any
@@ -337,14 +366,32 @@ git -C clone log --show-notes=cairn -1                  # the same document, on 
 ### Whose agent
 
 An agent belongs to the person or organisation it was registered under,
-and counts against that owner's agents. Anybody who can sign in makes
+and counts against that owner's agents. A grant is what lets it act,
+and a grant scoped to a repository is the ordinary kind; a grant with no
+repository is *forge-wide* — that capability on every repository, and
+with it the reading of every repository — which is why only the
+unscoped admin can issue one. Anybody who can sign in makes
 their own from the Agents page, or with
 `POST /api/principals {"id": ..., "kind": "agent", "owner": ...}` where
 `owner` is themselves or an organisation they belong to. Their owner
 mints and revokes its tokens, grants it capabilities on repositories
 they hold, and retires it — which is how the room it took comes back.
-Registering a person or an organisation stays the operator's: a name in
-the forge's namespace is not one owner's to hand out.
+Bringing a retired agent back is whoever runs the forge's, since
+deactivation is what the operator does about a misbehaving one, and it
+has to fit the owner's agents quota again — retire twenty-five, make
+twenty-five more, and the first cannot come back until the quota is
+raised or something else is retired. Registering a person or an
+organisation stays the operator's: a name in the forge's namespace is
+not one owner's to hand out. Registering anything is a human act; an
+agent never makes principals, whatever it holds, and a stopped owner
+takes nothing new. Deactivating a person or an organisation deactivates
+every agent they hold, and revokes every standing token that person
+drew for agents they do not own — a team's agent whose token a member
+kept in their own harness — so a stopped owner is stopped. Their own
+agents' tokens stop with the agents; the agents stay retired when the
+owner comes back, and are brought back one at a time. An agent's work
+is charged to the organisation when the organisation owns it, which is
+the point of registering it there.
 
 ### Agents' credentials
 
@@ -363,15 +410,20 @@ unaffected.
 ### What an owner may take up
 
 Every owner — a person or an organisation — has a quota: how many
-repositories they may have, how many agents, how many open tasks across
-their repositories, and how much disk those repositories take. A refusal
+repositories they may have, how many agents, how many open tasks and
+open changes across their repositories, how many live tokens they and
+their agents hold between them, and how much disk those repositories
+take. The last three are what bounds the database: a change opens with
+no push, and a token is a row, and nothing else stops a loop making
+either. A refusal
 names what they have and what the limit is, so the reader knows whether
 to delete something or ask for more, and arrives as `409` with
 `"kind": "over_quota"` on the API.
 
 The forge's own numbers are the defaults: 50 repositories, 25 agents,
-200 open tasks and 5 GiB of disk. Change them for the whole forge with
-`--quota-repos`, `--quota-agents`, `--quota-open-tasks` and
+200 open tasks, 500 open changes, 50 tokens and 5 GiB of disk. Change
+them for the whole forge with `--quota-repos`, `--quota-agents`,
+`--quota-open-tasks`, `--quota-open-changes`, `--quota-tokens` and
 `--quota-disk-mb`. Each takes a number or the word `none` for no limit
 at all; `0` means zero, because an operator who types 0 means none
 allowed.
@@ -383,10 +435,13 @@ keeps following the forge. Over the API,
 `{"agents": null}` to lift one entirely, and leaves out what it does
 not mention; a field nobody knows is refused rather than quietly
 treated as "no limit". It answers with what now holds.
-`GET` on the same address gives what holds, what was said about that
-owner in particular, what they are using, and the forge's own numbers,
-and is readable by that owner, by the members of an organisation, and
-by whoever runs the forge. `cairn admin quota <owner> --as <admin>
+`DELETE` on it unsays what was said — one limit with `?field=repos`,
+all of them with none — so the owner follows the forge's numbers
+again, which is a different thing from a limit of `null`. `GET` on the
+same address gives what holds, what was said about that owner in
+particular, what they are using, and the forge's own numbers, and is
+readable by that owner, by the members of an organisation, and by
+whoever runs the forge. `cairn admin quota <owner> --as <admin>
 --repos 200` does the same offline and prints the result; with no
 limits given it only prints. An owner sees their own on their page.
 
@@ -400,15 +455,40 @@ that shrank is noticed without anybody pushing to it.
 A push from an owner with no room is refused in `pre-receive`, which is
 the last moment a refusal still costs the forge nothing: git holds a
 pushed pack aside until that hook answers and throws it away if the
-answer is no. A refusal any later — the hook that records the change,
+answer is no. The hook measures what git is holding aside and sends the
+number, so the check is against what this push brings — after git has
+completed a thin pack against the objects already there, and with the
+index files git writes beside the pack — plus whatever other pushes into
+the same owner's repositories are bringing at that moment, each of
+which is counted from the moment its hook answered until its
+receive-pack ends. The hook speaks to the forge with a token issued for
+this one push into this one repository, which dies with the push; the
+forge's git reads no configuration but its own; and a quarantine a
+killed push left behind is swept before the next measurement, since
+git only removes its own on the exits it controls. A refusal any later — the hook that records the change,
 say — rejects the branch and keeps the objects, which is a disk quota
 that cannot actually refuse anything. Pushed packs are kept packed
 (`receive.unpackLimit=1`), because git's default explodes a small push
 into loose objects and multiplies what it takes on disk, and a pack
 larger than 256 MiB is refused by git while it is being read. Size is
-counted in blocks rather than bytes, since a git object is a few dozen
-bytes in a whole filesystem block. An import is checked the same way
-before the forge dials out, and measured after.
+counted in blocks or in bytes, whichever is more: a git object is a few
+dozen bytes in a whole filesystem block, and a filesystem that allocates
+lazily or compresses (ZFS does both) says less than the pusher sent. An import is checked the same way
+before the forge dials out, and measured after. The hook asks the forge
+whether there is room; if the forge cannot answer, the push is refused
+and can be tried again, because a check that waves a push through when
+the forge is slow is the check an attacker makes slow on purpose.
+
+A rebase that conflicted, an import that failed, a push whose ref was
+refused after its objects had arrived, a landing that did not finish —
+each leaves objects that no ref names. The forge collects each
+repository's once a day, after the hourly measurement picks it, and
+prunes only objects older than an hour: a push's objects are named by
+nothing between leaving quarantine and the reconciliation that writes
+their ref, and a collection that pruned them at once would delete a
+push in flight. `cairn admin gc [owner/name]` runs the same collection
+now and measures again, for the owner who deleted things and wants
+their number to say so.
 
 ### What is yours, and what is the forge's
 
@@ -474,9 +554,21 @@ People page or with `POST /api/principals/{id}/state {"active": false}`.
 From that moment they cannot sign in, their browser sessions are over,
 their tokens and session credentials stop answering, and nothing can be
 done in their name; what they did stays on the record, and repositories
-they own stay theirs until offered to someone else. Reactivation is the
-same call with `true`. Nobody can deactivate themselves, so the forge
-always keeps someone who can undo it.
+they own stay theirs until offered to someone else. The People page
+says on the control how many agents go down with a person, and the
+Agents page marks a retired agent and shows it no controls. Reactivation
+is the same call with `true`, and brings back the person alone.
+Nobody can deactivate themselves, so the forge always keeps someone
+who can undo it.
+
+A repository that changes hands takes its grants with it: every grant
+scoped to it is revoked, each by an event of its own that names the
+transfer as the reason, so the grantee is told and the log says why.
+A forge-wide grant follows no repository and is not touched. Only the
+owner (a member, for an organisation) or the unscoped admin may offer a
+repository, and a member may not offer an organisation's repository to
+themselves; a grant of admin *on* the repository runs it and does not
+move it.
 
 ## Keep it running
 
@@ -653,9 +745,12 @@ Offline administration, against the database file (root authority):
 - `cairn admin waitlist [--remove <email>]` — list the waitlist, or
   remove someone who asked to be forgotten.
 - `cairn admin quota <owner> [--as <admin>] [--repos n|none]
-  [--agents n|none] [--open-tasks n|none] [--disk-mb n|none]` — what one
-  owner may take up and what they are using; with no limits given, it
-  only prints. `--as` is required whenever a limit is given.
+  [--agents n|none] [--open-tasks n|none] [--open-changes n|none]
+  [--tokens n|none] [--disk-mb n|none]` — what one owner may take up and
+  what they are using; with no limits given, it only prints. `--as` is
+  required whenever a limit is given.
+- `cairn admin gc [owner/name]` — prune what nothing refers to and
+  measure again, in one repository or all of them.
 - `cairn admin reports [--dismiss <id>]` — what people reported broke,
   newest first; or dismiss one.
 - `cairn admin mail-check` — reach the relay and authenticate, sending
@@ -688,8 +783,9 @@ Other commands: `cairn serve`, `cairn mcp --server <url> --token <t>`,
   `--reads-per-minute <n>` (default 1200) and
   `--anonymous-reads-per-minute <n>` (default 240).
 - `--quota-repos`, `--quota-agents`, `--quota-open-tasks`,
-  `--quota-disk-mb` (defaults 50, 25, 200 and 5120 MiB; each takes a
-  number or `none`).
+  `--quota-open-changes`, `--quota-tokens`, `--quota-disk-mb` (defaults
+  50, 25, 200, 500, 50 and 5120 MiB; each takes a number or `none`).
+- `--trust-proxy` and `--proxy-hops <n>` (default 1).
 - `--signing-key-file <path>` (default `signing.key` beside the database).
 
 Files beside the database: `signing.key` (owner-only). Under `--repos`:

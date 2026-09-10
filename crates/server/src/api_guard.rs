@@ -13,9 +13,9 @@
 
 use crate::auth::Actor;
 use crate::error::ApiError;
+use crate::error::Json;
 use crate::guard::rate_limited;
 use crate::state::AppState;
-use axum::Json;
 use axum::body::{Body, Bytes};
 use axum::extract::{FromRequestParts, Request, State};
 use axum::http::{HeaderValue, Method, StatusCode, header};
@@ -85,8 +85,14 @@ pub async fn api_writes(State(app): State<AppState>, request: Request, next: Nex
     response
 }
 
-/// Keep what the handler answered, unless the forge itself failed, in
-/// which case the caller is owed another attempt rather than a copy.
+/// Keep what the handler answered, when it did something. A retry of
+/// a write that was done must be answered with what it did, never
+/// done again; a retry of a write that was refused did nothing, and
+/// asking again is the right thing — the refusal may have been for
+/// want of room, a verdict, or a grant that has since arrived, and a
+/// refusal handed back from memory for a day would hide that. A
+/// refusal that is still true is recomputed for the price of one
+/// more lookup.
 async fn remembered(
     app: &AppState,
     principal: &PrincipalId,
@@ -103,17 +109,7 @@ async fn remembered(
         )
         .into_response();
     };
-    // A refusal whose cause is somebody else's to change is not an
-    // answer worth keeping: an agent refused for want of room, retrying
-    // under the same key after the operator made room, would be handed
-    // the old refusal for a day.
-    let will_change_on_its_own = parts
-        .headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|kind| kind.contains("json"))
-        && String::from_utf8_lossy(&bytes).contains("\"over_quota\"");
-    if (parts.status.is_success() || parts.status.is_client_error()) && !will_change_on_its_own {
+    if parts.status.is_success() {
         let replay = Replay {
             fingerprint,
             status: parts.status.as_u16(),

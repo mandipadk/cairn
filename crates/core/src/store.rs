@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 28;
+const SCHEMA_VERSION: i64 = 29;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -220,7 +220,8 @@ CREATE TABLE IF NOT EXISTS principals (
 CREATE INDEX IF NOT EXISTS idx_principals_owner ON principals (owner);
 
 -- What one owner may take up, where the operator has said something
--- other than this forge's default. Filled from QuotaSet.
+-- other than this forge's default. Filled from QuotaOverridden, and
+-- from QuotaSet as the first binaries wrote it.
 CREATE TABLE IF NOT EXISTS quotas (
   owner TEXT PRIMARY KEY,
   quota TEXT NOT NULL
@@ -234,7 +235,8 @@ CREATE TABLE IF NOT EXISTS tokens (
   until_ts  TEXT,
   revoked   INTEGER NOT NULL DEFAULT 0,
   session   TEXT,
-  scope     TEXT
+  scope     TEXT,
+  minted_by TEXT
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_tokens_hash ON tokens (hash);
 CREATE INDEX IF NOT EXISTS idx_tokens_session ON tokens (session);
@@ -1018,7 +1020,9 @@ fn record_scope(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
         // Somebody's own account business.
         PasswordResetRequested { principal } => (None, Some(principal.as_str().to_owned())),
 
-        QuotaSet { owner, .. } => (None, Some(owner.as_str().to_owned())),
+        QuotaSet { owner, .. } | QuotaOverridden { owner, .. } => {
+            (None, Some(owner.as_str().to_owned()))
+        }
 
         PasswordSet { principal, .. }
         | IdentityLinked { principal, .. }
@@ -1724,6 +1728,27 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             )?;
         }
         Event::QuotaSet { owner, quota } => {
+            // Written when a quota was a whole thing and an absent field
+            // meant "no limit". That is what it still means: every field
+            // is said, and the two dimensions that did not exist then
+            // follow the forge.
+            let said = crate::types::QuotaOverride {
+                repos: Some(quota.repos),
+                agents: Some(quota.agents),
+                open_tasks: Some(quota.open_tasks),
+                disk: Some(quota.disk),
+                open_changes: None,
+                tokens: None,
+            };
+            tx.execute(
+                "INSERT OR REPLACE INTO quotas (owner, quota) VALUES (?, ?)",
+                params![
+                    owner.as_str(),
+                    serde_json::to_string(&said).expect("a quota serializes")
+                ],
+            )?;
+        }
+        Event::QuotaOverridden { owner, quota } => {
             tx.execute(
                 "INSERT OR REPLACE INTO quotas (owner, quota) VALUES (?, ?)",
                 params![
@@ -1739,9 +1764,19 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             hash,
             until,
         } => {
+            // Who drew it is kept, because a person leaving takes the
+            // credentials they drew for agents that are not theirs.
             tx.execute(
-                "INSERT INTO tokens (id, principal, label, hash, until_ts) VALUES (?, ?, ?, ?, ?)",
-                params![token.as_str(), principal.as_str(), label, hash, until],
+                "INSERT INTO tokens (id, principal, label, hash, until_ts, minted_by)
+                 VALUES (?, ?, ?, ?, ?, ?)",
+                params![
+                    token.as_str(),
+                    principal.as_str(),
+                    label,
+                    hash,
+                    until,
+                    actor
+                ],
             )?;
         }
         Event::SessionCredentialMinted {
@@ -2048,6 +2083,15 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
             tx.execute(
                 "UPDATE repos SET owner = pending_owner, pending_owner = NULL
                   WHERE name = ? AND pending_owner IS NOT NULL",
+                params![repo],
+            )?;
+            // What the old owner handed out on it goes with the old
+            // owner. A grant is somebody's decision about their own
+            // repository; the new owner has made no such decision, and
+            // an agent the old owner set up keeping push on a repository
+            // that is no longer theirs is authority nobody chose.
+            tx.execute(
+                "UPDATE grants SET revoked = 1 WHERE repo = ? AND revoked = 0",
                 params![repo],
             )?;
         }
@@ -3001,7 +3045,7 @@ mod projection_shape {
         assert_eq!(
             (super::SCHEMA_VERSION, shape.as_str()),
             (
-                28,
+                29,
                 r#"{"require_executed_check":true,"independence":"human_or_two_models","require_runner_verification":false,"runner_quorum":1,"required_domains":[],"require_concerns_resolved":true,"attention_budget":null,"agents_act_in_sessions":false,"trust":null}"#
             ),
             "the policy's stored shape changed: bump SCHEMA_VERSION and pin the new shape here"
@@ -3039,12 +3083,23 @@ mod projection_shape {
     /// forge holds stop matching what the log would write.
     #[test]
     fn the_stored_quota_shape_is_pinned_to_the_schema_version() {
-        let shape = serde_json::to_string(&crate::types::Quota::default()).unwrap();
+        // What the quotas projection holds is an override, with each of
+        // its three states on show: said as a number, said as no limit,
+        // and not said at all.
+        let shape = serde_json::to_string(&crate::types::QuotaOverride {
+            repos: Some(Some(0)),
+            agents: Some(None),
+            open_tasks: None,
+            disk: Some(Some(5368709120)),
+            open_changes: None,
+            tokens: Some(Some(50)),
+        })
+        .unwrap();
         assert_eq!(
             (super::SCHEMA_VERSION, shape.as_str()),
             (
-                28,
-                r#"{"repos":50,"agents":25,"open_tasks":200,"disk":5368709120}"#
+                29,
+                r#"{"repos":0,"agents":null,"disk":5368709120,"tokens":50}"#
             ),
             "the quota's stored shape changed: bump SCHEMA_VERSION and pin the new shape here"
         );

@@ -2066,6 +2066,8 @@ pub fn owner(
                         (allowance("Disk", crate::in_bytes(usage.disk), quota.disk.map(crate::in_bytes)))
                         (allowance("Agents", usage.agents.to_string(), quota.agents.map(|n| n.to_string())))
                         (allowance("Open tasks", usage.open_tasks.to_string(), quota.open_tasks.map(|n| n.to_string())))
+                        (allowance("Open changes", usage.open_changes.to_string(), quota.open_changes.map(|n| n.to_string())))
+                        (allowance("Tokens", usage.tokens.to_string(), quota.tokens.map(|n| n.to_string())))
                     }
                 }
                 @if organisation {
@@ -2253,10 +2255,20 @@ pub fn people(
                             form method="post" action="/people" {
                                 input type="hidden" name="action" value={ @if row.principal.active { "deactivate" } @else { "reactivate" } };
                                 input type="hidden" name="id" value=(row.principal.id.as_str());
+                                // What goes down with them is said on the
+                                // control, and that it does not come back
+                                // with them: retired agents are brought back
+                                // one at a time, by whoever holds them.
                                 @if row.principal.active {
-                                    button class="quiet danger" type="submit" { "Deactivate" }
+                                    button class="quiet danger" type="submit" {
+                                        @match row.agents {
+                                            0 => { "Deactivate" }
+                                            1 => { "Deactivate, and their agent" }
+                                            n => { "Deactivate, and their " (n) " agents" }
+                                        }
+                                    }
                                 } @else {
-                                    button class="quiet" type="submit" { "Reactivate" }
+                                    button class="quiet" type="submit" title="Their retired agents stay retired until brought back one by one" { "Reactivate" }
                                 }
                             }
                         }
@@ -2330,7 +2342,10 @@ pub fn agents(
                 div class="agent" {
                     div class="trow roster" {
                         span class="strong" { (row.principal.id.as_str()) }
-                        span class="sec3" { (row.principal.display) }
+                        span class="sec3" {
+                            (row.principal.display)
+                            @if !row.principal.active { " · retired" }
+                        }
                         span class="sec3" { (row.principal.model.as_deref().unwrap_or("")) }
                         span class="sec3" {
                             @if let Some(owner) = &row.principal.owner { (owner.as_str()) }
@@ -2345,21 +2360,33 @@ pub fn agents(
                                     (action.as_str())
                                 }
                                 @match &grant.repo {
-                                    Some(repo) => { " on " (repo) }
+                                    // A repository the viewer cannot read is not
+                                    // named on their page, even on an agent of theirs:
+                                    // the operator granted it, and the name is the
+                                    // operator's to share.
+                                    Some(repo) if viewer.1.admin || viewer.1.repos.iter().any(|r| &r.name == repo) => { " on " (repo) }
+                                    Some(_) => { " on a repository not yours to see" }
                                     None => { " everywhere" }
                                 }
                             }
-                            form method="post" action="/agents" {
-                                input type="hidden" name="action" value="revoke";
-                                input type="hidden" name="grant" value=(grant.id.0);
-                                button class="quiet danger" type="submit" { "Revoke" }
+                            // Only a control that will work: revoking is the
+                            // grantor's or the grantee's, or the forge's.
+                            @if viewer.1.admin || grant.grantor == viewer.0 {
+                                form method="post" action="/agents" {
+                                    input type="hidden" name="action" value="revoke";
+                                    input type="hidden" name="grant" value=(grant.id.0);
+                                    button class="quiet danger" type="submit" { "Revoke" }
+                                }
                             }
                         }
                     }
-                    @if row.grants.iter().all(|g| g.revoked) {
+                    @if row.principal.active && row.grants.iter().all(|g| g.revoked) {
                         p class="grant sec3" { "No live grant — this agent can do nothing yet." }
                     }
 
+                    // A retired agent takes no grant and no token; the
+                    // controls that would only refuse are not shown.
+                    @if row.principal.active {
                     form class="inline" method="post" action="/agents" {
                         input type="hidden" name="action" value="grant";
                         input type="hidden" name="grantee" value=(row.principal.id.as_str());
@@ -2370,10 +2397,28 @@ pub fn agents(
                             }
                         }
                         select name="repo" {
-                            option value="" { "every repository" }
+                            // A grant everywhere is running the forge; offering it
+                            // to somebody who cannot make it is a control that
+                            // only ever refuses.
+                            @if viewer.1.admin { option value="" { "every repository" } }
                             @for repo in repos { option value=(repo) { (repo) } }
                         }
                         button class="vbtn" type="submit" { "Grant" }
+                    }
+                    // A lost token is otherwise the API's to replace.
+                    form class="inline" method="post" action="/agents" {
+                        input type="hidden" name="action" value="mint";
+                        input type="hidden" name="grantee" value=(row.principal.id.as_str());
+                        button class="quiet" type="submit" { "New token" }
+                    }
+                    // Retiring is how the room an agent takes comes back;
+                    // the token stops with it. Bringing one back is the
+                    // forge's to do.
+                    form class="inline" method="post" action="/agents" {
+                        input type="hidden" name="action" value="retire";
+                        input type="hidden" name="grantee" value=(row.principal.id.as_str());
+                        button class="quiet danger" type="submit" { "Retire" }
+                    }
                     }
                 }
             }
@@ -2440,6 +2485,31 @@ pub fn not_found_page(theme: Theme) -> Markup {
         "Nothing lives here",
         html! {
             p class="plain" { "The address may be wrong, or this may be something you cannot see." }
+            p class="hint" { a href="/" { "Home" } }
+        },
+    )
+}
+
+/// A write that did not come from this site: another site's form, or
+/// a page left open past a sign-in. The person is sent back to try
+/// from here.
+pub fn not_from_here_page(theme: Theme) -> Markup {
+    outside(
+        theme,
+        "Not from here",
+        html! {
+            p class="plain" { "That was sent from another site, or from a page that has gone stale. Go back to the forge and try again." }
+            p class="hint" { a href="/" { "Home" } }
+        },
+    )
+}
+
+pub fn too_many_page(theme: Theme) -> Markup {
+    outside(
+        theme,
+        "Too many requests",
+        html! {
+            p class="plain" { "You have asked for a lot in a short time. Wait a moment and try again." }
             p class="hint" { a href="/" { "Home" } }
         },
     )
@@ -3914,7 +3984,7 @@ fn describe(numbers: &Refs, envelope: &Envelope) -> (&'static str, Markup) {
                 b { (actor) } " registered " (principal.as_str())
             },
         ),
-        Event::QuotaSet { owner, .. } => (
+        Event::QuotaSet { owner, .. } | Event::QuotaOverridden { owner, .. } => (
             "dot idle",
             html! {
                 b { (actor) } " set what " (owner.as_str()) " may take up"

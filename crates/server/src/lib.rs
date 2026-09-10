@@ -73,7 +73,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/principals/{id}/record", get(routes::principal_record))
         .route(
             "/api/principals/{id}/quota",
-            get(routes::get_quota).post(routes::set_quota),
+            get(routes::get_quota)
+                .post(routes::set_quota)
+                .delete(routes::unset_quota),
         )
         .route("/api/principals/{id}/password", post(routes::set_password))
         .route(
@@ -266,7 +268,22 @@ pub fn router(state: AppState) -> Router {
             post(git_http::receive_pack)
                 .layer(axum::extract::DefaultBodyLimit::max(GIT_BODY_LIMIT)),
         )
+        // Under /api and /git, an address nothing answers to is the
+        // API's to refuse: without these the page routes' `/{owner}`
+        // and `/{owner}/{repo}` would take `/api/nope` as a repository
+        // named nope and send the caller to sign in.
+        .route("/api/{*rest}", axum::routing::any(unmatched))
+        .route("/git/{owner}", axum::routing::any(unmatched))
+        .route("/git/{owner}/{repo}", axum::routing::any(unmatched))
+        .route("/git/{owner}/{repo}/{*rest}", axum::routing::any(unmatched))
         .merge(web::routes())
+        // An address nothing answers to, or a method nothing answers
+        // with, is answered in the shape the caller reads: the API's
+        // refusal on the API, a page everywhere else. Left to itself
+        // the router says nothing, and a client reading JSON chokes on
+        // nothing.
+        .fallback(unmatched)
+        .method_not_allowed_fallback(wrong_method)
         // Innermost, so every API write passes it after the origin
         // check and every answer it gives still gets the headers.
         .layer(axum::middleware::from_fn_with_state(
@@ -285,4 +302,43 @@ pub fn router(state: AppState) -> Router {
             web::old_names,
         ))
         .with_state(state)
+}
+
+/// Whether a path is read by a program rather than a person.
+fn machine_read(path: &str) -> bool {
+    path.starts_with("/api/") || path.starts_with("/git/")
+}
+
+async fn unmatched(request: axum::extract::Request) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if machine_read(request.uri().path()) {
+        return error::ApiError::new(
+            axum::http::StatusCode::NOT_FOUND,
+            "not_found",
+            "no such route; the routes are listed in docs/api.md",
+        )
+        .into_response();
+    }
+    web::not_found()
+}
+
+async fn wrong_method(request: axum::extract::Request) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if machine_read(request.uri().path()) {
+        return error::ApiError::new(
+            axum::http::StatusCode::METHOD_NOT_ALLOWED,
+            "method_not_allowed",
+            format!("{} is not how this route is called", request.method()),
+        )
+        .into_response();
+    }
+    (
+        axum::http::StatusCode::METHOD_NOT_ALLOWED,
+        [(
+            axum::http::HeaderName::from_static(web::FALLBACK),
+            "not-found",
+        )],
+        "",
+    )
+        .into_response()
 }

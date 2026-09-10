@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 29;
+const SCHEMA_VERSION: i64 = 30;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -2085,15 +2085,14 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                   WHERE name = ? AND pending_owner IS NOT NULL",
                 params![repo],
             )?;
-            // What the old owner handed out on it goes with the old
-            // owner. A grant is somebody's decision about their own
-            // repository; the new owner has made no such decision, and
-            // an agent the old owner set up keeping push on a repository
-            // that is no longer theirs is authority nobody chose.
-            tx.execute(
-                "UPDATE grants SET revoked = 1 WHERE repo = ? AND revoked = 0",
-                params![repo],
-            )?;
+            // The grants the old owner handed out on it are revoked by
+            // the command that accepts the transfer, as events of their
+            // own with the reason. Nothing is revoked here: a projection
+            // that changed rows the log never said to change is a
+            // projection that disagrees with its own log, and this arm
+            // once did exactly that — a rebuild replayed a transfer from
+            // before revocations were events and silently revoked every
+            // grant on the repository, including the runner's.
         }
         Event::RepoTransferDeclined { repo } => {
             tx.execute(
@@ -3045,7 +3044,7 @@ mod projection_shape {
         assert_eq!(
             (super::SCHEMA_VERSION, shape.as_str()),
             (
-                29,
+                30,
                 r#"{"require_executed_check":true,"independence":"human_or_two_models","require_runner_verification":false,"runner_quorum":1,"required_domains":[],"require_concerns_resolved":true,"attention_budget":null,"agents_act_in_sessions":false,"trust":null}"#
             ),
             "the policy's stored shape changed: bump SCHEMA_VERSION and pin the new shape here"
@@ -3098,7 +3097,7 @@ mod projection_shape {
         assert_eq!(
             (super::SCHEMA_VERSION, shape.as_str()),
             (
-                29,
+                30,
                 r#"{"repos":0,"agents":null,"disk":5368709120,"tokens":50}"#
             ),
             "the quota's stored shape changed: bump SCHEMA_VERSION and pin the new shape here"

@@ -131,6 +131,44 @@ agent, an agent is refused a place on a team, and every act over
 principals (registering, minting for another, stopping, transferring a
 repository, inviting) is refused to an agent whatever it holds.
 
+### The operator's door
+
+Everything above that is the operator's — registering people, issuing
+grants, membership, stopping and restarting principals, quotas, the
+waitlist, invitations, reports, mirrors and imports — can be served on a
+listener of its own:
+
+```sh
+cairn serve --listen 127.0.0.1:6160 --operator-listen 127.0.0.1:6161 …
+```
+
+The operator's door then answers on `6161` and nowhere else: the public
+listener refuses those paths with `404` whatever token comes with the
+request, and minting a token or setting a password for anybody but
+yourself is refused there the same way. An admin token that leaks
+through the tunnel opens nothing that grants access. The operator
+reaches the door over loopback — an SSH port-forward, or something that
+runs on the box — and everything else about the forge is the same on
+both listeners. `--operator-listen` must be a loopback address; that is
+the point of it.
+
+Behind that door, four things a forge on its own may want, all needing
+the unscoped admin grant:
+
+- `GET /api/waitlist` — who asked for an account, oldest first;
+  `DELETE /api/waitlist/{email}` takes one off.
+- `POST /api/invitations {"id": "jane", "display": "Jane", "email": "jane@…"}`
+  — an account under that name if there is none, the address on it, and
+  an invitation that signs them in once. Mailed when the forge can mail;
+  otherwise the answer carries the `link` to hand over. Their address
+  leaves the waitlist.
+- `GET /api/reports` — what people said broke; `POST /api/reports/{id}/dismiss`.
+- The switch for strangers: `cairn serve --open-signup` lets anyone make
+  an account at `/signup` (name, password, an address to confirm), rate
+  limited by source like every public form. Off — the default — the page
+  says the forge takes people by invitation and points at the front
+  page's request form.
+
 Responses carry a strict content policy, frame and sniffing protections,
 and HSTS. Sign-in attempts are rate limited per source address — behind a
 reverse proxy, pass `--trust-proxy` so callers are told apart by the

@@ -107,6 +107,24 @@ pub async fn boot_mailing(command: &str) -> Forge {
     .await
 }
 
+/// The forge as two listeners: the public one, which refuses the
+/// operator's door, and the door itself.
+pub fn split_listeners(forge: &Forge) -> (Router, Router) {
+    (
+        router(forge.state.clone().with_operator_elsewhere()),
+        router(forge.state.clone()),
+    )
+}
+
+/// A forge that lets strangers make accounts.
+pub async fn boot_open_signup() -> Forge {
+    let mut forge = boot_token_only().await;
+    let state = forge.state.clone().with_open_signup();
+    forge.app = router(state.clone());
+    forge.state = state;
+    forge
+}
+
 /// A forge with the dev identity header switched off — how a real
 /// deployment runs, where identity comes only from a token. Anything
 /// asserting something about authentication has to use this, because the

@@ -126,6 +126,66 @@ fn refused(path: &str, why: &'static str) -> Response {
         .into_response()
 }
 
+/// Whether a request is the operator's door: what registers people,
+/// hands out authority, sets what an owner may have, reads the
+/// waitlist and the reports, invites, or spends the operator's own
+/// credentials. When the forge serves that door on a loopback
+/// listener, the public listener refuses these, with or without a
+/// token — a token that travelled through the tunnel is exactly the
+/// one that must not open them.
+pub fn is_operator_path(method: &Method, path: &str) -> bool {
+    let parts: Vec<&str> = path.trim_matches('/').split('/').collect();
+    let post = *method == Method::POST;
+    let get = *method == Method::GET;
+    let delete = *method == Method::DELETE;
+    match parts.as_slice() {
+        ["api", "principals"] => post,
+        ["api", "principals", _, "state"] => post,
+        ["api", "principals", _, "quota"] => post || delete,
+        ["api", "grants"] => post,
+        ["api", "teams", _, "members"] | ["api", "teams", _, "members", "remove"] => post,
+        ["api", "waitlist"] => get,
+        ["api", "waitlist", _] => delete,
+        ["api", "invitations"] => post,
+        ["api", "reports"] => get,
+        ["api", "reports", _, "dismiss"] => post,
+        ["api", "repos", _, _, "mirror"] | ["api", "repos", _, _, "import"] => post,
+        ["people"] | ["teams"] => get || post,
+        _ => false,
+    }
+}
+
+/// The public listener's refusal of the operator's door, when that door
+/// is elsewhere: answered as a route that is not here, in the shape the
+/// caller reads.
+pub async fn operator_surface(
+    axum::extract::State(app): axum::extract::State<crate::AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if app.operator_elsewhere() && is_operator_path(request.method(), request.uri().path()) {
+        let path = request.uri().path();
+        if path.starts_with("/api/") {
+            return crate::error::ApiError::new(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "no such route here: this forge serves its operator's door on another listener",
+            )
+            .into_response();
+        }
+        return (
+            StatusCode::NOT_FOUND,
+            [(
+                axum::http::HeaderName::from_static(crate::web::FALLBACK),
+                "not-found",
+            )],
+            "",
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
 /// What a reader is allowed, before being told to wait.
 ///
 /// Writes have had an allowance since agents started retrying them;
@@ -572,6 +632,43 @@ pub fn rate_limited(wait: Duration) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_operators_door_is_a_known_list() {
+        for (method, path) in [
+            (Method::POST, "/api/principals"),
+            (Method::POST, "/api/grants"),
+            (Method::POST, "/api/teams/crew/members"),
+            (Method::POST, "/api/teams/crew/members/remove"),
+            (Method::POST, "/api/principals/ada/state"),
+            (Method::DELETE, "/api/principals/ada/quota"),
+            (Method::GET, "/api/waitlist"),
+            (Method::DELETE, "/api/waitlist/a%40b.c"),
+            (Method::POST, "/api/invitations"),
+            (Method::GET, "/api/reports"),
+            (Method::POST, "/api/reports/3/dismiss"),
+            (Method::POST, "/api/repos/ada/demo/mirror"),
+            (Method::POST, "/api/repos/ada/demo/import"),
+            (Method::GET, "/people"),
+            (Method::POST, "/teams"),
+        ] {
+            assert!(is_operator_path(&method, path), "{method} {path}");
+        }
+        for (method, path) in [
+            (Method::GET, "/api/principals/ada"),
+            (Method::GET, "/api/principals/ada/quota"),
+            (Method::GET, "/api/grants?grantee=scout"),
+            (Method::POST, "/api/grants/g-1/revoke"),
+            (Method::POST, "/api/principals/ada/tokens"),
+            (Method::GET, "/api/repos/ada/demo/mirror"),
+            (Method::GET, "/api/teams/crew/members"),
+            (Method::POST, "/waitlist"),
+            (Method::POST, "/report"),
+            (Method::GET, "/you"),
+        ] {
+            assert!(!is_operator_path(&method, path), "{method} {path}");
+        }
+    }
 
     /// A fixed window lets twice the allowance through in the second
     /// that straddles a boundary. A bucket does not: what was spent is

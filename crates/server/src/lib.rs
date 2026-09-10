@@ -247,6 +247,14 @@ pub fn router(state: AppState) -> Router {
             "/api/teams/{id}/members/remove",
             post(routes::remove_member),
         )
+        .route("/api/waitlist", get(routes::list_waitlist))
+        .route(
+            "/api/waitlist/{email}",
+            axum::routing::delete(routes::leave_waitlist),
+        )
+        .route("/api/invitations", post(routes::invite))
+        .route("/api/reports", get(routes::list_reports))
+        .route("/api/reports/{id}/dismiss", post(routes::dismiss_report))
         .route("/api/inbox", get(routes::inbox))
         .route("/api/inbox/read", post(routes::mark_read))
         .route("/api/events/stream", get(sse::stream))
@@ -294,6 +302,12 @@ pub fn router(state: AppState) -> Router {
             state.clone(),
             guard::read_allowance,
         ))
+        // Outside the allowance: a refused operator path costs nothing
+        // and is refused before anything else looks at it.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            guard::operator_surface,
+        ))
         .layer(axum::middleware::from_fn(guard::security_headers))
         .layer(axum::middleware::from_fn(guard::same_origin_writes))
         .layer(axum::middleware::from_fn(web::themed_fallbacks))
@@ -315,7 +329,7 @@ async fn unmatched(request: axum::extract::Request) -> axum::response::Response 
         return error::ApiError::new(
             axum::http::StatusCode::NOT_FOUND,
             "not_found",
-            "no such route; the routes are listed in docs/api.md",
+            "no such route; the routes are the ones docs/operating.md and docs/agents.md show",
         )
         .into_response();
     }

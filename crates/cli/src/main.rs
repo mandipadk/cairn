@@ -29,6 +29,17 @@ enum Command {
         /// Address to listen on.
         #[arg(long, default_value = "127.0.0.1:6160")]
         listen: SocketAddr,
+        /// Serve the operator's door — registering people, granting,
+        /// quotas, the waitlist, invitations, reports, mirrors and
+        /// imports — on this loopback address only. The public listener
+        /// then refuses those paths, with or without a token, so nothing
+        /// that grants access is reachable through a tunnel.
+        #[arg(long)]
+        operator_listen: Option<SocketAddr>,
+        /// Let strangers make their own accounts at /signup. Off, the
+        /// page says the forge takes people by invitation.
+        #[arg(long)]
+        open_signup: bool,
         /// Directory holding the hosted bare repositories.
         #[arg(long, default_value = "repos")]
         repos: PathBuf,
@@ -409,6 +420,8 @@ async fn main() -> anyhow::Result<()> {
             quota_open_changes,
             quota_tokens,
             signing_key_file,
+            operator_listen,
+            open_signup,
         } => {
             let git_version = cairn_git::preflight().context("checking the git on PATH")?;
             tracing::info!("cairn {}", cairn_core::VERSION);
@@ -593,10 +606,32 @@ async fn main() -> anyhow::Result<()> {
                      session cookies will not be marked Secure"
                 );
             }
+            if open_signup {
+                state = state.with_open_signup();
+                tracing::info!("sign-up is open: strangers may make accounts at /signup");
+            }
             cairn_server::spawn_queue_processor(state.clone());
-            let app = router(state);
+            // The operator's door, when it is served apart: the same
+            // forge on a loopback listener, and the public listener
+            // refusing everything that door is for.
+            let operator = match operator_listen {
+                Some(addr) => {
+                    anyhow::ensure!(
+                        addr.ip().is_loopback(),
+                        "--operator-listen must be a loopback address; the point is that the tunnel cannot reach it"
+                    );
+                    Some(tokio::net::TcpListener::bind(addr).await?)
+                }
+                None => None,
+            };
+            let public_state = if operator.is_some() {
+                state.clone().with_operator_elsewhere()
+            } else {
+                state.clone()
+            };
             tracing::info!(
                 %listen,
+                operator = ?operator_listen,
                 db = %db.display(),
                 repos = %repos.display(),
                 git = %git_version,
@@ -604,14 +639,28 @@ async fn main() -> anyhow::Result<()> {
             );
             // Connect info is what lets the sign-in limiter tell one
             // caller from another.
-            axum::serve(
+            let public = axum::serve(
                 listener,
-                app.into_make_service_with_connect_info::<SocketAddr>(),
+                router(public_state).into_make_service_with_connect_info::<SocketAddr>(),
             )
             .with_graceful_shutdown(async {
                 let _ = tokio::signal::ctrl_c().await;
-            })
-            .await?;
+            });
+            match operator {
+                Some(operator) => {
+                    let door = axum::serve(
+                        operator,
+                        router(state).into_make_service_with_connect_info::<SocketAddr>(),
+                    )
+                    .with_graceful_shutdown(async {
+                        let _ = tokio::signal::ctrl_c().await;
+                    });
+                    let (a, b) = tokio::join!(public, door);
+                    a?;
+                    b?;
+                }
+                None => public.await?,
+            }
         }
         Command::Admin { command } => match command {
             AdminCommand::Bootstrap {

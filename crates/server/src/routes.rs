@@ -295,6 +295,9 @@ pub async fn set_password(
     Path(id): Path<String>,
     Json(body): Json<SetPassword>,
 ) -> ApiResult<Json<Value>> {
+    if app.operator_elsewhere() && actor.0.as_str() != id {
+        return Err(not_here());
+    }
     let principal = PrincipalId(id);
     let env = app.with_store(|s| {
         s.acting_as(actor.1.as_ref())
@@ -1133,6 +1136,11 @@ pub async fn mint_token(
     Path(id): Path<String>,
     Json(body): Json<MintToken>,
 ) -> ApiResult<Json<Value>> {
+    // Minting for somebody else is the operator's door; when that door
+    // is elsewhere, it is not here, whatever token came with this.
+    if app.operator_elsewhere() && actor.0.as_str() != id {
+        return Err(not_here());
+    }
     let principal = PrincipalId(id);
     let (token, secret, env) = app.with_store(|s| {
         s.acting_as(actor.1.as_ref());
@@ -2175,4 +2183,169 @@ pub async fn awaiting_verification(
             .awaiting_verification(&repo, &actor.0)
     })?;
     Ok(Json(json!(waiting)))
+}
+
+/// The refusal for an operator's act asked of the public listener: the
+/// route is not here, in the same words the router uses for a route
+/// that is nowhere.
+fn not_here() -> ApiError {
+    ApiError::new(
+        StatusCode::NOT_FOUND,
+        "not_found",
+        "no such route here: this forge serves its operator's door on another listener",
+    )
+}
+
+/// Whoever runs the forge, or nobody: the operator's endpoints answer a
+/// plain refusal rather than a page of somebody else's business.
+fn operator(app: &AppState, actor: &Actor) -> ApiResult<()> {
+    if app.with_store(|s| s.acting_as(actor.1.as_ref()).is_admin(&actor.0)) {
+        return Ok(());
+    }
+    Err(ApiError::new(
+        StatusCode::FORBIDDEN,
+        "forbidden",
+        "this is the operator's: it needs the unscoped admin grant",
+    ))
+}
+
+/// Who asked for an account, oldest first.
+pub async fn list_waitlist(State(app): State<AppState>, actor: Actor) -> ApiResult<Json<Value>> {
+    operator(&app, &actor)?;
+    let list = app.with_store(|s| s.waitlist())?;
+    Ok(Json(json!({
+        "waitlist": list
+            .into_iter()
+            .map(|(email, joined, note)| json!({ "email": email, "joined": joined, "note": note }))
+            .collect::<Vec<_>>()
+    })))
+}
+
+/// Take an address off the list — because they asked, or because they
+/// are in.
+pub async fn leave_waitlist(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(email): Path<String>,
+) -> ApiResult<Json<Value>> {
+    operator(&app, &actor)?;
+    let removed = app.with_store(|s| s.leave_waitlist(&email))?;
+    Ok(Json(json!({ "removed": removed })))
+}
+
+#[derive(Deserialize)]
+pub struct Invite {
+    /// The name the account will have.
+    pub id: String,
+    #[serde(default)]
+    pub display: Option<String>,
+    /// Where the invitation goes; the address becomes theirs once they
+    /// follow it.
+    pub email: String,
+}
+
+/// Invite somebody: an account under their name if there is none, the
+/// address on it, an invitation that signs them in once, mailed when the
+/// forge can mail. Answers with the link when it could not mail, so
+/// whoever asked can hand it over; when it did mail, the link is in the
+/// mail and nowhere else. Their address leaves the waitlist, since the
+/// asking is answered.
+pub async fn invite(
+    State(app): State<AppState>,
+    actor: Actor,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Invite>,
+) -> ApiResult<Json<Value>> {
+    operator(&app, &actor)?;
+    let id = principal_id(&body.id)?;
+    let display = body
+        .display
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .unwrap_or(id.as_str())
+        .to_owned();
+    match app.with_store(|s| s.principal(&id))? {
+        None => {
+            let env = app.with_store(|s| {
+                s.register_principal(
+                    &actor.0,
+                    &id,
+                    cairn_core::PrincipalKind::Human,
+                    &display,
+                    None,
+                    None,
+                )
+            })?;
+            app.publish(&env);
+        }
+        Some(existing) if existing.kind != cairn_core::PrincipalKind::Human => {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid",
+                format!("{id} is not a person; an invitation is a person's way in"),
+            ));
+        }
+        Some(_) => {}
+    }
+    app.with_store(|s| s.request_email(&id, &body.email))?;
+    // One invitation at a time: a new one kills the old.
+    let open: Vec<cairn_core::TokenInfo> = app
+        .with_store(|s| s.tokens_of(&id))?
+        .into_iter()
+        .filter(|t| !t.revoked && crate::web::is_invitation(t))
+        .collect();
+    for token in open {
+        let env = app.with_store(|s| s.revoke_token(&actor.0, &token.id))?;
+        app.publish(&env);
+    }
+    let will_mail = app.mailer().is_some();
+    let until = cairn_core::until_in_days(crate::web::INVITATION_DAYS);
+    let (_, secret, env) =
+        app.with_store(|s| s.mint_invitation(&actor.0, &id, will_mail, Some(&until)))?;
+    app.publish(&env);
+    let link = crate::web::join_link(&app, &headers, &secret);
+    let mailed = if will_mail {
+        match crate::web::mail_invitation(&app, &body.email, &link, &actor.0).await {
+            Ok(()) => true,
+            Err(err) => {
+                tracing::error!(%err, "invitation mail failed");
+                false
+            }
+        }
+    } else {
+        false
+    };
+    let _ = app.with_store(|s| s.leave_waitlist(&body.email));
+    Ok(Json(json!({
+        "principal": id,
+        "email": body.email,
+        "mailed": mailed,
+        "link": (!mailed).then_some(link),
+        "until": until,
+    })))
+}
+
+/// What people said broke, newest first.
+pub async fn list_reports(State(app): State<AppState>, actor: Actor) -> ApiResult<Json<Value>> {
+    operator(&app, &actor)?;
+    let reports = app.with_store(|s| s.reports())?;
+    Ok(Json(json!({ "reports": reports })))
+}
+
+pub async fn dismiss_report(
+    State(app): State<AppState>,
+    actor: Actor,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+    operator(&app, &actor)?;
+    let dismissed = app.with_store(|s| s.dismiss_report(id))?;
+    if !dismissed {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            format!("no report {id}"),
+        ));
+    }
+    Ok(Json(json!({ "dismissed": id })))
 }

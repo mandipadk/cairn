@@ -683,6 +683,35 @@ impl Store {
         id: &PrincipalId,
         new: NewPrincipal<'_>,
     ) -> CoreResult<Envelope> {
+        self.register_as(actor, id, new, false)
+    }
+
+    /// A stranger making their own account, where the forge allows it.
+    /// The server asks whether sign-up is open; the store only knows how
+    /// to write the fact. Recorded as the person registering themselves,
+    /// so the log says who made the account: they did.
+    pub fn sign_up(&mut self, id: &PrincipalId, display: &str) -> CoreResult<Envelope> {
+        self.register_as(
+            id,
+            id,
+            NewPrincipal {
+                owner: None,
+                kind: PrincipalKind::Human,
+                display,
+                model: None,
+                harness: None,
+            },
+            true,
+        )
+    }
+
+    fn register_as(
+        &mut self,
+        actor: &PrincipalId,
+        id: &PrincipalId,
+        new: NewPrincipal<'_>,
+        by_themselves: bool,
+    ) -> CoreResult<Envelope> {
         let NewPrincipal {
             owner,
             kind,
@@ -712,19 +741,11 @@ impl Store {
                 "principal {id} already exists"
             )));
         }
-        let bootstrap = raw::principal_count(&tx)? == 0 && actor == id;
+        let bootstrap = by_themselves || (raw::principal_count(&tx)? == 0 && actor == id);
         let owner = owner.unwrap_or(actor);
         if !bootstrap {
             not_under_a_scope(self.acting.as_ref(), "register a principal")?;
             may_make_principals(&tx, actor)?;
-            // A name that is also a page of the forge's own would be a
-            // principal with no page: /login is the sign-in form whoever is
-            // called login. Refused at registration rather than routed
-            // around, because a page that is sometimes a person is worse
-            // than a name that is not available.
-            require(!RESERVED_NAMES.contains(&id.as_str()), || {
-                format!("{id} is a name the forge uses itself; choose another")
-            })?;
             if kind == PrincipalKind::Agent {
                 may_act_for(&tx, self.acting.as_ref(), actor, owner)?;
                 within_quota(
@@ -4564,15 +4585,6 @@ impl Store {
         Ok(env)
     }
 }
-
-/// The top-level paths the forge answers to itself, which a principal
-/// therefore cannot be called. Kept beside the registration that
-/// refuses them; the router is the other half of the same promise.
-pub const RESERVED_NAMES: &[&str] = &[
-    "agents", "api", "assets", "forgot", "git", "healthz", "inbox", "join", "log", "login",
-    "logout", "new", "passkeys", "people", "report", "reports", "reset", "search", "signin",
-    "tasks", "teams", "theme", "verify", "waitlist", "you",
-];
 
 /// The label that marks a token as an invitation rather than a
 /// credential: spent by the sign-in page for a browser session, and

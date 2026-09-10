@@ -46,6 +46,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(root))
         .route("/waitlist", post(join_waitlist))
+        .route("/signup", get(signup_page).post(sign_up))
         .route("/report", get(report_page).post(file_report))
         .route("/reports", get(reports_page).post(reports_action))
         .route("/assets/{file}", get(asset))
@@ -644,11 +645,7 @@ async fn change_email(
         &headers,
         &format!("/verify?token={}", urlencode(&secret)),
     );
-    let body = format!(
-        "This address was given for {} on cairn.\n\nOpen this link within a day to confirm it; \
-         it works once:\n\n  {link}\n\nIf that was not you, ignore this and nothing changes.\n",
-        viewer.0.as_str()
-    );
+    let body = confirmation_body(&viewer.0, &link);
     let to = email.clone();
     let sent = tokio::task::spawn_blocking(move || {
         mailer.send(&to, "Confirm your address on cairn", &body)
@@ -1337,22 +1334,11 @@ async fn people_action(
         Err(err) => return back(&humane(&err)),
     };
     let mut mailed = None;
-    if let Some(mailer) = app.mailer()
+    if app.mailer().is_some()
         && let Some(to) = destination
     {
         let link = join_link(&app, &headers, &secret);
-        let body = format!(
-            "{} has invited you to cairn.\n\nOpen this link to sign in; it works once, and \
-             you will be asked to set a password:\n\n  {link}\n",
-            viewer.0.as_str()
-        );
-        let dest = to.clone();
-        let sent = tokio::task::spawn_blocking(move || {
-            mailer.send(&dest, "You are invited to cairn", &body)
-        })
-        .await
-        .unwrap_or_else(|e| Err(e.to_string()));
-        match sent {
+        match mail_invitation(&app, &to, &link, &viewer.0).await {
             Ok(()) => mailed = Some(to),
             Err(err) => tracing::error!(%err, "invitation mail failed"),
         }
@@ -1367,10 +1353,32 @@ async fn people_action(
     }
 }
 
+/// Send an invitation: the link that signs somebody in once, with who
+/// asked them. The one wording, whether the People page or the API
+/// asked for it.
+pub(crate) async fn mail_invitation(
+    app: &AppState,
+    to: &str,
+    link: &str,
+    by: &PrincipalId,
+) -> Result<(), String> {
+    let Some(mailer) = app.mailer() else {
+        return Err("this forge does not send mail".to_owned());
+    };
+    let body = format!(
+        "{by} has invited you to cairn.\n\nOpen this link to sign in; it works once, and \
+         you will be asked to set a password:\n\n  {link}\n"
+    );
+    let to = to.to_owned();
+    tokio::task::spawn_blocking(move || mailer.send(&to, "You are invited to cairn", &body))
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()))
+}
+
 /// The invitation is a link to this forge, so it needs to know its own
 /// address; a proxy in front says so, and otherwise the cookie policy
 /// already tells us whether this is https.
-fn join_link(app: &AppState, headers: &HeaderMap, secret: &str) -> String {
+pub(crate) fn join_link(app: &AppState, headers: &HeaderMap, secret: &str) -> String {
     if let Some(base) = app.public_url() {
         return format!("{base}/join?token={}", urlencode(secret));
     }
@@ -1394,9 +1402,9 @@ fn join_link(app: &AppState, headers: &HeaderMap, secret: &str) -> String {
 const INVITE_LABEL: &str = cairn_core::INVITATION_LABEL;
 const MAILED_INVITE_LABEL: &str = cairn_core::MAILED_INVITATION_LABEL;
 /// How long an invitation stays open. A week is what everyone expects.
-const INVITATION_DAYS: i64 = 7;
+pub(crate) const INVITATION_DAYS: i64 = 7;
 
-fn is_invitation(token: &cairn_core::TokenInfo) -> bool {
+pub(crate) fn is_invitation(token: &cairn_core::TokenInfo) -> bool {
     token
         .label
         .as_deref()
@@ -2137,6 +2145,117 @@ async fn join_waitlist(
         }
         Err(err) => oops(err),
     }
+}
+
+#[derive(Deserialize)]
+struct SignupForm {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    display: String,
+    #[serde(default)]
+    email: String,
+    #[serde(default)]
+    password: String,
+}
+
+#[derive(Deserialize)]
+struct SignupQuery {
+    #[serde(default)]
+    error: Option<String>,
+}
+
+/// Where a stranger makes an account, when this forge lets them. When
+/// it does not, the page says so and points at the waitlist, so the
+/// address means the same thing on every forge.
+async fn signup_page(
+    State(app): State<AppState>,
+    Palette(theme): Palette,
+    axum::extract::Query(query): axum::extract::Query<SignupQuery>,
+) -> Response {
+    views::signup(theme, app.open_signup(), query.error.as_deref()).into_response()
+}
+
+/// An account of the stranger's own making: name, a password, an
+/// address to confirm. Rate limited by source like every public form,
+/// and refused outright when sign-up is not open.
+async fn sign_up(
+    State(app): State<AppState>,
+    crate::guard::ClientIp(client): crate::guard::ClientIp,
+    headers: HeaderMap,
+    Form(form): Form<SignupForm>,
+) -> Response {
+    if !app.open_signup() {
+        return not_found();
+    }
+    let back =
+        |error: &str| Redirect::to(&format!("/signup?error={}", urlencode(error))).into_response();
+    if !app
+        .signup_limiter
+        .accept(client.unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)))
+    {
+        return crate::guard::too_many_attempts();
+    }
+    let Some(id) = PrincipalId::new(form.name.trim()) else {
+        return back("A name is lowercase letters, digits and hyphens");
+    };
+    let display = form.display.trim();
+    let display = if display.is_empty() {
+        id.as_str()
+    } else {
+        display
+    };
+    let email = form.email.trim().to_owned();
+    if let Err(err) = cairn_core::password_acceptable(&form.password) {
+        return back(&humane(&err));
+    }
+    // Registered, then the password and the address: the password
+    // cannot fail once the length was accepted, and a person with an
+    // account and no password would be one who cannot get in.
+    match app.with_store(|s| s.sign_up(&id, display)) {
+        Ok(env) => app.publish(&env),
+        Err(err) => return back(&humane(&err)),
+    }
+    match app.with_store(|s| s.set_password(&id, &id, &form.password)) {
+        Ok(env) => app.publish(&env),
+        Err(err) => return back(&humane(&err)),
+    }
+    if !email.is_empty() {
+        match app.with_store(|s| s.request_email(&id, &email)) {
+            Ok(secret) => {
+                if let Some(mailer) = app.mailer() {
+                    let link = absolute(
+                        &app,
+                        &headers,
+                        &format!("/verify?token={}", urlencode(&secret)),
+                    );
+                    let body = confirmation_body(&id, &link);
+                    let to = email.clone();
+                    let sent = tokio::task::spawn_blocking(move || {
+                        mailer.send(&to, "Confirm your address on cairn", &body)
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
+                    if let Err(err) = sent {
+                        tracing::error!(%err, "verification mail failed");
+                    }
+                }
+            }
+            Err(err) => return back(&humane(&err)),
+        }
+    }
+    match app.start_session(&id, user_agent(&headers)) {
+        Ok(session) => signed_in_to(&app, SESSION_COOKIE, &session, "/you/settings?first=1"),
+        Err(err) => oops(err),
+    }
+}
+
+/// The mail that confirms an address, worded once.
+fn confirmation_body(who: &PrincipalId, link: &str) -> String {
+    format!(
+        "This address was given for {who} on cairn.\n\nOpen this link within a day to confirm it; \
+         it works once:\n\n  {link}\n\nIf that was not you, ignore this and nothing changes.\n"
+    )
 }
 
 #[derive(Deserialize)]

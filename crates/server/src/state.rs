@@ -112,6 +112,13 @@ pub struct AppState {
     /// Set when the forge is reached over HTTPS, so session cookies
     /// can be marked Secure.
     secure_cookies: bool,
+    /// The operator's door — registering, granting, quotas, the
+    /// waitlist, invitations, reports — is served on another listener,
+    /// so this one refuses those paths whatever token comes with them.
+    operator_elsewhere: bool,
+    /// Whether a stranger may make an account.
+    open_signup: bool,
+    pub(crate) signup_limiter: crate::guard::LoginLimiter,
     proxy_trust: crate::guard::ProxyTrust,
     pub(crate) login_limiter: crate::guard::LoginLimiter,
     /// A public form anyone can post to needs its own allowance, kept
@@ -179,6 +186,9 @@ impl AppState {
             proxy_trust: crate::guard::ProxyTrust::Connection,
             login_limiter: crate::guard::LoginLimiter::default(),
             waitlist_limiter: crate::guard::LoginLimiter::new(5, Duration::from_secs(300)),
+            signup_limiter: crate::guard::LoginLimiter::new(5, Duration::from_secs(3600)),
+            operator_elsewhere: false,
+            open_signup: false,
             report_limiter: crate::guard::LoginLimiter::new(5, Duration::from_secs(300)),
             reset_limiter: crate::guard::LoginLimiter::new(5, Duration::from_secs(300)),
             write_limiter: crate::guard::Limiter::new(
@@ -274,6 +284,27 @@ impl AppState {
     pub fn with_dev_identity(mut self) -> Self {
         self.dev_identity = true;
         self
+    }
+
+    /// This listener is the public one, and the operator's door is
+    /// served elsewhere: what grants access is refused here.
+    pub fn with_operator_elsewhere(mut self) -> Self {
+        self.operator_elsewhere = true;
+        self
+    }
+
+    pub(crate) fn operator_elsewhere(&self) -> bool {
+        self.operator_elsewhere
+    }
+
+    /// Let strangers make their own accounts.
+    pub fn with_open_signup(mut self) -> Self {
+        self.open_signup = true;
+        self
+    }
+
+    pub(crate) fn open_signup(&self) -> bool {
+        self.open_signup
     }
 
     pub(crate) fn dev_identity(&self) -> bool {

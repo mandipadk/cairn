@@ -373,6 +373,58 @@ fn clock(ts: &str) -> &str {
 /// ready. Signed-out visitors get this instead of a sign-in form,
 /// because a form asks for something they do not have and tells them
 /// nothing about why they would want it.
+/// Making an account: the form when this forge lets strangers in, and
+/// otherwise the plain fact that it does not, with the way to ask.
+pub fn signup(theme: Theme, open: bool, error: Option<&str>) -> Markup {
+    layout(
+        theme,
+        None,
+        None,
+        None,
+        "Make an account",
+        html! {
+            div class="center" {
+                div class="login" {
+                    div class="mark" {
+                        span class="stones" aria-hidden="true" { span {} span {} span {} }
+                        b { "cairn" }
+                    }
+                    @if let Some(error) = error { p class="error" { (error) } }
+                    @if open {
+                        form method="post" action="/signup" {
+                            div {
+                                label for="name" { "Name" }
+                                input id="name" name="name" type="text" autocomplete="username"
+                                    autocapitalize="none" autofocus required pattern="[a-z0-9-]{2,64}";
+                                p class="hint" { "Lowercase letters, digits and hyphens. Your repositories live under it." }
+                            }
+                            div {
+                                label for="display" { "Shown as" }
+                                input id="display" name="display" type="text" autocomplete="name";
+                            }
+                            div {
+                                label for="email" { "Email" }
+                                input id="email" name="email" type="email" autocomplete="email";
+                                p class="hint" { "A confirmation link goes there; sign-in links and invitations use it." }
+                            }
+                            div {
+                                label for="password" { "Password" }
+                                input id="password" name="password" type="password"
+                                    autocomplete="new-password" required;
+                            }
+                            button class="btn wide" type="submit" { "Make the account" }
+                        }
+                        p class="hint" { "Already here? " a href="/login" { "Sign in" } "." }
+                    } @else {
+                        p class="plain" { "This forge takes people by invitation." }
+                        p class="hint" { "Ask for one from the " a href="/" { "front page" } ", or sign in if you have been invited: " a href="/login" { "Sign in" } "." }
+                    }
+                }
+            }
+        },
+    )
+}
+
 pub fn welcome(theme: Theme, joined: bool, error: Option<&str>) -> Markup {
     layout(
         theme,

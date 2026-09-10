@@ -872,6 +872,19 @@ pub struct Mirror {
 }
 
 /// What somebody said broke, kept outside the log so it can be removed.
+/// Somebody who asked for an account: their address, when, what they
+/// said, and the company they asked for a forge of their own for, if
+/// they did.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WaitlistEntry {
+    pub email: String,
+    pub joined: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub company: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Report {
     pub id: i64,

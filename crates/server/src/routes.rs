@@ -2213,12 +2213,7 @@ fn operator(app: &AppState, actor: &Actor) -> ApiResult<()> {
 pub async fn list_waitlist(State(app): State<AppState>, actor: Actor) -> ApiResult<Json<Value>> {
     operator(&app, &actor)?;
     let list = app.with_store(|s| s.waitlist())?;
-    Ok(Json(json!({
-        "waitlist": list
-            .into_iter()
-            .map(|(email, joined, note)| json!({ "email": email, "joined": joined, "note": note }))
-            .collect::<Vec<_>>()
-    })))
+    Ok(Json(json!({ "waitlist": list })))
 }
 
 /// Take an address off the list — because they asked, or because they

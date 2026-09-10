@@ -930,11 +930,18 @@ async fn main() -> anyhow::Result<()> {
                     None => {
                         let entries = store.waitlist()?;
                         println!("{} on the waitlist", entries.len());
-                        for (email, joined, note) in entries {
-                            let when = joined.get(..10).unwrap_or(&joined);
-                            match note {
-                                Some(note) => println!("  {when}  {email}  {note}"),
-                                None => println!("  {when}  {email}"),
+                        for entry in entries {
+                            let when = entry.joined.get(..10).unwrap_or(&entry.joined);
+                            let company = entry
+                                .company
+                                .as_deref()
+                                .map(|c| format!("  for {c}"))
+                                .unwrap_or_default();
+                            match entry.note.as_deref() {
+                                Some(note) => {
+                                    println!("  {when}  {}{company}  {note}", entry.email)
+                                }
+                                None => println!("  {when}  {}{company}", entry.email),
                             }
                         }
                     }

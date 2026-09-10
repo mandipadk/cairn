@@ -76,7 +76,45 @@ async fn joining_twice_is_indistinguishable_from_joining_once() {
 
     let list = forge.state.waitlist().unwrap();
     assert_eq!(list.len(), 1, "one address, stored once");
-    assert_eq!(list[0].0, "ada@example.test");
+    assert_eq!(list[0].email, "ada@example.test");
+    assert!(list[0].company.is_none());
+}
+
+/// A company asking for a forge of its own is on the same list, with
+/// the company named; and the front page says what an account gets.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_company_asks_on_the_same_list_and_the_page_says_the_numbers() {
+    let forge = boot_token_only().await;
+    let (_, location) = post_form(
+        &forge.app,
+        "/waitlist",
+        "email=cto%40acme.test&company=Acme+Robotics&note=fifty+engineers",
+    )
+    .await;
+    assert!(location.contains("joined"), "{location}");
+    let list = forge.state.waitlist().unwrap();
+    assert_eq!(list[0].company.as_deref(), Some("Acme Robotics"));
+    assert_eq!(list[0].note.as_deref(), Some("fifty engineers"));
+    let request = axum::http::Request::builder()
+        .uri("/")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = tower::ServiceExt::oneshot(forge.app.clone(), request)
+        .await
+        .unwrap();
+    let page = String::from_utf8_lossy(
+        &http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes(),
+    )
+    .into_owned();
+    assert!(
+        page.contains("An account here gets 50 repositories, 25 agents"),
+        "the page says what an account gets, in numbers: {page}"
+    );
+    assert!(page.contains("5.0 GiB of git storage"), "{page}");
+    assert!(page.contains("for my company"), "{page}");
 }
 
 /// Obvious rubbish is refused. Every attempt here comes from the one

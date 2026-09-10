@@ -155,7 +155,8 @@ the point of it.
 Behind that door, four things a forge on its own may want, all needing
 the unscoped admin grant:
 
-- `GET /api/waitlist` — who asked for an account, oldest first;
+- `GET /api/waitlist` — who asked for an account, oldest first, with
+  the company named when they asked for a forge of their own;
   `DELETE /api/waitlist/{email}` takes one off.
 - `POST /api/invitations {"id": "jane", "display": "Jane", "email": "jane@…"}`
   — an account under that name if there is none, the address on it, and

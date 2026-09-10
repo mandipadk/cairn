@@ -589,7 +589,7 @@ impl AppState {
     /// The waitlist, and removing someone from it. Exposed on the state
     /// because it is operational data an operator asks a running forge
     /// about, not part of the graph.
-    pub fn waitlist(&self) -> cairn_core::CoreResult<Vec<(String, String, Option<String>)>> {
+    pub fn waitlist(&self) -> cairn_core::CoreResult<Vec<cairn_core::WaitlistEntry>> {
         self.with_store(|store| store.waitlist())
     }
 

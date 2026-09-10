@@ -1003,7 +1003,12 @@ impl Store {
     /// Returns whether they were new, so the page can say something
     /// truthful either way without leaking whether an address is
     /// already on the list to whoever guesses it.
-    pub fn join_waitlist(&mut self, email: &str, note: Option<&str>) -> CoreResult<bool> {
+    pub fn join_waitlist(
+        &mut self,
+        email: &str,
+        note: Option<&str>,
+        company: Option<&str>,
+    ) -> CoreResult<bool> {
         let email = email.trim();
         require(valid_email(email), || {
             "that does not look like an email address".into()
@@ -1011,24 +1016,36 @@ impl Store {
         if let Some(note) = note {
             bounded("note", note, MAX_TITLE)?;
         }
+        let company = company.map(str::trim).filter(|c| !c.is_empty());
+        if let Some(company) = company {
+            bounded("company", company, MAX_TITLE)?;
+        }
         let changed = self.conn.execute(
-            "INSERT INTO waitlist (email, joined, note) VALUES (?, ?, ?)
+            "INSERT INTO waitlist (email, joined, note, company) VALUES (?, ?, ?, ?)
              ON CONFLICT(email) DO NOTHING",
             rusqlite::params![
                 email.to_lowercase(),
                 jiff::Timestamp::now().to_string(),
-                note.filter(|n| !n.trim().is_empty())
+                note.filter(|n| !n.trim().is_empty()),
+                company,
             ],
         )?;
         Ok(changed == 1)
     }
 
     /// The waitlist, oldest first.
-    pub fn waitlist(&self) -> CoreResult<Vec<(String, String, Option<String>)>> {
+    pub fn waitlist(&self) -> CoreResult<Vec<crate::types::WaitlistEntry>> {
         Ok(self
             .conn
-            .prepare("SELECT email, joined, note FROM waitlist ORDER BY joined")?
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .prepare("SELECT email, joined, note, company FROM waitlist ORDER BY joined")?
+            .query_map([], |row| {
+                Ok(crate::types::WaitlistEntry {
+                    email: row.get(0)?,
+                    joined: row.get(1)?,
+                    note: row.get(2)?,
+                    company: row.get(3)?,
+                })
+            })?
             .collect::<Result<Vec<_>, _>>()?)
     }
 

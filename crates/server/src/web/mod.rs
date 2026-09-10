@@ -2101,8 +2101,16 @@ async fn root(
     Query(flash): Query<LandingQuery>,
 ) -> Response {
     let Some(viewer) = viewer_from(&headers, &app) else {
-        return views::welcome(theme, flash.joined.is_some(), flash.error.as_deref())
-            .into_response();
+        // What an account here gets, in numbers: the forge's defaults,
+        // which are what a new person is given.
+        let quota = app.with_store(|s| s.default_quota());
+        return views::welcome(
+            theme,
+            flash.joined.is_some(),
+            flash.error.as_deref(),
+            &quota,
+        )
+        .into_response();
     };
     if viewer.1.repos.is_empty() {
         return views::first_run(theme, &viewer).into_response();
@@ -2119,6 +2127,9 @@ struct WaitlistForm {
     email: String,
     #[serde(default)]
     note: String,
+    /// Named when the request is for a forge of the company's own.
+    #[serde(default)]
+    company: String,
 }
 
 /// Take an address from a stranger, which means assuming the worst about
@@ -2136,7 +2147,10 @@ async fn join_waitlist(
         return crate::guard::too_many_attempts();
     }
     let note = form.note.trim().to_owned();
-    match app.with_store(|store| store.join_waitlist(&form.email, Some(&note))) {
+    let company = form.company.trim().to_owned();
+    match app
+        .with_store(|store| store.join_waitlist(&form.email, Some(&note), Some(company.as_str())))
+    {
         // Whether they were already on it is not the visitor's business
         // to learn, and not worth a different answer.
         Ok(_) => Redirect::to("/?joined=1").into_response(),

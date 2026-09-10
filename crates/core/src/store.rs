@@ -640,6 +640,7 @@ impl Store {
         ensure_column(&conn, "browser_sessions", "agent", "TEXT")?;
         // A database from before verified email has a contact table of
         // three columns; the two it lacks are what every read here asks for.
+        ensure_column(&conn, "waitlist", "company", "TEXT")?;
         ensure_column(&conn, "contact", "verified_at", "TEXT")?;
         ensure_column(&conn, "contact", "pending", "TEXT")?;
         ensure_contact_email_optional(&conn)?;

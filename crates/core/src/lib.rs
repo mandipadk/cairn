@@ -65,6 +65,7 @@ pub use types::QuotaOverride;
 pub use types::Report;
 pub use types::Tag;
 pub use types::Usage;
+pub use types::WaitlistEntry;
 pub use types::{
     BrowserSession, Capability, Change, ChangeSpec, ChangeState, Claim, ClaimKind, ClaimSpec,
     Contact, Cover, DebtSnapshot, Disposition, EarnedTrust, Grant, IdentityLink, Independence,

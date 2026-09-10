@@ -101,12 +101,15 @@ async fn the_waitlist_is_read_and_answered_behind_the_door() {
     let forge = boot().await;
     let app = &forge.app;
     post_public_form(app, "/waitlist", "email=jane%40example.test&note=for+work").await;
+    post_public_form(app, "/waitlist", "email=cto%40acme.test&company=Acme").await;
     let (status, body) = api(app, "GET", "/api/waitlist", "scout", None).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     let (status, body) = api(app, "GET", "/api/waitlist", "ada", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["waitlist"][0]["email"], "jane@example.test");
     assert_eq!(body["waitlist"][0]["note"], "for work");
+    assert!(body["waitlist"][0].get("company").is_none(), "{body}");
+    assert_eq!(body["waitlist"][1]["company"], "Acme", "{body}");
     // Inviting her makes the account, puts the address on it, and takes
     // her off the list; with no mailer the link comes back to hand over.
     let (status, invited) = api(
@@ -122,7 +125,12 @@ async fn the_waitlist_is_read_and_answered_behind_the_door() {
     let link = invited["link"].as_str().expect("a link to hand over");
     assert!(link.contains("/join?token="), "{link}");
     let (_, list) = api(app, "GET", "/api/waitlist", "ada", None).await;
-    assert_eq!(list["waitlist"].as_array().map(Vec::len), Some(0), "{list}");
+    assert_eq!(
+        list["waitlist"].as_array().map(Vec::len),
+        Some(1),
+        "only the company is left: {list}"
+    );
+    assert_eq!(list["waitlist"][0]["email"], "cto@acme.test", "{list}");
     let (_, jane) = api(app, "GET", "/api/principals/jane", "ada", None).await;
     assert_eq!(jane["kind"], "human", "{jane}");
     // The link signs her in once.

@@ -425,7 +425,33 @@ pub fn signup(theme: Theme, open: bool, error: Option<&str>) -> Markup {
     )
 }
 
-pub fn welcome(theme: Theme, joined: bool, error: Option<&str>) -> Markup {
+/// What an account here gets, said in numbers from the forge's own
+/// defaults; "no limit" where there is none.
+fn allowance_words(quota: &cairn_core::Quota) -> String {
+    let count = |n: Option<u32>, what: &str| match n {
+        Some(n) => format!("{n} {what}"),
+        None => format!("{what} without limit"),
+    };
+    let disk = match quota.disk {
+        Some(bytes) => format!("{} of git storage", crate::in_bytes(bytes)),
+        None => "git storage without limit".to_owned(),
+    };
+    format!(
+        "{}, {}, {} open at once, {} open at once, and {}",
+        count(quota.repos, "repositories"),
+        count(quota.agents, "agents"),
+        count(quota.open_tasks, "tasks"),
+        count(quota.open_changes, "changes"),
+        disk
+    )
+}
+
+pub fn welcome(
+    theme: Theme,
+    joined: bool,
+    error: Option<&str>,
+    quota: &cairn_core::Quota,
+) -> Markup {
     layout(
         theme,
         None,
@@ -458,10 +484,18 @@ pub fn welcome(theme: Theme, joined: bool, error: Option<&str>) -> Markup {
                             input name="email" type="email" required
                                   autocomplete="email" placeholder="you@example.com"
                                   aria-label="Email";
+                            input name="company" type="text" autocomplete="organization"
+                                  placeholder="for my company (optional)"
+                                  aria-label="Company, if this is for one";
                             button class="btn" type="submit" { "Join the waitlist" }
                         }
                         @if let Some(error) = error {
                             p class="error" { (error) }
+                        }
+                        p class="fineprint" {
+                            "An account here gets " (allowance_words(quota)) ". "
+                            "Name a company and we make it a forge of its own instead, "
+                            "with its people and organisations as owners."
                         }
                         p class="fineprint" {
                             "One address, kept so we can tell you when this opens up. "

@@ -1,0 +1,137 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Ioperator0108",
+      "id": "c-40shw3kww9eex6k9dvd7g5h728",
+      "landed_oid": "994ddf62a006db957247b6f84e7d4a6ed665920d",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 108,
+      "opened_at": "2026-09-10T18:52:51.907689067Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn/cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Serve the operator's door apart",
+      "updated_at": "2026-09-10T18:54:02.243886748Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-40shw3kww9eex6k9dvd7g5h728",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-082jw36eweer4xzpjvwxa0g0qe",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 878,
+        "summary": "fmt, clippy -D warnings, the suite and the first-run walk pass; five new end-to-end tests: the door refuses on the public listener and answers on its own, the waitlist and reports APIs, a mailed invitation, and sign-up as a switch.",
+        "unchecked": [
+          "The two listeners are exercised as two routers over one state in tests; the real second TCP listener is exercised only by serving it on the box after deploy.",
+          "Open sign-up is not switched on anywhere; the page's closed state is what production shows."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "994ddf62a006db957247b6f84e7d4a6ed665920d",
+    "landed_at": "2026-09-10T18:54:02.243886748Z",
+    "merged_by": "mandip",
+    "repo": "cairn/cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-40shw3kww9eex6k9dvd7g5h728",
+      "commit_oid": "994ddf62a006db957247b6f84e7d4a6ed665920d",
+      "message": "Serve the operator's door apart\n\nWhat grants access on a forge — registering people, handing out\nauthority, membership, stopping and restarting, quotas, the waitlist,\ninvitations, reports, mirrors and imports — can now be served on a\nloopback listener of its own, `--operator-listen`, and the public\nlistener refuses those paths whatever token comes with the request.\nMinting a token or setting a password for anybody but yourself is\nrefused there the same way. An admin token that travels through the\ntunnel opens nothing that grants access; the operator reaches the door\nover loopback, and everything else about the forge is the same on both\nlisteners. The flag takes only a loopback address, since that is the\npoint of it.\n\nBehind the door, four things a forge on its own may want: the waitlist\nto read and answer, an invitation by email that makes the account and\ntakes the address off the list, the reports to read and dismiss, and a\nswitch for strangers — `--open-signup` lets anyone make an account at\n/signup, rate limited by source, and off it says the forge takes people\nby invitation. The log records a self-made account as made by its\nowner. None of this knows about anything beyond one forge.\n\nAlso: a name reserved because a page lives there was checked in two\nplaces with two lists; it is one list again, with the two pages it had\nmissed. The fallback for an unknown API route named a document that\ndoes not exist; it names the ones that do.\n\nChange-Id: Ioperator0108\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "crates/cli/src/main.rs",
+        "crates/cli/tests/suite/common/mod.rs",
+        "crates/cli/tests/suite/main.rs",
+        "crates/cli/tests/suite/operator_flow.rs",
+        "crates/core/src/commands.rs",
+        "crates/core/src/id.rs",
+        "crates/server/src/guard.rs",
+        "crates/server/src/lib.rs",
+        "crates/server/src/routes.rs",
+        "crates/server/src/state.rs",
+        "crates/server/src/web/mod.rs",
+        "crates/server/src/web/views.rs",
+        "docs/operating.md"
+      ],
+      "session": null
+    },
+    "seq": 881,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-082jw36eweer4xzpjvwxa0g0qe",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-082jw36eweer4xzpjvwxa0g0qe",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 116 judged claims, 96% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 12 path(s) outside docs/, *.md: crates/cli/src/main.rs, crates/cli/tests/suite/common/mod.rs, crates/cli/tests/suite/main.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-40shw3kww9eex6k9dvd7g5h728",
+        "claim": "cl-082jw36eweer4xzpjvwxa0g0qe",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "id": "vr-48t972c0pyhh6crkfkaqprh3zb",
+        "observed": "exit 0: Doc-tests cairn_server",
+        "revision": 1,
+        "seq": 879
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "287/XI7ogWkXz09y9tQkSrLCd4DRNoPncIV4DVXoQpAYPQWwfwubQd0wcgY6+gNpQi0t6w3+hq8UBR6DJqf+DA=="
+  }
+}

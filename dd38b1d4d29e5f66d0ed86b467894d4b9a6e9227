@@ -1,0 +1,125 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Iprojection0107",
+      "id": "c-6xgn1m0efjq7h8rpv4sy67zcwh",
+      "landed_oid": "dd38b1d4d29e5f66d0ed86b467894d4b9a6e9227",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 107,
+      "opened_at": "2026-09-10T16:17:27.520439169Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn/cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Let a projection change only what the log said",
+      "updated_at": "2026-09-10T16:18:22.176606506Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-6xgn1m0efjq7h8rpv4sy67zcwh",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-5mq9va7vb78z1bqhv1yyehpga7",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 856,
+        "summary": "fmt, clippy -D warnings, the suite and the first-run walk pass; schema 30 rehearsed on a copy of the flagship: the runner's verify grant is live again, and no revoked row lacks a revoking event.",
+        "unchecked": [
+          "Whether the runner verifies this very change: its grant is revoked on the live forge until this deploys, so this change's claim may need re-issuing the grant by hand first.",
+          "The two dogfood agents' grants come back live with the rebuild, as the log has them; revoking them is a separate decision."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "dd38b1d4d29e5f66d0ed86b467894d4b9a6e9227",
+    "landed_at": "2026-09-10T16:18:22.176606506Z",
+    "merged_by": "mandip",
+    "repo": "cairn/cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-6xgn1m0efjq7h8rpv4sy67zcwh",
+      "commit_oid": "dd38b1d4d29e5f66d0ed86b467894d4b9a6e9227",
+      "message": "Let a projection change only what the log said\n\nA rebuild of the projections is a replay of the log, and every row it\nproduces has to be a row the log explains. The transfer arm broke that:\nsince change 106 it revoked every grant on a repository whose transfer\nit applied, which was right for a transfer accepted after revocations\nbecame events of their own — those events do the revoking, and the arm\nfound nothing left — and wrong for the one transfer already on the\nrecord, which the rebuild to schema 29 replayed without any such event.\nThe runner's grant to verify on the forge's own repository came out of\nthat rebuild revoked, and so did two others, with nothing in the log\nsaying so, and fsck could not see it because a replay and the live\nprojection agreed with each other and disagreed with the log.\n\nThe arm now changes nothing. Schema 30 rebuilds the projection so the\ngrants stand as the log has them, and a rehearsal on a copy of the\nflagship checks that a revoked row is never more than the revoking\nevents can account for.\n\nChange-Id: Iprojection0107\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "crates/core/src/store.rs"
+      ],
+      "session": null
+    },
+    "seq": 859,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-5mq9va7vb78z1bqhv1yyehpga7",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-5mq9va7vb78z1bqhv1yyehpga7",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 112 judged claims, 97% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 1 path(s) outside docs/, *.md: crates/core/src/store.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-6xgn1m0efjq7h8rpv4sy67zcwh",
+        "claim": "cl-5mq9va7vb78z1bqhv1yyehpga7",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "id": "vr-29nsn6zdk1emmzm8aeej56rt27",
+        "observed": "exit 0: Doc-tests cairn_server",
+        "revision": 1,
+        "seq": 857
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "X7bKoHRkt1UD+Ydc9u7UtvDc6y2zSsxqatOo27bUVUa87zV1PQfIqOP+wryFapy4CSZpsLpHxQppdveM9pyyBQ=="
+  }
+}

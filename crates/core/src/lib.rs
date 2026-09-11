@@ -75,3 +75,4 @@ pub use types::{
     SessionState, Side, Simulated, Simulation, Task, TaskState, Thread, ThreadKind, TokenInfo,
     Verdict, Verification, Visibility, Waiver, WorkloadBinding, canonical_json, line_state,
 };
+pub use types::{GraduatedRepo, Graduation};

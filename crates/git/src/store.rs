@@ -1330,12 +1330,13 @@ impl GitStore {
         // untouched, and so nothing is reachable under refs/heads until
         // the import is on the record.
         let staging = format!("refs/import/{branch}");
+        let from = Self::fetch_source(source);
         self.run(
             Some(&path),
             &[
                 "fetch",
                 "--no-tags",
-                source,
+                &from,
                 &format!("+refs/heads/{branch}:{staging}"),
             ],
         )
@@ -1352,6 +1353,82 @@ impl GitStore {
         .parse()
         .unwrap_or(0);
         Ok((tip, count))
+    }
+
+    /// What git is told to fetch from. A `file://` address that names a
+    /// file rather than a directory is a bundle, which git reads only as
+    /// a plain path: the url form would try to run upload-pack inside
+    /// a file.
+    fn fetch_source(source: &str) -> String {
+        if let Some(path) = source.strip_prefix("file://")
+            && Path::new(path).is_file()
+        {
+            return path.to_owned();
+        }
+        source.to_owned()
+    }
+
+    /// Everything a repository holds, as one file git can fetch from:
+    /// every ref — branches, tags, the change refs, the receipt notes —
+    /// and the objects they reach. How a repository leaves a forge.
+    pub async fn bundle(&self, name: &str, into: &Path) -> GitResult<()> {
+        let path = self.existing_repo_path(name)?;
+        if let Some(parent) = into.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        self.run(
+            Some(&path),
+            &[
+                "bundle",
+                "create",
+                into.to_str().unwrap_or("bundle"),
+                "--all",
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Fetch all of a source: its branches onto holding refs, and its
+    /// tags, receipt notes and change refs as they are. Returns each
+    /// branch with its tip and how many commits it carries, for the
+    /// record to be written before any branch is published.
+    pub async fn fetch_everything(
+        &self,
+        name: &str,
+        source: &str,
+    ) -> GitResult<Vec<(String, String, i64)>> {
+        let path = self.existing_repo_path(name)?;
+        let from = Self::fetch_source(source);
+        self.run(
+            Some(&path),
+            &[
+                "fetch",
+                "--no-tags",
+                &from,
+                "+refs/heads/*:refs/import/*",
+                "+refs/tags/*:refs/tags/*",
+                "+refs/notes/*:refs/notes/*",
+                "+refs/changes/*:refs/changes/*",
+            ],
+        )
+        .await?;
+        let mut branches = Vec::new();
+        for (refname, tip) in self.list_refs(name, "refs/import/").await? {
+            let Some(branch) = refname.strip_prefix("refs/import/") else {
+                continue;
+            };
+            let count = String::from_utf8_lossy(
+                &self
+                    .run(Some(&path), &["rev-list", "--count", &refname])
+                    .await?,
+            )
+            .trim()
+            .parse()
+            .unwrap_or(0);
+            branches.push((branch.to_owned(), tip, count));
+        }
+        Ok(branches)
     }
 
     /// Drop an import's holding ref once the branch carries it.

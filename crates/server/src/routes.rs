@@ -425,6 +425,11 @@ pub struct ImportHistory {
     pub source: String,
     #[serde(default = "default_branch")]
     pub branch: String,
+    /// All of it — every branch, and the tags, receipt notes and change
+    /// refs as they are — rather than one branch. How a bundle from
+    /// another forge is taken in.
+    #[serde(default)]
+    pub everything: bool,
 }
 
 /// Seed a branch with history that already existed somewhere else.
@@ -451,7 +456,12 @@ pub async fn import_history(
     // caller's, and this forge does not connect anywhere on nothing but
     // a caller's say-so - nor on behalf of somebody who may not import.
     app.with_store(|s| s.acting_as(actor.1.as_ref()).check_import(&actor.0, &name))?;
-    cairn_core::Store::validate_import_source(&body.source, app.dev_identity())?;
+    // A local path reads this machine's own files, which is nobody's
+    // to spend but the operator's: a graduation bundle sits on the
+    // box, and whoever runs the forge is who takes it in.
+    let local_ok =
+        app.dev_identity() || app.with_store(|s| s.acting_as(actor.1.as_ref()).is_admin(&actor.0));
+    cairn_core::Store::validate_import_source(&body.source, local_ok)?;
     // An import is the one way bytes arrive without a push, so it is the
     // one place the push door's check has to be repeated. How much is
     // coming is not knowable before fetching, so an owner already at
@@ -460,6 +470,9 @@ pub async fn import_history(
     // Whatever the fetch leaves behind is on disk from here on, so the
     // measurement happens on the way out of every path below.
     let _measure = crate::git_http::MeasureOnDrop::new(&app, &name);
+    if body.everything {
+        return import_everything(&app, &actor, &name, &body.source, local_ok).await;
+    }
     let (tip, commits) = git
         .store
         .fetch_history(&name, &body.source, &body.branch)
@@ -492,6 +505,56 @@ pub async fn import_history(
     let _ = git.store.clear_import_ref(&name, &body.branch).await;
     app.publish(&env);
     Ok(committed(Some(name), &env))
+}
+
+/// Take in all of a source: each branch recorded and published in turn,
+/// the tags, notes and change refs arriving as they are. The record is
+/// written per branch before that branch is published, as for one.
+async fn import_everything(
+    app: &AppState,
+    actor: &Actor,
+    name: &str,
+    source: &str,
+    local_ok: bool,
+) -> ApiResult<Json<Value>> {
+    let git = app.git().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            "unavailable",
+            "this forge is running without git storage",
+        )
+    })?;
+    let branches = git.store.fetch_everything(name, source).await?;
+    if branches.is_empty() {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid",
+            "the source has no branches to take in",
+        ));
+    }
+    let mut imported = Vec::new();
+    let mut last = None;
+    for (branch, tip, commits) in &branches {
+        let recorded = app.with_store(|s| {
+            s.acting_as(actor.1.as_ref());
+            s.import_history(&actor.0, name, branch, source, tip, *commits, local_ok)
+        });
+        let env = match recorded {
+            Ok(env) => env,
+            Err(err) => {
+                let _ = git.store.clear_import_ref(name, branch).await;
+                return Err(err.into());
+            }
+        };
+        git.store.advance_ref(name, branch, tip, None).await?;
+        let _ = git.store.clear_import_ref(name, branch).await;
+        app.publish(&env);
+        imported.push(json!({ "branch": branch, "tip": tip, "commits": commits }));
+        last = Some(env);
+    }
+    let mut body = committed(Some(name.to_owned()), &last.expect("at least one branch"));
+    body.0["branches"] = json!(imported);
+    Ok(body)
 }
 
 #[derive(Deserialize)]

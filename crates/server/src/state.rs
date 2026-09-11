@@ -593,6 +593,14 @@ impl AppState {
         self.with_store(|store| store.waitlist())
     }
 
+    /// What an owner leaves with, as `cairn admin export` writes it.
+    pub fn graduation(
+        &self,
+        owner: &PrincipalId,
+    ) -> cairn_core::CoreResult<cairn_core::Graduation> {
+        self.with_store(|store| store.graduation(owner))
+    }
+
     /// What people reported broke; operational, like the waitlist.
     pub fn reports(&self) -> cairn_core::CoreResult<Vec<cairn_core::Report>> {
         self.with_store(|store| store.reports())

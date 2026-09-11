@@ -24,6 +24,7 @@ mod debt_flow;
 mod event_scope_flow;
 mod fsck_flow;
 mod git_flow;
+mod graduation_flow;
 mod hardening_flow;
 mod home_flow;
 mod hostile_input_flow;

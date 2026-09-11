@@ -1,0 +1,209 @@
+//! Leaving with everything: an owner's repositories go out as bundles
+//! with a manifest, and another forge takes them in whole — branches,
+//! tags, receipt notes, change refs — recording the branches as
+//! imported history.
+
+use crate::common::*;
+use axum::http::StatusCode;
+use cairn_core::PrincipalId;
+use cairn_git::GitStore;
+use serde_json::json;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_owner_leaves_with_bundles_and_another_forge_takes_them_in() {
+    let forge = boot().await;
+    let (app, addr) = (&forge.app, forge.addr);
+    // History with a landed change, so the bundle carries a receipt note
+    // and a change ref, not only a branch.
+    git(
+        &forge.work,
+        &[
+            "clone",
+            "-q",
+            &format!("http://scout:{}@{addr}/git/ada/demo", forge.scout_token),
+            "wc",
+        ],
+    );
+    let wc = forge.work.join("wc");
+    commit_file(
+        &wc,
+        "hello.txt",
+        "hello\n",
+        "Say hello\n\nChange-Id: Ihello",
+    );
+    git(&wc, &["push", "-q", "origin", "HEAD:refs/for/main"]);
+    let (_, changes) = api(app, "GET", "/api/repos/ada/demo/changes", "ada", None).await;
+    let change = changes[0]["id"].as_str().unwrap().to_owned();
+    api(
+        app,
+        "POST",
+        &format!("/api/changes/{change}/claims"),
+        "scout",
+        Some(json!({ "kind": "test", "passed": true, "summary": "hello", "command": "true" })),
+    )
+    .await;
+    approve_and_merge(app, &change).await;
+    let (_, _) = api(
+        app,
+        "POST",
+        "/api/repos/ada/demo/description",
+        "ada",
+        Some(json!({ "description": "A demonstration" })),
+    )
+    .await;
+
+    // Out: the manifest and the bundle, as `cairn admin export` writes them.
+    let manifest = forge
+        .state
+        .graduation(&PrincipalId::new("ada").unwrap())
+        .unwrap();
+    assert_eq!(manifest.version, 1);
+    assert_eq!(manifest.repos.len(), 1, "{manifest:?}");
+    assert_eq!(manifest.repos[0].name, "ada/demo");
+    assert_eq!(manifest.repos[0].bundle, "bundles/demo.bundle");
+    let out = forge.work.join("out");
+    let git_store = GitStore::new(forge._tmp.path().join("repos"), env!("CARGO_BIN_EXE_cairn"));
+    git_store
+        .bundle("ada/demo", &out.join("bundles/demo.bundle"))
+        .await
+        .unwrap();
+    let listed = std::process::Command::new("git")
+        .args([
+            "bundle",
+            "list-heads",
+            out.join("bundles/demo.bundle").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let heads = String::from_utf8_lossy(&listed.stdout).into_owned();
+    assert!(heads.contains("refs/heads/main"), "{heads}");
+    assert!(
+        heads.contains("refs/notes/cairn"),
+        "the receipts travel: {heads}"
+    );
+    assert!(
+        heads.contains("refs/changes/1/1"),
+        "and the change refs: {heads}"
+    );
+
+    // In: another owner on this forge (as another forge would), made
+    // by the operator, taking everything from the bundle.
+    api(
+        app,
+        "POST",
+        "/api/principals",
+        "ada",
+        Some(json!({ "id": "bee", "kind": "human", "display": "Bee" })),
+    )
+    .await;
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/repos",
+        "ada",
+        Some(json!({ "name": "demo", "owner": "bee" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let source = format!("file://{}", out.join("bundles/demo.bundle").display());
+    let (status, taken) = api(
+        app,
+        "POST",
+        "/api/repos/bee/demo/import",
+        "ada",
+        Some(json!({ "source": source, "everything": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{taken}");
+    assert_eq!(taken["branches"][0]["branch"], "main", "{taken}");
+    assert!(taken["branches"][0]["commits"].as_i64().unwrap() >= 1);
+    // What arrived: the branch, the note on its tip, the change ref.
+    let bare = forge._tmp.path().join("repos/bee/demo.git");
+    let refs = std::process::Command::new("git")
+        .args([
+            "-C",
+            bare.to_str().unwrap(),
+            "for-each-ref",
+            "--format=%(refname)",
+        ])
+        .output()
+        .unwrap();
+    let refs = String::from_utf8_lossy(&refs.stdout).into_owned();
+    assert!(refs.contains("refs/heads/main"), "{refs}");
+    assert!(refs.contains("refs/notes/cairn"), "{refs}");
+    assert!(refs.contains("refs/changes/1/1"), "{refs}");
+    assert!(
+        !refs.contains("refs/import/"),
+        "nothing half-done lingers: {refs}"
+    );
+    let (_, debt) = api(app, "GET", "/api/repos/bee/demo/debt", "ada", None).await;
+    assert!(
+        debt["counts"]["imported"].as_i64().unwrap_or(0) >= 1,
+        "the branch is recorded as imported history: {debt}"
+    );
+    let (status, page) = api(app, "GET", "/api/repos/bee/demo", "bee", None).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+}
+
+/// A local path reads the box's own files, so outside development it
+/// is only the operator's to give.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_local_source_is_the_operators_to_give() {
+    let forge = boot_token_only().await;
+    let app = &forge.app;
+    let (status, body) = api_with_token(
+        app,
+        "POST",
+        "/api/principals",
+        &forge.ada_token,
+        Some(json!({ "id": "bee", "kind": "human", "display": "Bee" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, minted) = api_with_token(
+        app,
+        "POST",
+        "/api/principals/bee/tokens",
+        &forge.ada_token,
+        Some(json!({ "label": "bee" })),
+    )
+    .await;
+    let bee = minted["token"].as_str().unwrap().to_owned();
+    let (status, body) = api_with_token(
+        app,
+        "POST",
+        "/api/repos",
+        &bee,
+        Some(json!({ "name": "mine" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let nowhere = json!({ "source": "file:///nowhere/at/all.bundle", "everything": true });
+    let (status, refused) = api_with_token(
+        app,
+        "POST",
+        "/api/repos/bee/mine/import",
+        &bee,
+        Some(nowhere.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("https://"),
+        "{refused}"
+    );
+    // The operator's is let through the check and fails only at the
+    // fetch, since nothing is there.
+    let (status, answer) = api_with_token(
+        app,
+        "POST",
+        "/api/repos/bee/mine/import",
+        &forge.ada_token,
+        Some(nowhere),
+    )
+    .await;
+    assert_ne!(status, StatusCode::BAD_REQUEST, "{answer}");
+}

@@ -16,6 +16,36 @@ use crate::common::*;
 use axum::http::StatusCode;
 use serde_json::json;
 
+/// A deactivation ends the person's browser sessions on the way, which
+/// is an operational table; the replay that fsck compares against has
+/// to have it too, or the first deactivation on a forge makes fsck
+/// fail forever after.
+#[tokio::test(flavor = "multi_thread")]
+async fn fsck_survives_a_deactivation() {
+    let forge = boot().await;
+    let app = &forge.app;
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/principals",
+        "ada",
+        Some(json!({ "id": "bee", "kind": "human", "display": "Bee" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/principals/bee/state",
+        "ada",
+        Some(json!({ "active": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let divergences = forge.state.fsck().expect("fsck runs after a deactivation");
+    assert!(divergences.is_empty(), "{divergences:?}");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_full_flow_leaves_state_the_log_can_reproduce() {
     let forge = boot().await;

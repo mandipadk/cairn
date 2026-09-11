@@ -131,6 +131,33 @@ agent, an agent is refused a place on a team, and every act over
 principals (registering, minting for another, stopping, transferring a
 repository, inviting) is refused to an agent whatever it holds.
 
+### Leaving
+
+Nobody is kept. A company on a forge of its own leaves with the nightly
+bundle — the database, the key and the repositories — and serves it
+with `cairn serve` wherever it likes. An owner on a shared forge leaves
+with their repositories:
+
+```sh
+cairn admin export --db cairn.db --repos repos --owner ada --into /tmp/out
+```
+
+writes `ada-<stamp>/manifest.json` (each repository: name, default
+branch, visibility, description, object format, archived) and a git
+bundle of each under `bundles/`, and an archive of the lot. The bundle
+carries every ref — branches, tags, the change refs, the receipt notes
+— so the receipts still verify, against the forge they came from.
+
+Another forge takes them in through its operator: make the repository
+(`POST /api/repos` with the owner), then
+`POST /api/repos/{owner}/{name}/import {"source": "file:///…/name.bundle", "everything": true}`
+fetches every branch, recording each as imported history before
+publishing it, and the tags, notes and change refs as they are. A
+`file://` source is the operator's to give (the unscoped admin; a forge
+in `--dev` mode allows it to anyone), since it reads the box's own
+files. The log of the forge left behind stays there; what the new forge
+knows begins with the import.
+
 ### The operator's door
 
 Everything above that is the operator's — registering people, issuing

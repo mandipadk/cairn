@@ -872,6 +872,33 @@ pub struct Mirror {
 }
 
 /// What somebody said broke, kept outside the log so it can be removed.
+/// What an owner takes with them: which repositories, and what each
+/// was called and allowed, so the forge that takes them in can make
+/// them again the same way. The git itself travels as bundles beside
+/// this. The log they came from stays where it was; the receipts in
+/// the bundles' notes verify against that forge's key.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Graduation {
+    pub version: u32,
+    pub exported: String,
+    pub owner: PrincipalId,
+    pub repos: Vec<GraduatedRepo>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraduatedRepo {
+    /// The full name it had, `owner/short`.
+    pub name: String,
+    pub short: String,
+    pub default_branch: String,
+    pub visibility: Visibility,
+    pub object_format: ObjectFormat,
+    pub archived: bool,
+    pub description: String,
+    /// The bundle file inside the archive, relative to its root.
+    pub bundle: String,
+}
+
 /// Somebody who asked for an account: their address, when, what they
 /// said, and the company they asked for a forge of their own for, if
 /// they did.

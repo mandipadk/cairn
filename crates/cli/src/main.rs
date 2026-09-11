@@ -308,6 +308,21 @@ enum AdminCommand {
         /// One repository, as owner/name; every repository when absent.
         repo: Option<String>,
     },
+    /// Write what an owner leaves with: a manifest of their repositories
+    /// and a git bundle of each, in a directory and an archive under
+    /// --into, for another forge to take in with `import` … `everything`.
+    Export {
+        #[arg(long, default_value = "cairn.db")]
+        db: PathBuf,
+        #[arg(long, default_value = "repos")]
+        repos: PathBuf,
+        /// The person or organisation leaving.
+        #[arg(long)]
+        owner: String,
+        /// Where the directory and the archive are written.
+        #[arg(long, default_value = ".")]
+        into: PathBuf,
+    },
     /// Give every repository named the old way, without its owner in
     /// front, its owner's name: `demo` becomes `ada/demo`, on the record
     /// and on disk. Run once when upgrading to a forge that expects
@@ -853,6 +868,49 @@ async fn main() -> anyhow::Result<()> {
                     store.record_repo_size(&name, bytes)?;
                     println!("{name:<40} {}", cairn_server::in_bytes(bytes));
                 }
+            }
+            AdminCommand::Export {
+                db,
+                repos,
+                owner,
+                into,
+            } => {
+                let store = Store::open(&db)
+                    .with_context(|| format!("opening forge database at {}", db.display()))?;
+                let git = GitStore::new(
+                    &repos,
+                    std::env::current_exe().context("locating own binary")?,
+                );
+                let owner = PrincipalId::new(&owner).context("--owner must be a slug")?;
+                let manifest = store.graduation(&owner)?;
+                let stamp = jiff::Timestamp::now().strftime("%Y%m%d-%H%M%S").to_string();
+                let dir = into.join(format!("{owner}-{stamp}"));
+                std::fs::create_dir_all(dir.join("bundles"))?;
+                let runtime = tokio::runtime::Runtime::new()?;
+                for repo in &manifest.repos {
+                    runtime.block_on(git.bundle(&repo.name, &dir.join(&repo.bundle)))?;
+                    println!("bundled {}", repo.name);
+                }
+                std::fs::write(
+                    dir.join("manifest.json"),
+                    serde_json::to_string_pretty(&manifest)?,
+                )?;
+                let archive = into.join(format!("{owner}-{stamp}.tar.gz"));
+                let status = std::process::Command::new("tar")
+                    .arg("-C")
+                    .arg(&into)
+                    .arg("-czf")
+                    .arg(&archive)
+                    .arg(format!("{owner}-{stamp}"))
+                    .status()?;
+                anyhow::ensure!(status.success(), "tar failed");
+                println!(
+                    "{}: {} repositories in {} and {}",
+                    owner,
+                    manifest.repos.len(),
+                    dir.display(),
+                    archive.display()
+                );
             }
             AdminCommand::AdoptOwners { db, repos, r#as } => {
                 let mut store = Store::open(&db)

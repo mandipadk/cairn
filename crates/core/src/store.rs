@@ -589,6 +589,12 @@ impl Store {
     /// safe to print and paste.
     pub fn fsck(&self) -> CoreResult<Vec<String>> {
         let mut shadow = Connection::open_in_memory()?;
+        // The whole schema, not only the projections: an apply arm may
+        // touch an operational table on the way (a deactivation ends
+        // the person's browser sessions), and a shadow without that
+        // table fails the replay at the first such event. The flagship
+        // found this the day its first person was deactivated.
+        shadow.execute_batch(OPERATIONAL_SCHEMA)?;
         shadow.execute_batch(PROJECTION_SCHEMA)?;
         {
             let tx = shadow.transaction()?;

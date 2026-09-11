@@ -1827,6 +1827,39 @@ impl Store {
         Ok(())
     }
 
+    /// What an owner leaves with: every repository they hold, described
+    /// well enough to be made again elsewhere. The bundle names are
+    /// what the export writes beside the manifest.
+    pub fn graduation(&self, owner: &PrincipalId) -> CoreResult<crate::Graduation> {
+        raw::principal(&self.conn, owner.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("principal {owner}")))?;
+        let repos = self
+            .repos_of_owner(owner)?
+            .into_iter()
+            .map(|repo| {
+                let short = crate::id::split_repo_name(&repo.name)
+                    .map(|(_, short)| short.to_owned())
+                    .unwrap_or_else(|| repo.name.clone());
+                crate::GraduatedRepo {
+                    bundle: format!("bundles/{short}.bundle"),
+                    name: repo.name,
+                    short,
+                    default_branch: repo.default_branch,
+                    visibility: repo.visibility,
+                    object_format: repo.object_format,
+                    archived: repo.archived,
+                    description: repo.description,
+                }
+            })
+            .collect();
+        Ok(crate::Graduation {
+            version: 1,
+            exported: jiff::Timestamp::now().to_string(),
+            owner: owner.clone(),
+            repos,
+        })
+    }
+
     /// May this principal import into this repository? Asked before the
     /// forge connects anywhere on their behalf, so an unauthorised
     /// request costs nothing and fetches nothing.

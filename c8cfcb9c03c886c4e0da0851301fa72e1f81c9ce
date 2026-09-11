@@ -1,0 +1,136 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Igraduation0110",
+      "id": "c-0erjbwmqjgeeay6ag9xxtc66yp",
+      "landed_oid": "c8cfcb9c03c886c4e0da0851301fa72e1f81c9ce",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 110,
+      "opened_at": "2026-09-11T20:34:46.223598585Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn/cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Let an owner leave with everything, and let fsck survive a leaving",
+      "updated_at": "2026-09-11T20:35:49.284753648Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-0erjbwmqjgeeay6ag9xxtc66yp",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-4xkrpx4hce6vvjagz3d4baxpkj",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 921,
+        "summary": "fmt, clippy -D warnings, the suite and the first-run walk pass; three new tests: export and import of everything, a local source is the operator's, fsck after a deactivation. fsck rehearsed clean on a copy of the flagship's log.",
+        "unchecked": [
+          "The export command's archive step (tar) is exercised by hand on the box, not under test; the manifest and bundle it packs are.",
+          "Graduation between two live instances is walked from the console after this lands."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "c8cfcb9c03c886c4e0da0851301fa72e1f81c9ce",
+    "landed_at": "2026-09-11T20:35:49.284753648Z",
+    "merged_by": "mandip",
+    "repo": "cairn/cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-0erjbwmqjgeeay6ag9xxtc66yp",
+      "commit_oid": "c8cfcb9c03c886c4e0da0851301fa72e1f81c9ce",
+      "message": "Let an owner leave with everything, and let fsck survive a leaving\n\nNobody is kept. `cairn admin export --owner` writes what an owner leaves\nwith: a manifest of their repositories — name, default branch,\nvisibility, description, object format, archived — and a git bundle of\neach carrying every ref, so branches, tags, the change refs and the\nreceipt notes travel together and the receipts still verify against the\nforge they came from. Another forge takes them in through its operator:\nthe repository is made under the owner, and `import` with `everything`\nfetches every branch, recording each as imported history before\npublishing it, with the tags, notes and change refs as they are. A\n`file://` source is the operator's to give outside development, since\nit reads the box's own files; a bundle is handed to git as a path,\nbecause the url form would try to run upload-pack inside a file. A\ncompany on a forge of its own leaves with the nightly bundle, which is\nalready a forge.\n\nAnd fsck compared the live projections against a replay that had only\nthe projection tables, so the first deactivation on a forge — whose\narm ends the person's browser sessions, an operational table — made\nevery fsck after it fail with \"no such table\". The flagship found this\nthe day its first person was deactivated. The replay shadow now has\nthe whole schema; a test deactivates somebody and checks.\n\nChange-Id: Igraduation0110\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "crates/cli/src/main.rs",
+        "crates/cli/tests/suite/fsck_flow.rs",
+        "crates/cli/tests/suite/graduation_flow.rs",
+        "crates/cli/tests/suite/main.rs",
+        "crates/core/src/commands.rs",
+        "crates/core/src/lib.rs",
+        "crates/core/src/store.rs",
+        "crates/core/src/types.rs",
+        "crates/git/src/store.rs",
+        "crates/server/src/routes.rs",
+        "crates/server/src/state.rs",
+        "docs/operating.md"
+      ],
+      "session": null
+    },
+    "seq": 924,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-4xkrpx4hce6vvjagz3d4baxpkj",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-4xkrpx4hce6vvjagz3d4baxpkj",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 123 judged claims, 95% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 11 path(s) outside docs/, *.md: crates/cli/src/main.rs, crates/cli/tests/suite/fsck_flow.rs, crates/cli/tests/suite/graduation_flow.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-0erjbwmqjgeeay6ag9xxtc66yp",
+        "claim": "cl-4xkrpx4hce6vvjagz3d4baxpkj",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "id": "vr-1d3ydzf2571s7ck50mnm1zpagg",
+        "observed": "exit 0: Doc-tests cairn_server",
+        "revision": 1,
+        "seq": 922
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "ec9vivj6jfeOIWS+4u5+D5qvZNHXLIfAaBENn+m0HvUeELm8GiSK4XN4urEWp+rmp7aTSy6oudp613cMULYsDg=="
+  }
+}

@@ -1,0 +1,126 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Iruntime0111",
+      "id": "c-4fj21dw8bfwp2kw7k657ap1hed",
+      "landed_oid": "56c02656f1b4045bc3a9ea8ea838f93d25e2b227",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 111,
+      "opened_at": "2026-09-11T20:57:56.556333587Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn/cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Run the offline commands on the command's own runtime",
+      "updated_at": "2026-09-11T20:58:51.669219537Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-4fj21dw8bfwp2kw7k657ap1hed",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-4y7d229agkjvj7r7nmcjs0bvss",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 934,
+        "summary": "fmt, clippy -D warnings, the suite and the first-run walk pass; on a copy of the flagship, cairn admin export wrote the cairn organisation's bundles and archive and cairn admin gc ran. Deletion moves aside; the first gc waits ten minutes.",
+        "unchecked": [
+          "No test runs the CLI binary's admin commands; the rehearsal on the box is what exercised them."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "56c02656f1b4045bc3a9ea8ea838f93d25e2b227",
+    "landed_at": "2026-09-11T20:58:51.669219537Z",
+    "merged_by": "mandip",
+    "repo": "cairn/cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-4fj21dw8bfwp2kw7k657ap1hed",
+      "commit_oid": "56c02656f1b4045bc3a9ea8ea838f93d25e2b227",
+      "message": "Run the offline commands on the command's own runtime\n\n`cairn admin export` and `cairn admin gc` each made a runtime of their\nown to drive git, inside a main that already is one, and a runtime\nrefuses to start inside another: the first graduation on the box died\nbefore writing a bundle. Both now await on the runtime main has, as\nthe other commands do. Rehearsed on a copy of the flagship: the\norganisation's bundles come out with every kind of ref, and a\ncollection runs.\n\nTwo races the mirror's slow runner found, both from the daily\ncollection the queue runs: deleting a repository removed its directory\nin place, and a collection started a moment earlier made that fail for\na deletion the forge had already recorded; the directory is now moved\naside at once and removed behind that. And the queue collected a\nrepository within seconds of a start, which on a test forge is every\nrepository at once; the first collection now waits ten minutes.\n\nChange-Id: Iruntime0111\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "crates/cli/src/main.rs",
+        "crates/git/src/store.rs",
+        "crates/server/src/queue.rs"
+      ],
+      "session": null
+    },
+    "seq": 937,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-4y7d229agkjvj7r7nmcjs0bvss",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-4y7d229agkjvj7r7nmcjs0bvss",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 125 judged claims, 96% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 3 path(s) outside docs/, *.md: crates/cli/src/main.rs, crates/git/src/store.rs, crates/server/src/queue.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-4fj21dw8bfwp2kw7k657ap1hed",
+        "claim": "cl-4y7d229agkjvj7r7nmcjs0bvss",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "id": "vr-05pea3qhwc67h97dz04pzqxkz5",
+        "observed": "exit 0: Doc-tests cairn_server",
+        "revision": 1,
+        "seq": 935
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "yKireD54+ztIUh4hI6KfRKeY5HLw6oPhJ4NUfKA1CpOMuWGyADsX9vLH0pSUPFDcyR8Rn91HfEfBo//3ZqyUDQ=="
+  }
+}

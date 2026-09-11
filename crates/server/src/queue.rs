@@ -67,6 +67,7 @@ const MEASUREMENT_STANDS: Duration = Duration::from_secs(3600);
 async fn measure_the_stalest(
     state: &AppState,
     last_gc: &mut std::collections::HashMap<String, std::time::Instant>,
+    up_since: std::time::Instant,
 ) {
     let cutoff = (jiff::Timestamp::now() - MEASUREMENT_STANDS).to_string();
     let stalest = state.with_store(|s| s.stalest_repo(&cutoff));
@@ -76,7 +77,12 @@ async fn measure_the_stalest(
             // referred to by nothing, and only a collection reclaims
             // them; once a day per repository is often enough, and the
             // measurement after it counts what is really there.
+            // Not in the first minutes after a start: a collection
+            // right after boot buys nothing and races whatever the
+            // forge was started to do — a test suite's deletions, a
+            // deploy's first pushes.
             if let Some(git) = state.git()
+                && up_since.elapsed() > GC_NOT_BEFORE
                 && last_gc.get(&repo).is_none_or(|at| at.elapsed() > GC_EVERY)
             {
                 last_gc.insert(repo.clone(), std::time::Instant::now());
@@ -93,6 +99,8 @@ async fn measure_the_stalest(
 
 /// How often one repository's unreferenced objects are collected.
 const GC_EVERY: Duration = Duration::from_secs(24 * 3600);
+/// How long after a start before the first collection.
+const GC_NOT_BEFORE: Duration = Duration::from_secs(10 * 60);
 
 pub fn spawn_queue_processor(state: AppState) -> tokio::task::JoinHandle<()> {
     tokio::spawn(run(state))
@@ -113,10 +121,11 @@ async fn run(state: AppState) {
     // next push. Look once, here, off the request path.
     measure_unmeasured(&state).await;
     let mut last_gc = std::collections::HashMap::new();
+    let up_since = std::time::Instant::now();
     loop {
         retry_pending_advances(&state).await;
         process_lanes(&state).await;
-        measure_the_stalest(&state, &mut last_gc).await;
+        measure_the_stalest(&state, &mut last_gc, up_since).await;
         if state.draws_automatically() {
             draw_attention(&state);
         }

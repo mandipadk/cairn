@@ -861,10 +861,11 @@ async fn main() -> anyhow::Result<()> {
                     Some(one) => vec![one],
                     None => store.repos()?.into_iter().map(|r| r.name).collect(),
                 };
-                let runtime = tokio::runtime::Runtime::new()?;
+                // Awaited on main's own runtime: a second runtime made
+                // here would refuse to start inside the first.
                 for name in names {
-                    runtime.block_on(git.gc(&name))?;
-                    let bytes = runtime.block_on(git.size(&name))?;
+                    git.gc(&name).await?;
+                    let bytes = git.size(&name).await?;
                     store.record_repo_size(&name, bytes)?;
                     println!("{name:<40} {}", cairn_server::in_bytes(bytes));
                 }
@@ -886,9 +887,8 @@ async fn main() -> anyhow::Result<()> {
                 let stamp = jiff::Timestamp::now().strftime("%Y%m%d-%H%M%S").to_string();
                 let dir = into.join(format!("{owner}-{stamp}"));
                 std::fs::create_dir_all(dir.join("bundles"))?;
-                let runtime = tokio::runtime::Runtime::new()?;
                 for repo in &manifest.repos {
-                    runtime.block_on(git.bundle(&repo.name, &dir.join(&repo.bundle)))?;
+                    git.bundle(&repo.name, &dir.join(&repo.bundle)).await?;
                     println!("bundled {}", repo.name);
                 }
                 std::fs::write(

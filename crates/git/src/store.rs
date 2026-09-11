@@ -674,9 +674,43 @@ impl GitStore {
     /// one that is gone is what the graph already says.
     pub async fn remove_repo(&self, name: &str) -> GitResult<()> {
         let dir = self.repo_path(name)?;
-        if tokio::fs::try_exists(&dir).await? {
-            tokio::fs::remove_dir_all(&dir).await?;
+        if !tokio::fs::try_exists(&dir).await? {
+            return Ok(());
         }
+        // Moved aside first, which is atomic and immediate, then removed
+        // behind that. Removing in place races with anything still
+        // writing into the directory — a collection the queue started
+        // a moment ago, a measurement walking it — and a directory that
+        // changes under remove_dir_all is an error for a deletion that
+        // has already happened as far as the forge is concerned.
+        let aside = self.root.join(format!(
+            ".removed-{}-{}",
+            name.replace('/', "-"),
+            std::process::id()
+        ));
+        let aside = if tokio::fs::try_exists(&aside).await? {
+            aside.with_extension(format!(
+                "{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ))
+        } else {
+            aside
+        };
+        tokio::fs::rename(&dir, &aside).await?;
+        tokio::spawn(async move {
+            // A first attempt may lose to a writer finishing up inside;
+            // the second finds it gone.
+            for _ in 0..3 {
+                match tokio::fs::remove_dir_all(&aside).await {
+                    Ok(()) => return,
+                    Err(_) => tokio::time::sleep(Duration::from_secs(2)).await,
+                }
+            }
+            let _ = tokio::fs::remove_dir_all(&aside).await;
+        });
         Ok(())
     }
 

@@ -1,0 +1,134 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Isignupcap0116",
+      "id": "c-1ht59rdqc9fkfszqg2rb38papw",
+      "landed_oid": "ecc6414b0b685f9593cf206ee5f8c603ff0fcf8e",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 116,
+      "opened_at": "2026-09-12T20:56:07.811309695Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn/cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Take only so many strangers, and only reachable ones",
+      "updated_at": "2026-09-12T20:57:18.922043724Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-1ht59rdqc9fkfszqg2rb38papw",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-6xry4cqmm602s0bew42qebs7w7",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 1010,
+        "summary": "fmt, clippy -D warnings, the suite and the first-run walk pass; schema 31 rehearsed on a copy of the flagship (fsck clean, nobody self-made). New: a self-made account is 403 on its first repository or agent until an address is confirmed; past --signup-cap the page says full.",
+        "unchecked": [
+          "The start-up warning for --open-signup without --trust-proxy is read from the log by hand, not by a test."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "ecc6414b0b685f9593cf206ee5f8c603ff0fcf8e",
+    "landed_at": "2026-09-12T20:57:18.922043724Z",
+    "merged_by": "mandip",
+    "repo": "cairn/cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-1ht59rdqc9fkfszqg2rb38papw",
+      "commit_oid": "ecc6414b0b685f9593cf206ee5f8c603ff0fcf8e",
+      "message": "Take only so many strangers, and only reachable ones\n\nWith --open-signup a stranger had the whole free tier the moment\nthey typed a name: no cap on accounts, so accounts times the disk\nquota was unbounded, and nothing was gated on an address anybody\ncould reach them at. The forge now knows who made their own account\n(principals gains self_made, projected from the registration being\nthe person's own; schema 31, rehearsed on a copy of the flagship),\nand such an account creates nothing — no repository, no agent —\nuntil an address of theirs is confirmed. --signup-cap says how many\nself-made accounts the forge takes; past it the page says the forge\nis full, and the form is not a way around the page. A forge opened\nwithout --trust-proxy warns at start that every stranger behind the\nproxy shares one sign-up allowance.\n\nChange-Id: Isignupcap0116\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "crates/cli/src/main.rs",
+        "crates/cli/tests/suite/common/mod.rs",
+        "crates/cli/tests/suite/operator_flow.rs",
+        "crates/core/src/commands.rs",
+        "crates/core/src/queries.rs",
+        "crates/core/src/store.rs",
+        "crates/core/src/types.rs",
+        "crates/server/src/state.rs",
+        "crates/server/src/web/mod.rs",
+        "crates/server/src/web/views.rs",
+        "docs/operating.md"
+      ],
+      "session": null
+    },
+    "seq": 1013,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-6xry4cqmm602s0bew42qebs7w7",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-6xry4cqmm602s0bew42qebs7w7",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 136 judged claims, 95% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 10 path(s) outside docs/, *.md: crates/cli/src/main.rs, crates/cli/tests/suite/common/mod.rs, crates/cli/tests/suite/operator_flow.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-1ht59rdqc9fkfszqg2rb38papw",
+        "claim": "cl-6xry4cqmm602s0bew42qebs7w7",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "id": "vr-4cdg76m2cjz7vsw1th0mrshyy3",
+        "observed": "exit 0: Doc-tests cairn_server",
+        "revision": 1,
+        "seq": 1011
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "4OnIx4m48qB4eoe/O0ykV0FlRPA66oH2zulI7DEeE9fa+Kz9v3/9GNVIOrW8+8oAsw+TqyvH0nbpiCxxkt1rAQ=="
+  }
+}

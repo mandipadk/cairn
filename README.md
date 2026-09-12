@@ -182,8 +182,8 @@ still change between versions without a compatibility promise. A hosted
 instance is planned; the waitlist at
 [cairn.mandip.dev](https://cairn.mandip.dev) is where to say you want one.
 
-What is not here yet, so nobody has to find out the hard way: a way to
-join without an invitation, and billing for a forge that would need it. What is here is tested at the boundaries where a forge
+What is not here yet, so nobody has to find out the hard way: billing
+for a forge that would need it. What is here is tested at the boundaries where a forge
 is usually wrong — authority, concurrency, crash recovery, hostile input,
 what one owner may take up, and how fast anyone may ask — and `fsck`
 runs clean on the instance serving this page.

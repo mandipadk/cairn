@@ -1992,7 +1992,11 @@ impl Store {
 
     /// May this principal import into this repository? Asked before the
     /// forge connects anywhere on their behalf, so an unauthorised
-    /// request costs nothing and fetches nothing.
+    /// request costs nothing and fetches nothing. Whoever runs the
+    /// forge, and nobody else: an import is the forge's own machine
+    /// dialling out to an address of the caller's choosing, which is
+    /// not an owner's to make it do, however much the repository is
+    /// theirs.
     pub fn check_import(&self, actor: &PrincipalId, repo: &str) -> CoreResult<()> {
         let tx = self.conn.unchecked_transaction()?;
         authorize(
@@ -2000,8 +2004,15 @@ impl Store {
             Acting::of(&self.scope, self.admin_elsewhere),
             actor,
             Capability::Admin,
-            Some(repo),
-        )?;
+            None,
+        )
+        .map_err(|_| {
+            CoreError::Forbidden(
+                "importing is the operator's: the forge fetches from its own machine on the \
+                 caller's say-so, which is not an owner's to ask; whoever runs the forge can"
+                    .into(),
+            )
+        })?;
         raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
         Ok(())
     }
@@ -2010,9 +2021,10 @@ impl Store {
     /// else. Every other way a branch moves carries a policy trace
     /// saying why it was allowed; this one carries the opposite — an
     /// explicit marker that the commits below this tip were never
-    /// judged here. Admin authority, and only onto a branch that does
-    /// not exist yet: importing over reviewed history would overwrite
-    /// exactly the decisions the log exists to keep.
+    /// judged here. The operator's authority (see [`Self::check_import`]),
+    /// and only onto a branch that does not exist yet: importing over
+    /// reviewed history would overwrite exactly the decisions the log
+    /// exists to keep.
     #[allow(clippy::too_many_arguments)] // one command, one record; a struct here would only rename the fields
     pub fn import_history(
         &mut self,
@@ -2030,7 +2042,7 @@ impl Store {
             Acting::of(&self.scope, self.admin_elsewhere),
             actor,
             Capability::Admin,
-            Some(repo),
+            None,
         )?;
         raw::repo(&tx, repo)?.ok_or_else(|| CoreError::NotFound(format!("repo {repo}")))?;
         require(valid_branch(branch), || {

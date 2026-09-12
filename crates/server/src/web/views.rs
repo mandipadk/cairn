@@ -928,6 +928,7 @@ pub fn search(
 /// every organisation they belong to. With one choice there is nothing
 /// to ask; the name simply lands under it.
 pub fn new_repo(
+    may_import: bool,
     theme: Theme,
     viewer: &Viewer,
     owners: &[String],
@@ -972,6 +973,10 @@ pub fn new_repo(
                         input id="default_branch" name="default_branch" type="text"
                               autocomplete="off" placeholder="main";
                     }
+                    // The forge fetching from an address a caller typed is
+                    // the operator's to allow; the field is not shown to
+                    // somebody it would refuse.
+                    @if may_import {
                     div {
                         label for="source" { "Import from" }
                         input id="source" name="source" type="text" autocomplete="off"
@@ -981,6 +986,7 @@ pub fn new_repo(
                              Nothing here was reviewed under this repository's policy, \
                              and the log says so rather than implying otherwise."
                         }
+                    }
                     }
                     button class="btn" type="submit" { "Create" }
                 }

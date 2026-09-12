@@ -150,7 +150,9 @@ pub fn is_operator_path(method: &Method, path: &str) -> bool {
         ["api", "reports"] => get,
         ["api", "reports", _, "dismiss"] => post,
         ["api", "repos", _, _, "mirror"] | ["api", "repos", _, _, "import"] => post,
-        ["people"] | ["teams"] => get || post,
+        ["api", "principals", _, "workload"] => post,
+        ["people"] | ["teams"] | ["reports"] => get || post,
+        [_, _, "settings", "mirror"] => post,
         _ => false,
     }
 }
@@ -649,8 +651,12 @@ mod tests {
             (Method::POST, "/api/reports/3/dismiss"),
             (Method::POST, "/api/repos/ada/demo/mirror"),
             (Method::POST, "/api/repos/ada/demo/import"),
+            (Method::POST, "/api/principals/scout/workload"),
             (Method::GET, "/people"),
             (Method::POST, "/teams"),
+            (Method::GET, "/reports"),
+            (Method::POST, "/reports"),
+            (Method::POST, "/ada/demo/settings/mirror"),
         ] {
             assert!(is_operator_path(&method, path), "{method} {path}");
         }

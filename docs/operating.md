@@ -135,8 +135,8 @@ repository, inviting) is refused to an agent whatever it holds.
 
 Nobody is kept. A company on a forge of its own leaves with the nightly
 bundle — the database, the key and the repositories — and serves it
-with `cairn serve` wherever it likes. An owner on a shared forge leaves
-with their repositories:
+with `cairn serve` wherever it likes. An owner on a shared forge asks,
+and the operator exports their repositories on the box:
 
 ```sh
 cairn admin export --db cairn.db --repos repos --owner ada --into /tmp/out
@@ -168,7 +168,8 @@ afterwards, which is the walk to run after any graduation.
 
 Everything above that is the operator's — registering people, issuing
 grants, membership, stopping and restarting principals, quotas, the
-waitlist, invitations, reports, mirrors and imports — can be served on a
+waitlist, invitations, reports, mirrors, imports and workload
+identities, with the pages that do the same — can be served on a
 listener of its own:
 
 ```sh
@@ -593,7 +594,10 @@ offline against the forge's public key, so what landed and why travels
 with the code and stays true somewhere else. `GET
 /api/repos/{owner}/{name}/receipts` is the whole record for a
 repository, and a mirror set by the operator keeps a copy moving on its
-own. There is no export button, and nothing to unlock.
+own. There is no export button and nothing to unlock: to leave with
+everything at once, ask, and the operator runs `cairn admin export`
+for you (under "Leaving" above), which is the same git plus a
+manifest.
 
 ### Attention budget
 

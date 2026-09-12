@@ -185,8 +185,8 @@ async fn an_owner_leaves_with_bundles_and_another_forge_takes_them_in() {
     assert_eq!(status, StatusCode::OK, "{page}");
 }
 
-/// A local path reads the box's own files, so outside development it
-/// is only the operator's to give.
+/// Importing is the operator's: a local path reads the box's own
+/// files, and any source has the forge dialling out on a say-so.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_local_source_is_the_operators_to_give() {
     let forge = boot_token_only().await;
@@ -218,23 +218,31 @@ async fn a_local_source_is_the_operators_to_give() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    // An owner is refused before the source is even looked at: the
+    // forge dials out for whoever runs it, not for whoever owns the
+    // repository, so the same is true of an https source.
     let nowhere = json!({ "source": "file:///nowhere/at/all.bundle", "everything": true });
-    let (status, refused) = api_with_token(
-        app,
-        "POST",
-        "/api/repos/bee/mine/import",
-        &bee,
-        Some(nowhere.clone()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
-    assert!(
-        refused["error"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("https://"),
-        "{refused}"
-    );
+    for source in [
+        nowhere.clone(),
+        json!({ "source": "https://example.test/x.git", "branch": "main" }),
+    ] {
+        let (status, refused) = api_with_token(
+            app,
+            "POST",
+            "/api/repos/bee/mine/import",
+            &bee,
+            Some(source),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+        assert!(
+            refused["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("operator"),
+            "{refused}"
+        );
+    }
     // The operator's is let through the check and fails only at the
     // fetch, since nothing is there.
     let (status, answer) = api_with_token(

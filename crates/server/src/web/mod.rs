@@ -300,6 +300,7 @@ async fn new_page(
             .unwrap_or_default(),
     );
     views::new_repo(
+        app.with_store(|s| s.is_admin(&viewer.0)),
         theme,
         &viewer,
         &owners,
@@ -358,14 +359,28 @@ async fn create_from_form(
         Ok::<_, cairn_core::CoreError>(())
     });
     if let Err(err) = created {
-        return views::new_repo(theme, &viewer, &owners, chosen, Some(&humane(&err)))
-            .into_response();
+        return views::new_repo(
+            app.with_store(|s| s.is_admin(&viewer.0)),
+            theme,
+            &viewer,
+            &owners,
+            chosen,
+            Some(&humane(&err)),
+        )
+        .into_response();
     }
     if let Some(git) = app.git()
         && let Err(err) = git.store.create_repo(&full, &branch, "sha1").await
     {
-        return views::new_repo(theme, &viewer, &owners, chosen, Some(&err.to_string()))
-            .into_response();
+        return views::new_repo(
+            app.with_store(|s| s.is_admin(&viewer.0)),
+            theme,
+            &viewer,
+            &owners,
+            chosen,
+            Some(&err.to_string()),
+        )
+        .into_response();
     }
     let env = app.with_store(|store| {
         store.create_repo(
@@ -379,16 +394,30 @@ async fn create_from_form(
     match env {
         Ok(env) => app.publish(&env),
         Err(err) => {
-            return views::new_repo(theme, &viewer, &owners, chosen, Some(&humane(&err)))
-                .into_response();
+            return views::new_repo(
+                app.with_store(|s| s.is_admin(&viewer.0)),
+                theme,
+                &viewer,
+                &owners,
+                chosen,
+                Some(&humane(&err)),
+            )
+            .into_response();
         }
     }
 
     if !source.is_empty() {
         let outcome = import_into(&app, &viewer.0, &full, &branch, &source).await;
         if let Err(message) = outcome {
-            return views::new_repo(theme, &viewer, &owners, chosen, Some(&message))
-                .into_response();
+            return views::new_repo(
+                app.with_store(|s| s.is_admin(&viewer.0)),
+                theme,
+                &viewer,
+                &owners,
+                chosen,
+                Some(&message),
+            )
+            .into_response();
         }
     }
     Redirect::to(&format!("/{full}")).into_response()
@@ -2240,6 +2269,12 @@ async fn sign_up(
     // account and no password would be one who cannot get in.
     match app.with_store(|s| s.sign_up(&id, display)) {
         Ok(env) => app.publish(&env),
+        // Taken or reserved, the answer is the same: which names exist
+        // is not something a public form should be willing to confirm,
+        // five guesses an hour or not.
+        Err(cairn_core::CoreError::Conflict(_)) => {
+            return back("That name is not available here; choose another");
+        }
         Err(err) => return back(&humane(&err)),
     }
     match app.with_store(|s| s.set_password(&id, &id, &form.password)) {

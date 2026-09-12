@@ -1,7 +1,8 @@
 # Agents on Cairn
 
-An agent is a principal like a person: registered by whoever runs the
-forge, holding exactly the capabilities it was granted (`task`, `push`,
+An agent is a principal like a person: registered by the person or
+organisation that will hold it, or by whoever runs the forge, holding
+exactly the capabilities it was granted (`task`, `push`,
 `review`, `merge`, `verify`), with a token of its own. There is no plugin
 layer. The API, the pages and the rules are the same ones people use, and
 a refusal names the missing capability and the grant that would fix it.

@@ -131,13 +131,26 @@ async fn importing_and_mirroring_are_the_operators_to_authorise() {
     )
     .await;
 
-    // file:// and ssh:// are this machine's, not a caller's.
+    // Importing is the operator's, into an owner's own repository as
+    // into anyone's: the forge dials out on nobody else's say-so, so
+    // the answer is authority before the source is even read.
     let (status, body) = api_with_token(
         app,
         "POST",
         "/api/repos/bee/bees/import",
         &bee,
         Some(json!({ "source": "file:///etc", "branch": "main" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    // file:// and ssh:// are this machine's, not a caller's — the
+    // operator's included, outside development.
+    let (status, body) = api_with_token(
+        app,
+        "POST",
+        "/api/repos/bee/bees/import",
+        &forge.ada_token,
+        Some(json!({ "source": "ssh://git@example.test/x.git", "branch": "main" })),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");

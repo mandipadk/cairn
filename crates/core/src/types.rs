@@ -906,6 +906,15 @@ pub struct GraduatedRepo {
 /// Somebody who asked for an account: their address, when, what they
 /// said, and the company they asked for a forge of their own for, if
 /// they did.
+/// Somebody invited who never arrived.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Unclaimed {
+    pub principal: PrincipalId,
+    pub display: String,
+    /// When their newest open invitation lapses; none if they hold none.
+    pub invitation_until: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WaitlistEntry {
     pub email: String,

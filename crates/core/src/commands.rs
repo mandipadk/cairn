@@ -1358,6 +1358,64 @@ impl Store {
         }))
     }
 
+    /// The people who were invited and never came: active humans nobody
+    /// has ever been, each with the invitation they hold, if any, and
+    /// when it lapses. What an operator reads before letting them go.
+    pub fn unclaimed(&self) -> CoreResult<Vec<crate::types::Unclaimed>> {
+        let mut out = Vec::new();
+        for principal in raw::principals(&self.conn)? {
+            if principal.kind != PrincipalKind::Human || !principal.active {
+                continue;
+            }
+            if self.is_claimed(&principal.id)? {
+                continue;
+            }
+            let invitation = self
+                .tokens_of(&principal.id)?
+                .into_iter()
+                .filter(|t| {
+                    !t.revoked
+                        && t.label
+                            .as_deref()
+                            .is_some_and(|l| l.starts_with(INVITATION_LABEL))
+                })
+                .max_by(|a, b| a.until.cmp(&b.until));
+            out.push(crate::types::Unclaimed {
+                principal: principal.id.clone(),
+                display: principal.display.clone(),
+                invitation_until: invitation.and_then(|t| t.until),
+            });
+        }
+        out.sort_by(|a, b| a.principal.as_str().cmp(b.principal.as_str()));
+        Ok(out)
+    }
+
+    /// Let the unclaimed go whose invitation has lapsed (or who hold
+    /// none): each is deactivated and its open invitations revoked, on
+    /// the record. The name stays theirs on the log; a deactivated
+    /// account can be reactivated if they turn up after all.
+    pub fn purge_unclaimed(&mut self, actor: &PrincipalId) -> CoreResult<Vec<PrincipalId>> {
+        let now = jiff::Timestamp::now().to_string();
+        let mut gone = Vec::new();
+        for who in self.unclaimed()? {
+            let lapsed = who
+                .invitation_until
+                .as_deref()
+                .is_none_or(|until| *until <= *now);
+            if !lapsed {
+                continue;
+            }
+            for token in self.tokens_of(&who.principal)? {
+                if !token.revoked {
+                    self.revoke_token(actor, &token.id)?;
+                }
+            }
+            self.set_active(actor, &who.principal, false)?;
+            gone.push(who.principal);
+        }
+        Ok(gone)
+    }
+
     /// Begin putting an address on record: it is pending until a link
     /// mailed to it is followed, because an address nobody has proved
     /// they can read is not somewhere to send a credential. Returns the

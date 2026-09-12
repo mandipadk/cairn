@@ -253,6 +253,8 @@ pub fn router(state: AppState) -> Router {
             axum::routing::delete(routes::leave_waitlist),
         )
         .route("/api/invitations", post(routes::invite))
+        .route("/api/invitations/unclaimed", get(routes::list_unclaimed))
+        .route("/api/invitations/purge", post(routes::purge_unclaimed))
         .route("/api/reports", get(routes::list_reports))
         .route("/api/reports/{id}/dismiss", post(routes::dismiss_report))
         .route("/api/inbox", get(routes::inbox))

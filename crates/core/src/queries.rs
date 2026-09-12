@@ -1504,6 +1504,14 @@ pub(crate) mod raw {
 }
 
 impl Store {
+    /// Everyone holding the unscoped admin grant.
+    pub fn admins(&self) -> CoreResult<Vec<PrincipalId>> {
+        Ok(raw::admins(&self.conn)?
+            .into_iter()
+            .filter_map(|id| PrincipalId::new(&id))
+            .collect())
+    }
+
     pub fn principal(&self, id: &PrincipalId) -> CoreResult<Option<Principal>> {
         raw::principal(&self.conn, id.as_str())
     }

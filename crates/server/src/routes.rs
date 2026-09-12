@@ -2333,6 +2333,21 @@ fn operator(app: &AppState, actor: &Actor) -> ApiResult<()> {
     ))
 }
 
+/// Who was invited and never came, with when their invitation lapses.
+pub async fn list_unclaimed(State(app): State<AppState>, actor: Actor) -> ApiResult<Json<Value>> {
+    operator(&app, &actor)?;
+    let list = app.with_store(|s| s.unclaimed())?;
+    Ok(Json(json!({ "unclaimed": list })))
+}
+
+/// Let go the unclaimed whose invitation has lapsed: deactivated, their
+/// invitations revoked, each on the record.
+pub async fn purge_unclaimed(State(app): State<AppState>, actor: Actor) -> ApiResult<Json<Value>> {
+    operator(&app, &actor)?;
+    let gone = app.with_store(|s| s.acting_as(actor.1.as_ref()).purge_unclaimed(&actor.0))?;
+    Ok(Json(json!({ "purged": gone })))
+}
+
 /// Who asked for an account, oldest first.
 pub async fn list_waitlist(State(app): State<AppState>, actor: Actor) -> ApiResult<Json<Value>> {
     operator(&app, &actor)?;

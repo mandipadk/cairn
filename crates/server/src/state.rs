@@ -297,6 +297,21 @@ impl AppState {
         self
     }
 
+    /// Token ids of a principal, for tests that need to revoke them.
+    pub fn tokens_of_for_tests(&self, who: &str) -> Vec<String> {
+        let Some(id) = cairn_core::PrincipalId::new(who) else {
+            return Vec::new();
+        };
+        self.with_store(|s| s.tokens_of(&id))
+            .map(|ts| {
+                ts.into_iter()
+                    .filter(|t| !t.revoked)
+                    .map(|t| t.id.to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub(crate) fn operator_elsewhere(&self) -> bool {
         self.operator_elsewhere
     }

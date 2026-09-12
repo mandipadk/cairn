@@ -267,6 +267,18 @@ enum AdminCommand {
         #[arg(long)]
         remove: Option<String>,
     },
+    /// Who was invited and never came. With --purge, let go those whose
+    /// invitation has lapsed: deactivated, on the record, as whoever
+    /// runs this command.
+    Unclaimed {
+        #[arg(long, default_value = "cairn.db")]
+        db: PathBuf,
+        #[arg(long)]
+        purge: bool,
+        /// Who is letting them go; the forge's first account unless said.
+        #[arg(long, default_value = "")]
+        r#as: String,
+    },
     /// Show or set what one owner may take up here. Without any of the
     /// limits it only prints what they may have and what they are
     /// using. A limit given is laid over what was already said about
@@ -995,6 +1007,36 @@ async fn main() -> anyhow::Result<()> {
                                 report.what.replace('\n', "\n  ")
                             );
                         }
+                    }
+                }
+            }
+            AdminCommand::Unclaimed { db, purge, r#as } => {
+                let mut store = Store::open(&db)
+                    .with_context(|| format!("opening forge database at {}", db.display()))?;
+                let list = store.unclaimed()?;
+                println!("{} invited and never came", list.len());
+                for who in &list {
+                    println!(
+                        "  {:<24} {:<24} invitation until {}",
+                        who.principal,
+                        who.display,
+                        who.invitation_until.as_deref().unwrap_or("-")
+                    );
+                }
+                if purge {
+                    let actor = if r#as.is_empty() {
+                        store
+                            .admins()?
+                            .into_iter()
+                            .next()
+                            .context("no admin on this forge to purge as")?
+                    } else {
+                        cairn_core::PrincipalId::new(&r#as).context("--as is not a valid id")?
+                    };
+                    let gone = store.purge_unclaimed(&actor)?;
+                    println!("{} let go, as {actor}", gone.len());
+                    for who in gone {
+                        println!("  {who}");
                     }
                 }
             }

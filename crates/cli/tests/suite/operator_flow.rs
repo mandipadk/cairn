@@ -614,3 +614,77 @@ async fn a_self_made_account_confirms_an_address_first_and_the_forge_fills_up() 
     let (_, eve) = api(app, "GET", "/api/principals/eve", "ada", None).await;
     assert_eq!(eve["self_made"], false, "{eve}");
 }
+
+/// An invited person who never came is listed, and let go once the
+/// invitation has lapsed; one who came is neither.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_unclaimed_are_listed_and_let_go_behind_the_door() {
+    let forge = boot().await;
+    let (public, door) = split_listeners(&forge);
+    let invite = |id: &str| json!({ "id": id, "email": format!("{id}@example.test") });
+    let (status, jane) = api(
+        &door,
+        "POST",
+        "/api/invitations",
+        "ada",
+        Some(invite("jane")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{jane}");
+    let (status, kim) = api(
+        &door,
+        "POST",
+        "/api/invitations",
+        "ada",
+        Some(invite("kim")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{kim}");
+    // Kim follows the link; jane never does.
+    let link = kim["link"].as_str().unwrap();
+    let path = link
+        .split_once("/join")
+        .map(|(_, rest)| format!("/join{rest}"))
+        .unwrap();
+    let (status, _) = get_redirect(&forge.app, &path, "").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (status, list) = api(&door, "GET", "/api/invitations/unclaimed", "ada", None).await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let names: Vec<&str> = list["unclaimed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|u| u["principal"].as_str())
+        .collect();
+    assert_eq!(names, vec!["jane"], "{list}");
+    assert!(
+        list["unclaimed"][0]["invitation_until"].is_string(),
+        "{list}"
+    );
+    // Not the public listener's.
+    let (status, _) = api(&public, "GET", "/api/invitations/unclaimed", "ada", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // Her invitation has not lapsed: a purge lets nobody go yet.
+    let (status, purged) = api(&door, "POST", "/api/invitations/purge", "ada", None).await;
+    assert_eq!(status, StatusCode::OK, "{purged}");
+    assert_eq!(purged["purged"], json!([]), "{purged}");
+    // Once it has (revoked stands in for lapsed here), she is let go.
+    let tokens = forge.state.tokens_of_for_tests("jane");
+    for id in tokens {
+        api(
+            &door,
+            "POST",
+            &format!("/api/tokens/{id}/revoke"),
+            "ada",
+            None,
+        )
+        .await;
+    }
+    let (status, purged) = api(&door, "POST", "/api/invitations/purge", "ada", None).await;
+    assert_eq!(status, StatusCode::OK, "{purged}");
+    assert_eq!(purged["purged"], json!(["jane"]), "{purged}");
+    let (_, jane) = api(&door, "GET", "/api/principals/jane", "ada", None).await;
+    assert_eq!(jane["active"], false, "{jane}");
+    let (_, kim) = api(&door, "GET", "/api/principals/kim", "ada", None).await;
+    assert_eq!(kim["active"], true, "{kim}");
+}

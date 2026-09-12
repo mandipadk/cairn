@@ -219,6 +219,12 @@ the unscoped admin grant:
   mailed invitation proves the address it went to and signs its holder
   in, so it would hand the account over. The address already on the
   account may be sent a fresh link.
+- `GET /api/invitations/unclaimed` — who was invited and never came,
+  with when their invitation lapses; `POST /api/invitations/purge` lets
+  go those whose invitation has lapsed: each is deactivated and its
+  invitations revoked, on the record (`cairn admin unclaimed --purge`
+  offline). The name stays on the log; whoever runs the forge can
+  reactivate an account that turns up after all.
 - `GET /api/reports` — what people said broke; `POST /api/reports/{id}/dismiss`.
 - The switch for strangers: `cairn serve --open-signup` lets anyone make
   an account at `/signup` (name, password, an address to confirm), rate

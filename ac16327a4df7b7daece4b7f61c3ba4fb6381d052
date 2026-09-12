@@ -1,0 +1,131 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Imetrics0119",
+      "id": "c-6q3g4zekqn7ca4kbyvxqbg6tyv",
+      "landed_oid": "ac16327a4df7b7daece4b7f61c3ba4fb6381d052",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 119,
+      "opened_at": "2026-09-12T21:18:08.104477532Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn/cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Count what the forge is, for whoever runs it",
+      "updated_at": "2026-09-12T21:19:18.563933052Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-6q3g4zekqn7ca4kbyvxqbg6tyv",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-2nx1yn85dtx3sewzg98wcy3z4b",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 1037,
+        "summary": "fmt, clippy -D warnings, the suite and the first-run walk pass. New: GET /api/forge/metrics at the door answers the counts (403 to an agent, 404 on the public listener); cairn admin metrics prints the same offline.",
+        "unchecked": [
+          "The counts are read from the projections as they stand; a rebuilt forge answers the same, which fsck already guards."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "ac16327a4df7b7daece4b7f61c3ba4fb6381d052",
+    "landed_at": "2026-09-12T21:19:18.563933052Z",
+    "merged_by": "mandip",
+    "repo": "cairn/cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-6q3g4zekqn7ca4kbyvxqbg6tyv",
+      "commit_oid": "ac16327a4df7b7daece4b7f61c3ba4fb6381d052",
+      "message": "Count what the forge is, for whoever runs it\n\nThe plan named metrics and never said which. These are the few\nnumbers that say how full and how busy a forge is: people (and how\nmany made their own account), organisations, agents, repositories,\nchanges open and landed, tasks open, the waitlist, open reports, disk\nas last measured, and the log's length. GET /api/forge/metrics at the\noperator's door answers them; `cairn admin metrics` prints them\noffline. The console's fleet page has something to draw from now.\n\nChange-Id: Imetrics0119\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "crates/cli/src/main.rs",
+        "crates/cli/tests/suite/operator_flow.rs",
+        "crates/core/src/queries.rs",
+        "crates/core/src/types.rs",
+        "crates/server/src/guard.rs",
+        "crates/server/src/lib.rs",
+        "crates/server/src/routes.rs",
+        "docs/operating.md"
+      ],
+      "session": null
+    },
+    "seq": 1040,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-2nx1yn85dtx3sewzg98wcy3z4b",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-2nx1yn85dtx3sewzg98wcy3z4b",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 140 judged claims, 95% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 7 path(s) outside docs/, *.md: crates/cli/src/main.rs, crates/cli/tests/suite/operator_flow.rs, crates/core/src/queries.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-6q3g4zekqn7ca4kbyvxqbg6tyv",
+        "claim": "cl-2nx1yn85dtx3sewzg98wcy3z4b",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "id": "vr-6tpbkav670njjxpa9hte7yysx2",
+        "observed": "exit 0: Doc-tests cairn_server",
+        "revision": 1,
+        "seq": 1038
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "K73DhaDcU0p9zr+uieBHJvOHuQgKDI5tfzlikXXSZ70ZDRB5jQ+pIxmHw/98mDAJkocK80UjaLnnsOoFO216BQ=="
+  }
+}

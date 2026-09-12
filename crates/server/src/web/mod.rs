@@ -2223,12 +2223,23 @@ struct SignupQuery {
 /// Where a stranger makes an account, when this forge lets them. When
 /// it does not, the page says so and points at the waitlist, so the
 /// address means the same thing on every forge.
+/// What /signup is on this forge right now.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Signup {
+    /// A stranger may make an account.
+    Open,
+    /// The forge takes people by invitation.
+    Closed,
+    /// Sign-up is open, and as many have come as the forge takes.
+    Full,
+}
+
 async fn signup_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
     axum::extract::Query(query): axum::extract::Query<SignupQuery>,
 ) -> Response {
-    views::signup(theme, app.open_signup(), query.error.as_deref()).into_response()
+    views::signup(theme, app.signup(), query.error.as_deref()).into_response()
 }
 
 /// An account of the stranger's own making: name, a password, an
@@ -2240,8 +2251,12 @@ async fn sign_up(
     headers: HeaderMap,
     Form(form): Form<SignupForm>,
 ) -> Response {
-    if !app.open_signup() {
-        return not_found();
+    match app.signup() {
+        Signup::Open => {}
+        // Closed means closed: the form is not there.
+        Signup::Closed => return not_found(),
+        // Full, the page says so; the form is not a way around it.
+        Signup::Full => return Redirect::to("/signup").into_response(),
     }
     let back =
         |error: &str| Redirect::to(&format!("/signup?error={}", urlencode(error))).into_response();

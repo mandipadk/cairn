@@ -508,6 +508,34 @@ fn grants_that_count(
     Ok(grants)
 }
 
+/// A person who made their own account creates nothing — no
+/// repository, no agent — until an address of theirs is confirmed. An
+/// account anybody can make in a minute is otherwise a minute's work
+/// per five gigabytes of somebody else's disk; an address that answers
+/// is the one thing a stranger has to be reachable at.
+fn confirmed_if_self_made(tx: &Transaction, actor: &PrincipalId) -> CoreResult<()> {
+    let Some(principal) = raw::principal(tx, actor.as_str())? else {
+        return Ok(());
+    };
+    if !principal.self_made {
+        return Ok(());
+    }
+    let verified: Option<i64> = tx
+        .query_row(
+            "SELECT verified_at IS NOT NULL FROM contact WHERE principal = ?",
+            rusqlite::params![actor.as_str()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if verified == Some(1) {
+        return Ok(());
+    }
+    Err(CoreError::Forbidden(format!(
+        "{actor} made their own account and has not confirmed an address yet: add one under \
+         Settings and follow the link it mails, and the forge is yours to make things on"
+    )))
+}
+
 fn may_create_repo(tx: &Transaction, acting: Acting<'_>, actor: &PrincipalId) -> CoreResult<()> {
     let principal = ensure_actor(tx, actor)?;
     if principal.kind == PrincipalKind::Human {
@@ -813,6 +841,7 @@ impl Store {
                     actor,
                     owner,
                 )?;
+                confirmed_if_self_made(&tx, actor)?;
                 within_quota(
                     &tx,
                     &self.default_quota,
@@ -1831,6 +1860,7 @@ impl Store {
             "create a repository",
         )?;
         may_create_repo(&tx, Acting::of(&self.scope, self.admin_elsewhere), actor)?;
+        confirmed_if_self_made(&tx, actor)?;
         let owner = owner.unwrap_or(actor);
         may_act_for(
             &tx,
@@ -1868,6 +1898,7 @@ impl Store {
             "create a repository",
         )?;
         may_create_repo(&tx, Acting::of(&self.scope, self.admin_elsewhere), actor)?;
+        confirmed_if_self_made(&tx, actor)?;
         let owner = owner.unwrap_or(actor);
         may_act_for(
             &tx,

@@ -224,7 +224,13 @@ the unscoped admin grant:
   an account at `/signup` (name, password, an address to confirm), rate
   limited by source like every public form. Off — the default — the page
   says the forge takes people by invitation and points at the front
-  page's request form.
+  page's request form. `--signup-cap <n>` is how many self-made accounts
+  the forge takes; past it the page says the forge is full. An account
+  somebody made themselves creates nothing — no repository, no agent —
+  until an address of theirs is confirmed, so the free tier is a
+  reachable person's, not a minute's work. Behind a reverse proxy pass
+  `--trust-proxy`, or every stranger shares one sign-up allowance; the
+  forge warns at start when it is missing.
 
 Responses carry a strict content policy, frame and sniffing protections,
 and HSTS. Sign-in attempts are rate limited per source address — behind a

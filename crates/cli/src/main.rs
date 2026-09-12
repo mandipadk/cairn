@@ -40,6 +40,10 @@ enum Command {
         /// page says the forge takes people by invitation.
         #[arg(long)]
         open_signup: bool,
+        /// With --open-signup: how many self-made accounts the forge takes
+        /// before /signup says it is full. Zero is no cap.
+        #[arg(long, default_value_t = 0)]
+        signup_cap: u32,
         /// Directory holding the hosted bare repositories.
         #[arg(long, default_value = "repos")]
         repos: PathBuf,
@@ -437,6 +441,7 @@ async fn main() -> anyhow::Result<()> {
             signing_key_file,
             operator_listen,
             open_signup,
+            signup_cap,
         } => {
             let git_version = cairn_git::preflight().context("checking the git on PATH")?;
             tracing::info!("cairn {}", cairn_core::VERSION);
@@ -622,8 +627,27 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
             if open_signup {
-                state = state.with_open_signup();
-                tracing::info!("sign-up is open: strangers may make accounts at /signup");
+                state = state.with_open_signup().with_signup_cap(signup_cap);
+                if signup_cap > 0 {
+                    tracing::info!(
+                        cap = signup_cap,
+                        "sign-up is open: strangers may make accounts at /signup, up to the cap"
+                    );
+                } else {
+                    tracing::info!(
+                        "sign-up is open with no cap: strangers may make accounts at /signup"
+                    );
+                }
+                if !trust_proxy {
+                    // The sign-up form is limited by address like every
+                    // public form; behind a proxy without this flag the
+                    // whole internet is one address, and five accounts an
+                    // hour is all it gets.
+                    tracing::warn!(
+                        "--open-signup without --trust-proxy: behind a reverse proxy every stranger \
+                         shares one sign-up allowance"
+                    );
+                }
             }
             cairn_server::spawn_queue_processor(state.clone());
             // The operator's door, when it is served apart: the same

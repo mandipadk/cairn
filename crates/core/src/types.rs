@@ -231,6 +231,10 @@ pub struct Principal {
     /// what it did stays on the record.
     #[serde(default = "yes")]
     pub active: bool,
+    /// A person who made their own account at `/signup`. Until an
+    /// address of theirs is confirmed, they create nothing.
+    #[serde(default)]
+    pub self_made: bool,
     /// Whose this is. An agent belongs to the person or organisation it
     /// was registered under, and counts against their quota; a person
     /// and an organisation belong to themselves.

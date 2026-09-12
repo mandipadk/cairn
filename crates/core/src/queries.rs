@@ -44,7 +44,8 @@ pub(crate) mod raw {
 
     pub fn principal(conn: &Connection, id: &str) -> CoreResult<Option<Principal>> {
         conn.prepare_cached(
-            "SELECT id, kind, display, model, harness, active, owner FROM principals WHERE id = ?",
+            "SELECT id, kind, display, model, harness, active, owner, self_made
+               FROM principals WHERE id = ?",
         )?
         .query_row(params![id], |row| {
             Ok((
@@ -55,20 +56,24 @@ pub(crate) mod raw {
                 row.get::<_, Option<String>>(4)?,
                 row.get::<_, i64>(5)?,
                 row.get::<_, Option<String>>(6)?,
+                row.get::<_, i64>(7)?,
             ))
         })
         .optional()?
-        .map(|(id, kind, display, model, harness, active, owner)| {
-            Ok(Principal {
-                active: active != 0,
-                kind: parsed(&format!("principal {id}"), &kind, PrincipalKind::parse)?,
-                id: PrincipalId(id),
-                display,
-                model,
-                harness,
-                owner: owner.map(PrincipalId),
-            })
-        })
+        .map(
+            |(id, kind, display, model, harness, active, owner, self_made)| {
+                Ok(Principal {
+                    active: active != 0,
+                    self_made: self_made != 0,
+                    kind: parsed(&format!("principal {id}"), &kind, PrincipalKind::parse)?,
+                    id: PrincipalId(id),
+                    display,
+                    model,
+                    harness,
+                    owner: owner.map(PrincipalId),
+                })
+            },
+        )
         .transpose()
     }
 
@@ -1475,6 +1480,16 @@ pub(crate) mod raw {
         })
     }
 
+    /// How many people made their own account and are still here: what
+    /// a sign-up cap counts.
+    pub fn self_made_count(conn: &Connection) -> CoreResult<i64> {
+        Ok(conn.query_row(
+            "SELECT COUNT(*) FROM principals WHERE self_made = 1 AND active = 1",
+            [],
+            |r| r.get(0),
+        )?)
+    }
+
     pub fn principal_count(conn: &Connection) -> CoreResult<i64> {
         Ok(conn.query_row("SELECT COUNT(*) FROM principals", [], |r| r.get(0))?)
     }
@@ -1491,6 +1506,11 @@ pub(crate) mod raw {
 impl Store {
     pub fn principal(&self, id: &PrincipalId) -> CoreResult<Option<Principal>> {
         raw::principal(&self.conn, id.as_str())
+    }
+
+    /// How many people made their own account here and are still active.
+    pub fn self_made_count(&self) -> CoreResult<i64> {
+        raw::self_made_count(&self.conn)
     }
 
     /// Everything `owner` owns, by name.

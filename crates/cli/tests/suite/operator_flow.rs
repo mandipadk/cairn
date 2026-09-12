@@ -518,3 +518,99 @@ async fn sign_up_is_a_switch() {
     let text = events.to_string();
     assert!(text.contains(r#""actor":"jane""#), "{text}");
 }
+
+/// A stranger's account is a reachable person's: it creates nothing
+/// until an address is confirmed, and the forge takes only so many.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_self_made_account_confirms_an_address_first_and_the_forge_fills_up() {
+    let tmp = tempfile::tempdir().unwrap();
+    let outbox = tmp.path().join("mail.txt");
+    let forge = boot_open_signup_mailing(&format!("cat >> {}", outbox.display()), 2).await;
+    let app = &forge.app;
+    let sign_up = |name: &str| {
+        format!(
+            "name={name}&display={name}&email={name}%40example.test&password=long-enough-passphrase"
+        )
+    };
+    let (status, location) = post_public_form(app, "/signup", &sign_up("bee")).await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{location}");
+    assert!(!location.contains("error="), "{location}");
+    // Bee is somebody, and is not yet allowed to make anything.
+    let (status, body) = api(app, "GET", "/api/principals/bee", "ada", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["self_made"], true, "{body}");
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/repos",
+        "bee",
+        Some(json!({ "name": "mine" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("confirmed an address"),
+        "{body}"
+    );
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/principals",
+        "bee",
+        Some(json!({ "id": "bee-bot", "kind": "agent", "display": "Bot" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    // The confirmation link went to the address; following it opens the forge.
+    let mail = std::fs::read_to_string(&outbox).unwrap_or_default();
+    let link = mail
+        .split_whitespace()
+        .find(|w| w.contains("/verify?token="))
+        .unwrap_or_else(|| panic!("no verification link in {mail}"))
+        .trim_matches(|c| c == '<' || c == '>')
+        .to_owned();
+    let path = link
+        .split("https://forge.example")
+        .nth(1)
+        .unwrap()
+        .to_owned();
+    let (status, _) = get_redirect(app, &path, "").await;
+    assert_ne!(status, StatusCode::NOT_FOUND);
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/repos",
+        "bee",
+        Some(json!({ "name": "mine" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // Two is what this forge takes; the third finds it full, and the
+    // form is not a way around the page.
+    let (status, _) = post_public_form(app, "/signup", &sign_up("cat")).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (status, page) = page_with_cookie(app, "/signup", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(page.contains("This forge is full"), "{page}");
+    let (status, location) = post_public_form(app, "/signup", &sign_up("dan")).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location, "/signup", "{location}");
+    let (status, _) = api(app, "GET", "/api/principals/dan", "ada", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // The operator's registrations do not count against the cap, and
+    // are not self-made.
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/principals",
+        "ada",
+        Some(json!({ "id": "eve", "kind": "human", "display": "Eve" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, eve) = api(app, "GET", "/api/principals/eve", "ada", None).await;
+    assert_eq!(eve["self_made"], false, "{eve}");
+}

@@ -118,6 +118,9 @@ pub struct AppState {
     operator_elsewhere: bool,
     /// Whether a stranger may make an account.
     open_signup: bool,
+    /// How many self-made accounts the forge takes before /signup says
+    /// it is full; zero is no cap.
+    signup_cap: u32,
     pub(crate) signup_limiter: crate::guard::LoginLimiter,
     proxy_trust: crate::guard::ProxyTrust,
     pub(crate) login_limiter: crate::guard::LoginLimiter,
@@ -189,6 +192,7 @@ impl AppState {
             signup_limiter: crate::guard::LoginLimiter::new(5, Duration::from_secs(3600)),
             operator_elsewhere: false,
             open_signup: false,
+            signup_cap: 0,
             report_limiter: crate::guard::LoginLimiter::new(5, Duration::from_secs(300)),
             reset_limiter: crate::guard::LoginLimiter::new(5, Duration::from_secs(300)),
             write_limiter: crate::guard::Limiter::new(
@@ -305,6 +309,27 @@ impl AppState {
 
     pub(crate) fn open_signup(&self) -> bool {
         self.open_signup
+    }
+
+    /// Refuse sign-ups past this many self-made accounts; zero is none.
+    pub fn with_signup_cap(mut self, cap: u32) -> Self {
+        self.signup_cap = cap;
+        self
+    }
+
+    /// Whether a stranger may make an account now: sign-up is open and
+    /// the cap, if any, is not reached.
+    pub(crate) fn signup(&self) -> crate::web::Signup {
+        if !self.open_signup() {
+            return crate::web::Signup::Closed;
+        }
+        if self.signup_cap > 0
+            && self.with_store(|s| s.self_made_count()).unwrap_or(i64::MAX)
+                >= i64::from(self.signup_cap)
+        {
+            return crate::web::Signup::Full;
+        }
+        crate::web::Signup::Open
     }
 
     pub(crate) fn dev_identity(&self) -> bool {

@@ -125,6 +125,16 @@ pub async fn boot_open_signup() -> Forge {
     forge
 }
 
+/// A forge open to strangers, up to a cap, that mails — the shape a
+/// hosted forge has when the switch is on.
+pub async fn boot_open_signup_mailing(command: &str, cap: u32) -> Forge {
+    let mut forge = boot_mailing_public(command).await;
+    let state = forge.state.clone().with_open_signup().with_signup_cap(cap);
+    forge.app = router(state.clone());
+    forge.state = state;
+    forge
+}
+
 /// A forge with the dev identity header switched off — how a real
 /// deployment runs, where identity comes only from a token. Anything
 /// asserting something about authentication has to use this, because the

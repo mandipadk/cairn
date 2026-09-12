@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// Bump whenever a projection table changes shape. The log is never
 /// touched; projections are rebuilt from it.
-const SCHEMA_VERSION: i64 = 30;
+const SCHEMA_VERSION: i64 = 31;
 
 /// The log itself, which outlives every schema.
 const EVENT_SCHEMA: &str = "
@@ -215,7 +215,11 @@ CREATE TABLE IF NOT EXISTS principals (
   model   TEXT,
   harness TEXT,
   active  INTEGER NOT NULL DEFAULT 1,
-  owner   TEXT
+  owner   TEXT,
+  -- A person who made their own account at /signup, as against one
+  -- somebody registered or invited: what they may do before an
+  -- address of theirs is confirmed is narrower.
+  self_made INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_principals_owner ON principals (owner);
 
@@ -1726,16 +1730,23 @@ fn apply(tx: &Transaction, env: &Envelope) -> CoreResult<()> {
                 crate::types::PrincipalKind::Agent => owner.as_ref().map_or(actor, |o| o.as_str()),
                 _ => principal.as_str(),
             };
+            // Their own doing: a person registering themselves on a forge
+            // that already has people. The first account is the
+            // bootstrap, which is the operator's, not a stranger's.
+            let self_made = *principal_kind == crate::types::PrincipalKind::Human
+                && actor == principal.as_str()
+                && crate::queries::raw::principal_count(tx)? > 0;
             tx.execute(
-                "INSERT INTO principals (id, kind, display, model, harness, owner)
-                   VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO principals (id, kind, display, model, harness, owner, self_made)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)",
                 params![
                     principal.as_str(),
                     principal_kind.as_str(),
                     display,
                     model,
                     harness,
-                    owner
+                    owner,
+                    self_made as i64
                 ],
             )?;
         }
@@ -3056,7 +3067,7 @@ mod projection_shape {
         assert_eq!(
             (super::SCHEMA_VERSION, shape.as_str()),
             (
-                30,
+                31,
                 r#"{"require_executed_check":true,"independence":"human_or_two_models","require_runner_verification":false,"runner_quorum":1,"required_domains":[],"require_concerns_resolved":true,"attention_budget":null,"agents_act_in_sessions":false,"trust":null}"#
             ),
             "the policy's stored shape changed: bump SCHEMA_VERSION and pin the new shape here"
@@ -3109,7 +3120,7 @@ mod projection_shape {
         assert_eq!(
             (super::SCHEMA_VERSION, shape.as_str()),
             (
-                30,
+                31,
                 r#"{"repos":0,"agents":null,"disk":5368709120,"tokens":50}"#
             ),
             "the quota's stored shape changed: bump SCHEMA_VERSION and pin the new shape here"

@@ -375,7 +375,8 @@ fn clock(ts: &str) -> &str {
 /// nothing about why they would want it.
 /// Making an account: the form when this forge lets strangers in, and
 /// otherwise the plain fact that it does not, with the way to ask.
-pub fn signup(theme: Theme, open: bool, error: Option<&str>) -> Markup {
+pub fn signup(theme: Theme, state: super::Signup, error: Option<&str>) -> Markup {
+    let open = state == super::Signup::Open;
     layout(
         theme,
         None,
@@ -415,6 +416,9 @@ pub fn signup(theme: Theme, open: bool, error: Option<&str>) -> Markup {
                             button class="btn wide" type="submit" { "Make the account" }
                         }
                         p class="hint" { "Already here? " a href="/login" { "Sign in" } "." }
+                    } @else if state == super::Signup::Full {
+                        p class="plain" { "This forge is full: as many people have made accounts as it takes." }
+                        p class="hint" { "Ask on the " a href="/" { "front page" } " and whoever runs it will make room or say where else to go; or sign in if you have an account: " a href="/login" { "Sign in" } "." }
                     } @else {
                         p class="plain" { "This forge takes people by invitation." }
                         p class="hint" { "Ask for one from the " a href="/" { "front page" } ", or sign in if you have been invited: " a href="/login" { "Sign in" } "." }

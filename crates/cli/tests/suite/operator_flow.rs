@@ -688,3 +688,21 @@ async fn the_unclaimed_are_listed_and_let_go_behind_the_door() {
     let (_, kim) = api(&door, "GET", "/api/principals/kim", "ada", None).await;
     assert_eq!(kim["active"], true, "{kim}");
 }
+
+/// The forge's numbers are the operator's, at the door.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_forge_counts_itself_for_the_operator() {
+    let forge = boot().await;
+    let (public, door) = split_listeners(&forge);
+    let (status, _) = api(&public, "GET", "/api/forge/metrics", "ada", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, body) = api(&door, "GET", "/api/forge/metrics", "scout", None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, m) = api(&door, "GET", "/api/forge/metrics", "ada", None).await;
+    assert_eq!(status, StatusCode::OK, "{m}");
+    assert!(m["people"].as_i64().unwrap() >= 1, "{m}");
+    assert!(m["agents"].as_i64().unwrap() >= 1, "{m}");
+    assert!(m["repos"].as_i64().unwrap() >= 1, "{m}");
+    assert!(m["events"].as_i64().unwrap() >= 1, "{m}");
+    assert_eq!(m["self_made"], 0, "{m}");
+}

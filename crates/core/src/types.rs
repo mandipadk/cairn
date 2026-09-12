@@ -915,6 +915,27 @@ pub struct Unclaimed {
     pub invitation_until: Option<String>,
 }
 
+/// What a forge counts, for whoever runs it: the few numbers that say
+/// how full and how busy it is.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Metrics {
+    pub people: i64,
+    pub organisations: i64,
+    pub agents: i64,
+    /// People who made their own account, of the people above.
+    pub self_made: i64,
+    pub repos: i64,
+    pub open_changes: i64,
+    pub landed_changes: i64,
+    pub open_tasks: i64,
+    pub waitlist: i64,
+    pub open_reports: i64,
+    /// Every repository's git storage, as last measured, in bytes.
+    pub disk_bytes: i64,
+    /// The log's length.
+    pub events: i64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WaitlistEntry {
     pub email: String,

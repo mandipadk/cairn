@@ -185,6 +185,7 @@ pub fn router(state: AppState) -> Router {
             get(receipts::repo_receipts),
         )
         .route("/api/forge/key", get(receipts::forge_key))
+        .route("/api/forge/metrics", get(routes::metrics))
         .route("/api/changes/{id}/merge", post(routes::merge_change))
         .route("/api/changes/{id}/enqueue", post(routes::enqueue_change))
         .route("/api/changes/{id}/dequeue", post(routes::dequeue_change))

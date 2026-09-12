@@ -2348,6 +2348,15 @@ pub async fn purge_unclaimed(State(app): State<AppState>, actor: Actor) -> ApiRe
     Ok(Json(json!({ "purged": gone })))
 }
 
+/// The few numbers that say how full and how busy the forge is.
+pub async fn metrics(State(app): State<AppState>, actor: Actor) -> ApiResult<Json<Value>> {
+    operator(&app, &actor)?;
+    let metrics = app.with_store(|s| s.metrics())?;
+    Ok(Json(
+        serde_json::to_value(metrics).unwrap_or_else(|_| json!({})),
+    ))
+}
+
 /// Who asked for an account, oldest first.
 pub async fn list_waitlist(State(app): State<AppState>, actor: Actor) -> ApiResult<Json<Value>> {
     operator(&app, &actor)?;

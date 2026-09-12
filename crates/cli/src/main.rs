@@ -267,6 +267,11 @@ enum AdminCommand {
         #[arg(long)]
         remove: Option<String>,
     },
+    /// The few numbers that say how full and how busy this forge is.
+    Metrics {
+        #[arg(long, default_value = "cairn.db")]
+        db: PathBuf,
+    },
     /// Who was invited and never came. With --purge, let go those whose
     /// invitation has lapsed: deactivated, on the record, as whoever
     /// runs this command.
@@ -1039,6 +1044,24 @@ async fn main() -> anyhow::Result<()> {
                         println!("  {who}");
                     }
                 }
+            }
+            AdminCommand::Metrics { db } => {
+                let store = Store::open(&db)
+                    .with_context(|| format!("opening forge database at {}", db.display()))?;
+                let m = store.metrics()?;
+                println!("people        {}  (self-made {})", m.people, m.self_made);
+                println!("organisations {}", m.organisations);
+                println!("agents        {}", m.agents);
+                println!("repositories  {}", m.repos);
+                println!(
+                    "changes       {} open, {} landed",
+                    m.open_changes, m.landed_changes
+                );
+                println!("tasks         {} open", m.open_tasks);
+                println!("waitlist      {}", m.waitlist);
+                println!("reports       {} open", m.open_reports);
+                println!("disk          {} bytes", m.disk_bytes);
+                println!("events        {}", m.events);
             }
             AdminCommand::Waitlist { db, remove } => {
                 let mut store = Store::open(&db)

@@ -226,6 +226,12 @@ the unscoped admin grant:
   offline). The name stays on the log; whoever runs the forge can
   reactivate an account that turns up after all.
 - `GET /api/reports` — what people said broke; `POST /api/reports/{id}/dismiss`.
+- `GET /api/forge/metrics` — the few numbers that say how full and how
+  busy the forge is: people (and how many made their own account),
+  organisations, agents, repositories, changes open and landed, tasks
+  open, the waitlist, open reports, disk as last measured, and the
+  log's length. `cairn admin metrics` prints the same offline. What
+  the console's fleet page will draw its numbers from.
 - The switch for strangers: `cairn serve --open-signup` lets anyone make
   an account at `/signup` (name, password, an address to confirm), rate
   limited by source like every public form. Off — the default — the page

@@ -1490,6 +1490,26 @@ pub(crate) mod raw {
         )?)
     }
 
+    pub fn metrics(conn: &Connection) -> CoreResult<crate::types::Metrics> {
+        let count = |sql: &str| -> CoreResult<i64> { Ok(conn.query_row(sql, [], |r| r.get(0))?) };
+        Ok(crate::types::Metrics {
+            people: count("SELECT COUNT(*) FROM principals WHERE kind = 'human' AND active = 1")?,
+            organisations: count(
+                "SELECT COUNT(*) FROM principals WHERE kind = 'team' AND active = 1",
+            )?,
+            agents: count("SELECT COUNT(*) FROM principals WHERE kind = 'agent' AND active = 1")?,
+            self_made: count("SELECT COUNT(*) FROM principals WHERE self_made = 1 AND active = 1")?,
+            repos: count("SELECT COUNT(*) FROM repos")?,
+            open_changes: count("SELECT COUNT(*) FROM changes WHERE state = 'open'")?,
+            landed_changes: count("SELECT COUNT(*) FROM changes WHERE state = 'merged'")?,
+            open_tasks: count("SELECT COUNT(*) FROM tasks WHERE state IN ('open', 'claimed')")?,
+            waitlist: count("SELECT COUNT(*) FROM waitlist")?,
+            open_reports: count("SELECT COUNT(*) FROM reports")?,
+            disk_bytes: count("SELECT COALESCE(SUM(bytes), 0) FROM repo_sizes")?,
+            events: count("SELECT COUNT(*) FROM events")?,
+        })
+    }
+
     pub fn principal_count(conn: &Connection) -> CoreResult<i64> {
         Ok(conn.query_row("SELECT COUNT(*) FROM principals", [], |r| r.get(0))?)
     }
@@ -1510,6 +1530,11 @@ impl Store {
             .into_iter()
             .filter_map(|id| PrincipalId::new(&id))
             .collect())
+    }
+
+    /// What this forge counts, for whoever runs it.
+    pub fn metrics(&self) -> CoreResult<crate::types::Metrics> {
+        raw::metrics(&self.conn)
     }
 
     pub fn principal(&self, id: &PrincipalId) -> CoreResult<Option<Principal>> {

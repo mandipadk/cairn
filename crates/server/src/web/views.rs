@@ -2103,6 +2103,7 @@ fn allowance(what: &str, used: String, limit: Option<String>) -> Markup {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // one page, one set of facts about its owner
 pub fn owner(
     theme: Theme,
     who: Reading<'_>,
@@ -2110,10 +2111,13 @@ pub fn owner(
     repos: &[cairn_core::Repo],
     members: &[cairn_core::PrincipalId],
     may_create: bool,
+    // Whether the viewer may change who is on the organisation.
+    may_manage: bool,
     // What this owner is taking up and what they may, shown only to
     // them and to whoever runs the forge: how full somebody's account
     // is is their business.
     allowances: Option<(cairn_core::Usage, cairn_core::Quota)>,
+    error: Option<&str>,
 ) -> Markup {
     let organisation = owner.kind == cairn_core::PrincipalKind::Team;
     layout_reading(
@@ -2168,14 +2172,32 @@ pub fn owner(
                 }
                 @if organisation {
                     div class="sechead" { b { "Members" } span { (members.len()) } }
+                    @if let Some(error) = error { p class="error" { (error) } }
                     @if members.is_empty() { p class="empty" { "Nobody yet." } }
                     div class="ftable" {
                         @for member in members {
                             div class="trow link" {
                                 a class="fname" href={ "/" (member.as_str()) } { (member.as_str()) }
-                                span {} span {}
+                                span {}
+                                span {
+                                    @if may_manage {
+                                        form class="inline" method="post" action={ "/" (owner.id.as_str()) "/members" } {
+                                            input type="hidden" name="action" value="remove";
+                                            input type="hidden" name="member" value=(member.as_str());
+                                            button class="linkish" type="submit" { "Remove" }
+                                        }
+                                    }
+                                }
                             }
                         }
+                    }
+                    @if may_manage {
+                        form class="inline" method="post" action={ "/" (owner.id.as_str()) "/members" } {
+                            input type="hidden" name="action" value="add";
+                            input type="text" name="member" placeholder="who" pattern="[a-z0-9-]{2,64}" required;
+                            button class="btn" type="submit" { "Add member" }
+                        }
+                        p class="hint" { "Members create under the organisation and hold what it holds; a member cannot leave it empty." }
                     }
                 }
             }

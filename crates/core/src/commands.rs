@@ -2457,6 +2457,33 @@ impl Store {
     /// Put somebody on a team. Running the forge is what this is, since
     /// a team's grants become theirs at once; and a team cannot contain
     /// a team, because authority should be readable in one step.
+    /// Who may change an organisation's membership: its members, and
+    /// whoever runs the forge. A member acts on a standing credential —
+    /// a session credential is for a repository's work, not for who is
+    /// on the organisation.
+    fn may_manage_team(
+        tx: &Transaction,
+        acting: Acting<'_>,
+        actor: &PrincipalId,
+        team: &PrincipalId,
+    ) -> CoreResult<bool> {
+        let team_record = raw::principal(tx, team.as_str())?
+            .ok_or_else(|| CoreError::NotFound(format!("principal {team}")))?;
+        require(team_record.kind == PrincipalKind::Team, || {
+            format!("{team} is not a team")
+        })?;
+        if authorize(tx, acting, actor, Capability::Admin, None).is_ok() {
+            return Ok(true);
+        }
+        not_under_a_scope(acting, "change an organisation's members")?;
+        if raw::is_team_member(tx, team.as_str(), actor.as_str())? {
+            return Ok(false);
+        }
+        Err(CoreError::Forbidden(format!(
+            "{actor} is not on {team}: its members change who is, or whoever runs the forge"
+        )))
+    }
+
     pub fn add_team_member(
         &mut self,
         actor: &PrincipalId,
@@ -2464,18 +2491,12 @@ impl Store {
         member: &PrincipalId,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        authorize(
+        Self::may_manage_team(
             &tx,
             Acting::of(&self.scope, self.admin_elsewhere),
             actor,
-            Capability::Admin,
-            None,
+            team,
         )?;
-        let team_record = raw::principal(&tx, team.as_str())?
-            .ok_or_else(|| CoreError::NotFound(format!("principal {team}")))?;
-        require(team_record.kind == PrincipalKind::Team, || {
-            format!("{team} is not a team")
-        })?;
         let who = raw::principal(&tx, member.as_str())?
             .ok_or_else(|| CoreError::NotFound(format!("principal {member}")))?;
         require(who.kind != PrincipalKind::Team, || {
@@ -2509,19 +2530,25 @@ impl Store {
         member: &PrincipalId,
     ) -> CoreResult<Envelope> {
         let tx = self.conn.transaction()?;
-        authorize(
+        let runs_the_forge = Self::may_manage_team(
             &tx,
             Acting::of(&self.scope, self.admin_elsewhere),
             actor,
-            Capability::Admin,
-            None,
+            team,
         )?;
-        require(
-            raw::members_of(&tx, team.as_str())?
-                .iter()
-                .any(|m| m == member),
-            || format!("{member} is not on {team}"),
-        )?;
+        let members = raw::members_of(&tx, team.as_str())?;
+        require(members.iter().any(|m| m == member), || {
+            format!("{member} is not on {team}")
+        })?;
+        // An organisation with nobody on it is nobody's: what it owns
+        // would be held by no one. A member cannot do that to it;
+        // whoever runs the forge can, and answers for what follows.
+        if !runs_the_forge && members.len() == 1 {
+            return Err(CoreError::Conflict(format!(
+                "{member} is the last member of {team}: an organisation is not emptied by a \
+                 member; add somebody first, or ask whoever runs the forge"
+            )));
+        }
         let env = append(
             &tx,
             actor,

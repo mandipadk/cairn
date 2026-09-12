@@ -146,3 +146,87 @@ async fn an_organisation_owns_what_its_members_make_under_it() {
     assert_eq!(repo["owner"], "crew");
     assert_eq!(repo["name"], "crew/demo");
 }
+
+/// An organisation's members change who is on it; nobody but the
+/// operator empties it.
+#[tokio::test(flavor = "multi_thread")]
+async fn members_manage_the_organisation_but_never_empty_it() {
+    let forge = boot().await;
+    let app = &forge.app;
+    for (id, display) in [("bee", "Bee"), ("cat", "Cat"), ("dan", "Dan")] {
+        api(
+            app,
+            "POST",
+            "/api/principals",
+            "ada",
+            Some(json!({ "id": id, "kind": "human", "display": display })),
+        )
+        .await;
+    }
+    let (_, ada) = sign_in_as(&forge, "ada").await;
+    post_form(app, "/teams", &ada, "action=create&id=crew&display=Crew").await;
+    post_form(app, "/teams", &ada, "action=add&team=crew&member=bee").await;
+    // Bee, a member, brings cat in from the organisation's page.
+    let (_, bee) = sign_in_as(&forge, "bee").await;
+    let (status, location) = post_form(app, "/crew/members", &bee, "action=add&member=cat").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location, "/crew", "{location}");
+    let (_, page) = page_with_cookie(app, "/crew", &bee).await;
+    assert!(page.contains(r#"href="/cat""#), "{page}");
+    assert!(page.contains("Add member"), "{page}");
+    // Cat may now create under it.
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/repos",
+        "cat",
+        Some(json!({ "name": "shared", "owner": "crew" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // Dan is not on it and changes nothing; the page shows no form.
+    let (_, dan) = sign_in_as(&forge, "dan").await;
+    let (_, location) = post_form(app, "/crew/members", &dan, "action=add&member=dan").await;
+    assert!(location.contains("error="), "{location}");
+    let (_, page) = page_with_cookie(app, "/crew", &dan).await;
+    assert!(!page.contains("Add member"), "{page}");
+    // Bee removes cat, then herself is refused: the last one stays.
+    let (_, location) = post_form(app, "/crew/members", &bee, "action=remove&member=cat").await;
+    assert_eq!(location, "/crew", "{location}");
+    let (_, location) = post_form(app, "/crew/members", &bee, "action=remove&member=bee").await;
+    assert!(
+        location.contains("last+member") || location.contains("last%20member"),
+        "{location}"
+    );
+    // The API says the same, on the public listener too: membership is
+    // a member's act, not the door's.
+    let (public, _) = split_listeners(&forge);
+    let (status, body) = api(
+        &public,
+        "POST",
+        "/api/teams/crew/members",
+        "bee",
+        Some(json!({ "member": "cat" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // Whoever runs the forge may empty it.
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/teams/crew/members/remove",
+        "ada",
+        Some(json!({ "member": "cat" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/teams/crew/members/remove",
+        "ada",
+        Some(json!({ "member": "bee" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}

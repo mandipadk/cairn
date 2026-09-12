@@ -92,6 +92,7 @@ pub fn routes() -> Router<AppState> {
         .route("/teams", get(teams_page).post(teams_action))
         .route("/join", get(join))
         .route("/{owner}", get(owner_page))
+        .route("/{owner}/members", post(owner_members_action))
         .route("/{owner}/{repo}", get(repo_page))
         .route("/{owner}/{repo}/tree/{*path}", get(tree_page))
         .route("/{owner}/{repo}/blame/{*path}", get(blame_page))
@@ -1967,11 +1968,58 @@ fn chrome_public(app: &AppState) -> Result<Chrome, cairn_core::CoreError> {
 /// An owner's page: a person or an organisation and what they own, as
 /// far as the reader may see. An old repository address that begins
 /// here is sent on by the old-names middleware, not by this handler.
+#[derive(Deserialize)]
+struct OwnerQuery {
+    #[serde(default)]
+    error: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MembersForm {
+    action: String,
+    #[serde(default)]
+    member: String,
+}
+
+/// An organisation's members change who is on it, from its page.
+async fn owner_members_action(
+    State(app): State<AppState>,
+    viewer: Viewer,
+    Path(owner): Path<String>,
+    Form(form): Form<MembersForm>,
+) -> Response {
+    let Some(team) = PrincipalId::new(&owner) else {
+        return not_found();
+    };
+    let back = |error: Option<String>| match error {
+        Some(error) => {
+            Redirect::to(&format!("/{owner}?error={}", urlencode(&error))).into_response()
+        }
+        None => Redirect::to(&format!("/{owner}")).into_response(),
+    };
+    let Some(member) = PrincipalId::new(form.member.trim()) else {
+        return back(Some("say who".into()));
+    };
+    let result = match form.action.as_str() {
+        "add" => app.with_store(|s| s.add_team_member(&viewer.0, &team, &member)),
+        "remove" => app.with_store(|s| s.remove_team_member(&viewer.0, &team, &member)),
+        other => return back(Some(format!("unknown action {other}"))),
+    };
+    match result {
+        Ok(env) => {
+            app.publish(&env);
+            back(None)
+        }
+        Err(err) => back(Some(humane(&err))),
+    }
+}
+
 async fn owner_page(
     State(app): State<AppState>,
     Palette(theme): Palette,
     reader: Reader,
     Path(owner): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<OwnerQuery>,
 ) -> Response {
     let Some(owner_id) = PrincipalId::new(&owner) else {
         return not_found();
@@ -2034,6 +2082,17 @@ async fn owner_page(
             .ok(),
         _ => None,
     };
+    // Its members change who is on it; so does whoever runs the forge.
+    let may_manage = organisation
+        && match &who {
+            Who::Signed(viewer) => {
+                viewer.1.admin
+                    || app
+                        .with_store(|s| s.is_team_member(&owner_id, &viewer.0))
+                        .unwrap_or(false)
+            }
+            Who::Anonymous(_) => false,
+        };
     views::owner(
         theme,
         who.reading(),
@@ -2041,7 +2100,9 @@ async fn owner_page(
         &repos,
         &members,
         may_create,
+        may_manage,
         allowances,
+        query.error.as_deref(),
     )
     .into_response()
 }

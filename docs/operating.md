@@ -379,7 +379,9 @@ address says so: `/ada/demo` on the pages, `/api/repos/ada/demo` on the
 API, `/git/ada/demo` for git. Names are unique per owner, not per forge.
 An organisation is a team that can own: any member may create a
 repository under it, accept one offered to it, and act as its owner;
-membership is whoever runs the forge's to change. Every owner has a page
+its members change who is on it, from the organisation's page or
+`POST /api/teams/{team}/members` and `…/members/remove` — a member
+cannot leave it empty — and so can whoever runs the forge. Every owner has a page
 at `/{owner}` listing what the reader may see of theirs.
 
 An owner, or whoever runs the forge, can rename, archive and delete a

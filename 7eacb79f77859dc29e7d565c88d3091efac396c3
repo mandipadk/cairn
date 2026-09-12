@@ -1,0 +1,129 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Idoor0112",
+      "id": "c-5mq7pbdz18vz4htknf7p9rxc5c",
+      "landed_oid": "7eacb79f77859dc29e7d565c88d3091efac396c3",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 112,
+      "opened_at": "2026-09-12T17:24:47.843476663Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn/cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Keep the door's promise",
+      "updated_at": "2026-09-12T17:25:51.102169658Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-5mq7pbdz18vz4htknf7p9rxc5c",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-3gm6ss1r126ej1de9ynwgp5mk8",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 962,
+        "summary": "fmt, clippy -D warnings, the suite and the first-run walk pass. New: the admin grant counts only at the door (visibility, transfer, policy, rename, archive, revoke on another's repository are 403 on the public listener), and re-inviting a claimed account to a new address is 409.",
+        "unchecked": [
+          "The web forms' twins (mint, grant, mirror, transfer from the pages) are covered by the same store-level rule, not by a page test of their own."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "7eacb79f77859dc29e7d565c88d3091efac396c3",
+    "landed_at": "2026-09-12T17:25:51.102169658Z",
+    "merged_by": "mandip",
+    "repo": "cairn/cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-5mq7pbdz18vz4htknf7p9rxc5c",
+      "commit_oid": "7eacb79f77859dc29e7d565c88d3091efac396c3",
+      "message": "Keep the door's promise\n\nThe operator's door was a list of paths. Underneath it, the unscoped\nadmin grant still satisfied every authority check on the public\nlistener, so an admin token that came through the tunnel could make\nany repository public, move it, rename it, set its policy or its\nmirror, bind a workload identity, or revoke anybody's credentials —\non routes that are an owner's the rest of the time. The grant now\ncounts only where the door is: the store is told per request which\nlistener a call came in on, and on the public one an admin's token is\nan owner's token and nothing more. The path list stays as the shape\nthe public listener answers in.\n\nAnd an invitation could hand an account over: inviting a name that\nalready existed put a new address on it and mailed a link that, when\nfollowed, proved that address and signed its holder in as that\naccount. With the console suggesting names from the local part of an\naddress, a stranger asking for an account as mandip@elsewhere would\nhave arrived ticked as mandip. An account anybody has been — signed\nin, proved an address, set a password — is refused a new address;\nthe address already on it may be sent a fresh link. A mail the forge\ncould not send also no longer takes the person off the waitlist.\n\nChange-Id: Idoor0112\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "crates/cli/tests/suite/operator_flow.rs",
+        "crates/core/src/commands.rs",
+        "crates/core/src/store.rs",
+        "crates/server/src/routes.rs",
+        "crates/server/src/state.rs",
+        "docs/operating.md"
+      ],
+      "session": null
+    },
+    "seq": 965,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-3gm6ss1r126ej1de9ynwgp5mk8",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-3gm6ss1r126ej1de9ynwgp5mk8",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 130 judged claims, 95% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 5 path(s) outside docs/, *.md: crates/cli/tests/suite/operator_flow.rs, crates/core/src/commands.rs, crates/core/src/store.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-5mq7pbdz18vz4htknf7p9rxc5c",
+        "claim": "cl-3gm6ss1r126ej1de9ynwgp5mk8",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "id": "vr-5hj4w3aszmm152tcx3d3zdvx8r",
+        "observed": "exit 0: Doc-tests cairn_server",
+        "revision": 1,
+        "seq": 963
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "MoqudobmIFK25/azWGzq56nXxtdqK119SnXnyrQLhAn6m0xZpXUq+mopp+YJp1B3pgFUDTiFVtoLPnybdadKDw=="
+  }
+}

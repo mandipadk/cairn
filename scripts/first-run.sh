@@ -21,13 +21,19 @@ SERVE=
 trap '[ -n "$SERVE" ] && kill "$SERVE" 2>/dev/null; rm -rf "$W"' EXIT
 cd "$W"
 PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+DOORPORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 URL=http://127.0.0.1:$PORT
+# The operator's door, served apart as a hosted forge serves it: what
+# registers people and hands out authority answers here and nowhere else.
+DOOR=http://127.0.0.1:$DOORPORT
 
 json() { python3 -c "import json, sys; d = json.load(sys.stdin); print($1)"; }
 expect() { [ "$1" = "$2" ] || { echo "!! $3: expected $2, got $1"; exit 1; }; }
 status() { curl -s -o /dev/null -w '%{http_code}' "$URL$1"; }
 api() { curl -sS -X POST "$URL/api/$1" -H "Authorization: Bearer $2" -H 'content-type: application/json' -d "$3"; }
+door() { curl -sS -X POST "$DOOR/api/$1" -H "Authorization: Bearer $2" -H 'content-type: application/json' -d "$3"; }
 get() { curl -sS "$URL/api/$1" -H "Authorization: Bearer $2"; }
+door_get() { curl -sS "$DOOR/api/$1" -H "Authorization: Bearer $2"; }
 as_scout() { GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c credential.helper="!f() { echo username=scout; echo password=$AGENT; }; f" "$@"; }
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 
@@ -40,31 +46,37 @@ TOKEN=$("$BIN" admin bootstrap --db forge.db ada --display "Ada" | grep -oE 'cai
 # A small allowance for readers with no account, so the walk can show
 # what running out looks like without making hundreds of requests to
 # get there. Signed-in work keeps the ordinary allowance.
-"$BIN" serve --db forge.db --listen "127.0.0.1:$PORT" --anonymous-reads-per-minute 20 >serve.log 2>&1 &
+# The public address, as a hosted forge names it: links the forge
+# hands out — an invitation minted at the door — point here.
+CAIRN_PUBLIC_URL="$URL" "$BIN" serve --db forge.db --listen "127.0.0.1:$PORT" --operator-listen "127.0.0.1:$DOORPORT" --anonymous-reads-per-minute 20 >serve.log 2>&1 &
 SERVE=$!
 for _ in $(seq 1 60); do curl -sf -m 1 "$URL/healthz" >/dev/null 2>&1 && break; sleep 0.5; done
 curl -sf "$URL/healthz" >/dev/null || { echo "!! serve did not come up"; cat serve.log; exit 1; }
 expect "$(status /)" 200 "the home page answers a stranger"
 expect "$(status /login)" 200 "the sign-in page answers a stranger"
 
+echo "operating.md: the operator's door is not on the public listener"
+expect "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$URL/api/principals" -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"id": "nobody", "kind": "human", "display": "Nobody"}')" 404 "registering somebody is not here, admin token or not"
+expect "$(status /people)" 404 "nor is the People page"
+
 echo "operating.md: a repository, an agent, a grant, the agent's token"
 expect "$(api repos "$TOKEN" '{"name": "demo"}' | json "d['event']['kind']")" repo_created "create a repository"
-expect "$(api principals "$TOKEN" '{"id": "scout", "kind": "agent", "display": "Scout", "model": "claude-fable-5"}' | json "d['event']['kind']")" principal_registered "register an agent"
-expect "$(api grants "$TOKEN" '{"grantee": "scout", "actions": ["task", "push"]}' | json "d['event']['kind']")" grant_issued "grant task and push"
-AGENT=$(api principals/scout/tokens "$TOKEN" '{"label": "first-run"}' | json "d['token']")
+expect "$(door principals "$TOKEN" '{"id": "scout", "kind": "agent", "display": "Scout", "model": "claude-fable-5"}' | json "d['event']['kind']")" principal_registered "register an agent, at the door"
+expect "$(door grants "$TOKEN" '{"grantee": "scout", "actions": ["task", "push"]}' | json "d['event']['kind']")" grant_issued "grant task and push, at the door"
+AGENT=$(door principals/scout/tokens "$TOKEN" '{"label": "first-run"}' | json "d['token']")
 [ -n "$AGENT" ] || { echo "!! no agent token was minted"; exit 1; }
 
 echo "README: an organisation is a team that owns; a member creates under it from New"
-form() { curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -b "cairn_token=$TOKEN" -X POST "$URL$1" --data "$2"; }
-expect "$(form /teams 'action=create&id=crew&display=Crew')" "303 $URL/teams" "make the organisation"
-expect "$(form /teams 'action=add&team=crew&member=ada')" "303 $URL/teams" "join it"
+form() { curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -b "cairn_token=$TOKEN" -X POST "$DOOR$1" --data "$2"; }
+expect "$(form /teams 'action=create&id=crew&display=Crew')" "303 $DOOR/teams" "make the organisation, at the door"
+expect "$(form /teams 'action=add&team=crew&member=ada')" "303 $DOOR/teams" "join it"
 expect "$(api repos "$TOKEN" '{"name": "shared", "owner": "crew"}' | json "d['event']['repo']")" crew/shared "create a repository under it"
 expect "$(status /crew)" 404 "an organisation with nothing public is nothing to a stranger"
 curl -s -b "cairn_token=$TOKEN" "$URL/crew" | grep -q 'crew/shared' || { echo "!! the organisation's page does not list its repository"; exit 1; }
 curl -s -b "cairn_token=$TOKEN" "$URL/crew" | grep -q 'Allowance' || { echo "!! the organisation's page does not show what it may take up"; exit 1; }
 
 echo "operating.md: an owner past what they may take up is refused by the numbers"
-expect "$(api principals/crew/quota "$TOKEN" '{"repos": 1}' | json "d['event']['kind']")" quota_overridden "set what the organisation may have"
+expect "$(door principals/crew/quota "$TOKEN" '{"repos": 1}' | json "d['event']['kind']")" quota_overridden "set what the organisation may have, at the door"
 REFUSAL=$(api repos "$TOKEN" '{"name": "second", "owner": "crew"}')
 for phrase in over_quota 'has 1 repositories' 'allows 1'; do
   case "$REFUSAL" in
@@ -98,9 +110,18 @@ get "changes/$CH/receipt" "$TOKEN" >receipt.json
 KEY=$(curl -sS "$URL/api/forge/key" | json "d['key']")
 "$BIN" receipt verify receipt.json --key "$KEY" >/dev/null || { echo "!! the receipt did not verify"; exit 1; }
 expect "$(get repos/ada/demo/debt "$TOKEN" | json "d['counts']['claimed']")" 1 "the debt map counts one claimed line"
-for p in /ada/demo /ada/demo/changes/1 /ada/demo/debt /tasks /agents /people; do
+for p in /ada/demo /ada/demo/changes/1 /ada/demo/debt /tasks /agents; do
   expect "$(status "$p")" 303 "a private page sends a stranger to sign in ($p)"
 done
+
+echo "operating.md: somebody asks on the front page, the operator invites them, the link signs them in once"
+expect "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$URL/waitlist" --data 'email=jane%40example.test&note=for+work')" 303 "the request form answers a stranger"
+expect "$(door_get waitlist "$TOKEN" | json "[w['email'] for w in d['waitlist']]")" "['jane@example.test']" "the door lists who asked"
+LINK=$(door invitations "$TOKEN" '{"id": "jane", "display": "Jane", "email": "jane@example.test"}' | json "d['link']")
+case "$LINK" in "$URL"/join?token=*) ;; *) echo "!! the invitation is not a link to this forge: $LINK"; exit 1;; esac
+expect "$(door_get waitlist "$TOKEN" | json "len(d['waitlist'])")" 0 "and they are off the list"
+curl -s -o /dev/null -D join.h "$LINK"; grep -qi '^set-cookie: cairn_session=' join.h || { echo "!! following the invitation did not sign jane in"; exit 1; }
+curl -s -o /dev/null -D again.h "$LINK"; grep -qi '^set-cookie: cairn_session=' again.h && { echo "!! the invitation signed somebody in twice"; exit 1; }
 
 echo "README: an agent connects over MCP"
 TOOLS=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"first-run","version":"0"}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
@@ -129,12 +150,12 @@ echo "operating.md: an owner leaves with bundles, another forge takes them in, a
 BUNDLE=$(ls out/ada-*/bundles/demo.bundle)
 [ -s "$BUNDLE" ] || { echo "!! the export wrote no bundle for ada/demo"; exit 1; }
 python3 -c 'import json,glob,sys; m=json.load(open(glob.glob("out/ada-*/manifest.json")[0])); sys.exit(0 if any(r["name"]=="ada/demo" for r in m["repos"]) else 1)' || { echo "!! the manifest does not name ada/demo"; exit 1; }
-expect "$(api principals "$TOKEN" '{"id": "bee", "kind": "human", "display": "Bee"}' | json "d['event']['kind']")" principal_registered "an account for the one who takes it in"
-expect "$(api repos "$TOKEN" '{"name": "demo", "owner": "bee"}' | json "d['event']['kind']")" repo_created "an empty repository under them"
-TAKEN=$(api repos/bee/demo/import "$TOKEN" "{\"source\": \"file://$W/$BUNDLE\", \"everything\": true}")
+expect "$(door principals "$TOKEN" '{"id": "bee", "kind": "human", "display": "Bee"}' | json "d['event']['kind']")" principal_registered "an account for the one who takes it in"
+expect "$(door repos "$TOKEN" '{"name": "demo", "owner": "bee"}' | json "d['event']['kind']")" repo_created "an empty repository under them"
+TAKEN=$(door repos/bee/demo/import "$TOKEN" "{\"source\": \"file://$W/$BUNDLE\", \"everything\": true}")
 expect "$(echo "$TAKEN" | json "d['branches'][0]['branch']")" main "every branch arrives, recorded as imported history"
 expect "$(echo "$TAKEN" | json "len(d['left_behind'])")" 0 "nothing is left behind"
-expect "$(get repos/bee/demo/debt "$TOKEN" | json "d['counts']['imported'] >= 1")" True "the debt map says the history was imported"
+expect "$(door_get repos/bee/demo/debt "$TOKEN" | json "d['counts']['imported'] >= 1")" True "the debt map says the history was imported (read at the door: on the public listener the admin sees only what is theirs)"
 
 echo "operating.md: the watcher sees the forge up, and sees it go"
 "$BIN" admin watch --url "$URL" --state watch.json | grep -q ': up since' || { echo "!! the watcher did not see the forge up"; exit 1; }

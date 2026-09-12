@@ -164,6 +164,17 @@ box's own files. The log of the forge left behind stays there; what the
 new forge knows begins with the import — and its own `fsck` is clean
 afterwards, which is the walk to run after any graduation.
 
+What travels is git and the manifest: the branches, the tags, the
+receipt notes, and each repository's name, default branch, visibility,
+description and archived flag. What does not: the policy, the mirror,
+the tasks, the changes with their claims, verdicts and threads, the
+lessons, the grants, tokens and agents, membership, and quota overrides
+— those are the old forge's log, and the new forge starts its own. The
+receipts on the commits verify offline against the old forge's key, not
+the new one's; the new forge's receipts page shows only what landed
+there. An operator moving a company sets the policy on the new forge
+by hand, and the people mint their own credentials again.
+
 ### The operator's door
 
 Everything above that is the operator's — registering people, issuing
@@ -857,6 +868,9 @@ Other commands: `cairn serve`, `cairn mcp --server <url> --token <t>`,
   `--listen <addr>`.
 - `--public-url <url>` or `CAIRN_PUBLIC_URL`: where people reach the
   forge; every mailed link and every passkey is bound to it.
+  A URL whose host is an address rather than a name (`http://192.168.1.10:6160`)
+  still builds the links; passkeys, which bind to a host name, are off
+  on such a forge, and the start-up log says so.
 - `--secure-cookies` behind HTTPS; `--trust-proxy` behind a reverse
   proxy; `--dev` for asserted identity on a laptop only.
 - `--smtp-url`, `--mail-from`, `--mail-command`, or `CAIRN_SMTP_URL`,

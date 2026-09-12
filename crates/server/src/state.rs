@@ -518,7 +518,26 @@ impl AppState {
     /// Supply the credential mirror pushes authenticate with.
     /// Tell the forge where it lives, which is what passkeys bind to.
     pub fn with_public_url(mut self, url: &str) -> Result<Self, String> {
-        self.webauthn = Some(Arc::new(crate::passkeys::relying_party(url)?));
+        // A passkey binds to a host name; an address is not one. A forge
+        // reached at an address — a LAN, a walk on loopback — still
+        // builds its links from the URL, and runs without passkeys.
+        let host_is_an_address = webauthn_rs::prelude::Url::parse(url)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_owned))
+            .is_some_and(|h| {
+                h.trim_matches(['[', ']'])
+                    .parse::<std::net::IpAddr>()
+                    .is_ok()
+            });
+        if host_is_an_address {
+            tracing::warn!(
+                url,
+                "the public URL names an address, not a host: passkeys are off on this forge"
+            );
+            self.webauthn = None;
+        } else {
+            self.webauthn = Some(Arc::new(crate::passkeys::relying_party(url)?));
+        }
         self.public_url = Some(url.trim_end_matches('/').to_owned());
         Ok(self)
     }
@@ -815,6 +834,20 @@ impl Drop for StreamPlace {
 
 #[cfg(test)]
 mod tests {
+    /// A public URL that is an address still builds links, without passkeys.
+    #[test]
+    fn an_address_as_public_url_runs_without_passkeys() {
+        let state = super::AppState::new(cairn_core::Store::open_in_memory().unwrap())
+            .with_public_url("http://127.0.0.1:6160/")
+            .expect("an address is allowed");
+        assert_eq!(state.public_url(), Some("http://127.0.0.1:6160"));
+        assert!(state.webauthn().is_none());
+        let named = super::AppState::new(cairn_core::Store::open_in_memory().unwrap())
+            .with_public_url("https://forge.example")
+            .expect("a host is allowed");
+        assert!(named.webauthn().is_some());
+    }
+
     use super::*;
     use cairn_core::Store;
 

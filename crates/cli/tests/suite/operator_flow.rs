@@ -95,6 +95,193 @@ async fn the_operators_door_is_not_on_the_public_listener() {
     assert_eq!(status, StatusCode::OK);
 }
 
+/// The door is not a list of paths but where the admin grant counts:
+/// on the public listener, ada's unscoped admin reaches nothing she
+/// does not own, on routes that are anybody's the rest of the time.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_admin_grant_counts_only_at_the_door() {
+    let forge = boot().await;
+    let (public, door) = split_listeners(&forge);
+    let bee = json!({ "id": "bee", "kind": "human", "display": "Bee" });
+    let (status, body) = api(&door, "POST", "/api/principals", "ada", Some(bee)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = api(
+        &public,
+        "POST",
+        "/api/repos",
+        "bee",
+        Some(json!({ "name": "private" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = api(
+        &public,
+        "POST",
+        "/api/principals/bee/tokens",
+        "bee",
+        Some(json!({ "label": "mine" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let token = body["id"].as_str().unwrap_or_default().to_owned();
+    assert!(!token.is_empty(), "{body}");
+
+    // What the leaked admin token could do to bee through the tunnel.
+    let acts = [
+        (
+            "POST",
+            "/api/repos/bee/private/visibility",
+            json!({ "visibility": "public" }),
+        ),
+        (
+            "POST",
+            "/api/repos/bee/private/transfer",
+            json!({ "to": "ada" }),
+        ),
+        (
+            "POST",
+            "/api/repos/bee/private/policy",
+            json!({
+                "require_executed_check": false,
+                "independence": "human_or_two_models",
+                "require_runner_verification": false,
+                "required_domains": [],
+                "agents_act_in_sessions": false
+            }),
+        ),
+        (
+            "POST",
+            "/api/repos/bee/private/rename",
+            json!({ "to": "taken" }),
+        ),
+        ("POST", "/api/repos/bee/private/archive", json!({})),
+        ("POST", &format!("/api/tokens/{token}/revoke"), json!({})),
+    ];
+    for (method, path, body) in &acts {
+        let (status, answer) = api(&public, method, path, "ada", Some(body.clone())).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}: {answer}");
+    }
+    // The repository is still bee's, private, and hers to read alone.
+    let (status, _) = api(&public, "GET", "/api/repos/bee/private", "ada", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = api(&public, "GET", "/api/repos/bee/private", "bee", None).await;
+    assert_eq!(status, StatusCode::OK);
+    // At the door the same token runs the forge.
+    let (status, answer) = api(
+        &door,
+        "POST",
+        "/api/repos/bee/private/visibility",
+        "ada",
+        Some(json!({ "visibility": "public" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let (status, answer) = api(&door, "POST", acts[5].1, "ada", Some(json!({}))).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    // And what is ada's own stays hers on either listener.
+    let (status, answer) = api(
+        &public,
+        "POST",
+        "/api/repos",
+        "ada",
+        Some(json!({ "name": "hers" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let (status, answer) = api(
+        &public,
+        "POST",
+        "/api/repos/ada/hers/visibility",
+        "ada",
+        Some(json!({ "visibility": "public" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+}
+
+/// An invitation reaches an account nobody has been yet. One that
+/// somebody has signed in to is theirs: a new address is refused, the
+/// address already on it is not.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_invitation_never_hands_over_a_claimed_account() {
+    let tmp = tempfile::tempdir().unwrap();
+    let outbox = tmp.path().join("mail.txt");
+    let forge = boot_mailing_public(&format!("cat >> {}", outbox.display())).await;
+    let app = &forge.app;
+    let invite = |id: &str, email: &str| json!({ "id": id, "email": email });
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/invitations",
+        "ada",
+        Some(invite("jane", "jane@example.test")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // Not yet come: the operator may still correct the address.
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/invitations",
+        "ada",
+        Some(invite("jane", "jane@work.test")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let mail = std::fs::read_to_string(&outbox).unwrap_or_default();
+    let link = mail
+        .lines()
+        .filter_map(|l| l.split_whitespace().find(|w| w.contains("/join?token=")))
+        .next_back()
+        .unwrap()
+        .trim_matches(|c| c == '<' || c == '>')
+        .to_owned();
+    let path = link
+        .split("https://forge.example")
+        .nth(1)
+        .unwrap()
+        .to_owned();
+    // Jane follows it: the account is hers now.
+    let (status, _) = get_redirect(app, &path, "").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/invitations",
+        "ada",
+        Some(invite("jane", "mallory@attacker.test")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("already somebody's"),
+        "{body}"
+    );
+    // The address that is hers may be sent a fresh link.
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/invitations",
+        "ada",
+        Some(invite("jane", "jane@work.test")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // And ada, who has a password, cannot be re-addressed either.
+    let (status, body) = api(
+        app,
+        "POST",
+        "/api/invitations",
+        "ada",
+        Some(invite("ada", "mallory@attacker.test")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+}
+
 /// Who asked for an account is the operator's to read and to answer.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_waitlist_is_read_and_answered_behind_the_door() {

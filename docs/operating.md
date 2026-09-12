@@ -172,8 +172,13 @@ cairn serve --listen 127.0.0.1:6160 --operator-listen 127.0.0.1:6161 …
 The operator's door then answers on `6161` and nowhere else: the public
 listener refuses those paths with `404` whatever token comes with the
 request, and minting a token or setting a password for anybody but
-yourself is refused there the same way. An admin token that leaks
-through the tunnel opens nothing that grants access. The operator
+yourself is refused there the same way. Underneath the paths, the
+unscoped admin grant itself counts only at the door: on the public
+listener an admin's token is an owner's token and nothing more, so a
+repository the admin does not own cannot be read, made public, moved,
+renamed, given a policy or a mirror, or have its people's credentials
+revoked from there, whichever route is tried. An admin token that leaks
+through the tunnel opens nothing its holder does not own. The operator
 reaches the door over loopback — an SSH port-forward, or something that
 runs on the box — and everything else about the forge is the same on
 both listeners. `--operator-listen` must be a loopback address; that is
@@ -189,7 +194,13 @@ the unscoped admin grant:
   — an account under that name if there is none, the address on it, and
   an invitation that signs them in once. Mailed when the forge can mail;
   otherwise the answer carries the `link` to hand over. Their address
-  leaves the waitlist.
+  leaves the waitlist once the invitation has reached them; a mail the
+  forge could not send (`"mailed": false` with the `link`) leaves it
+  there. An account somebody has already been — signed in, proved an
+  address, set a password — is refused a new address with `409`: a
+  mailed invitation proves the address it went to and signs its holder
+  in, so it would hand the account over. The address already on the
+  account may be sent a fresh link.
 - `GET /api/reports` — what people said broke; `POST /api/reports/{id}/dismiss`.
 - The switch for strangers: `cairn serve --open-signup` lets anyone make
   an account at `/signup` (name, password, an address to confirm), rate

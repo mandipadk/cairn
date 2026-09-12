@@ -554,7 +554,11 @@ pub struct Store {
     pub(crate) conn: Connection,
     /// The scope of the session credential this handle is acting under,
     /// if any. Set per request by the server, cleared after.
-    pub(crate) acting: Option<crate::types::Scope>,
+    pub(crate) scope: Option<crate::types::Scope>,
+    /// Whether the operator's door is served elsewhere, so the unscoped
+    /// admin grant counts for nothing on this handle. Set per request
+    /// by the server from the listener the request came in on.
+    pub(crate) admin_elsewhere: bool,
     /// What this forge allows an owner nobody has set a quota for.
     /// Configuration, not a fact in the log: an operator changes it by
     /// restarting with different numbers, and the log stays true.
@@ -664,7 +668,8 @@ impl Store {
         }
         Ok(Store {
             conn,
-            acting: None,
+            scope: None,
+            admin_elsewhere: false,
             default_quota: crate::types::Quota::default(),
         })
     }

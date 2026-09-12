@@ -2344,7 +2344,32 @@ pub async fn invite(
                 format!("{id} is not a person; an invitation is a person's way in"),
             ));
         }
-        Some(_) => {}
+        Some(_) => {
+            // An account somebody has been — signed in, proved an
+            // address, set a password — is theirs. A mailed invitation
+            // proves the address it went to and signs its holder in, so
+            // one to a new address would hand the account to whoever
+            // reads that address: the same link to the address already
+            // on it is the one re-invitation there is.
+            let (claimed, contact) = app.with_store(|s| {
+                Ok::<_, cairn_core::CoreError>((s.is_claimed(&id)?, s.contact_of(&id)?))
+            })?;
+            let asked = body.email.trim();
+            let same = |known: &str| known.eq_ignore_ascii_case(asked);
+            let theirs = contact.email.as_deref().is_some_and(same)
+                || contact.pending.as_deref().is_some_and(same);
+            if claimed && !theirs {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "conflict",
+                    format!(
+                        "{id} is already somebody's: an invitation to another address would hand \
+                         their account over. Invite this person under a name of their own, or \
+                         let {id} add the address from their settings."
+                    ),
+                ));
+            }
+        }
     }
     app.with_store(|s| s.request_email(&id, &body.email))?;
     // One invitation at a time: a new one kills the old.
@@ -2374,7 +2399,12 @@ pub async fn invite(
     } else {
         false
     };
-    let _ = app.with_store(|s| s.leave_waitlist(&body.email));
+    // Off the list once the invitation has reached them: a mail the
+    // forge could not send leaves them where they were, with the link
+    // in this answer for the operator to hand over.
+    if mailed || !will_mail {
+        let _ = app.with_store(|s| s.leave_waitlist(&body.email));
+    }
     Ok(Json(json!({
         "principal": id,
         "email": body.email,

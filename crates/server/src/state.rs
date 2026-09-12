@@ -774,6 +774,10 @@ impl AppState {
                 poisoned.into_inner()
             }
         };
+        // Which listener the request came in on decides whether the
+        // unscoped admin grant counts: handlers set the session scope,
+        // the state sets the door.
+        store.admin_elsewhere(self.operator_elsewhere);
         let out = f(&mut store);
         store.clear_acting();
         out

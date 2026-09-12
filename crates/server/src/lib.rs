@@ -1,4 +1,4 @@
-//! HTTP surface for the cairn graph.
+//! HTTP surface for the ambolt graph.
 //!
 //! One API for every consumer: agents, the CLI, the web UI, and the MCP
 //! adapter all speak exactly these routes — no privileged surface. The

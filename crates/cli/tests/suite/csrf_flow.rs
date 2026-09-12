@@ -122,7 +122,7 @@ async fn a_missing_page_keeps_the_viewers_theme_and_offers_a_way_home() {
     let (_, session) = sign_in_as(&forge, "ada").await;
     let request = Request::builder()
         .uri("/nowhere")
-        .header("cookie", format!("cairn_theme=light; {session}"))
+        .header("cookie", format!("ambolt_theme=light; {session}"))
         .body(Body::empty())
         .unwrap();
     let response = tower::ServiceExt::oneshot(app.clone(), request)
@@ -130,7 +130,7 @@ async fn a_missing_page_keeps_the_viewers_theme_and_offers_a_way_home() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert!(
-        response.headers().get("x-cairn-fallback").is_none(),
+        response.headers().get("x-ambolt-fallback").is_none(),
         "the marker is ours, not the page's"
     );
     let body = String::from_utf8(

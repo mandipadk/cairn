@@ -49,7 +49,7 @@ async fn a_large_file_is_described_rather_than_rendered() {
     })
     .await;
 
-    let (status, body) = page_with_cookie(app, "/ada/demo/tree/big.txt", "cairn_dev=ada").await;
+    let (status, body) = page_with_cookie(app, "/ada/demo/tree/big.txt", "ambolt_dev=ada").await;
     assert_eq!(status, StatusCode::OK, "the page should still render");
     assert!(
         !body.contains("CANARY-"),
@@ -67,7 +67,7 @@ async fn a_large_file_is_described_rather_than_rendered() {
         body.len()
     );
 
-    let (status, body) = page_with_cookie(app, "/ada/demo/tree/blob.bin", "cairn_dev=ada").await;
+    let (status, body) = page_with_cookie(app, "/ada/demo/tree/blob.bin", "ambolt_dev=ada").await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         body.contains("Binary file"),
@@ -108,7 +108,7 @@ async fn an_enormous_readme_does_not_load_the_repository_page() {
     })
     .await;
 
-    let (status, body) = page_with_cookie(app, "/ada/demo", "cairn_dev=ada").await;
+    let (status, body) = page_with_cookie(app, "/ada/demo", "ambolt_dev=ada").await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         !body.contains("CANARY-"),

@@ -1,6 +1,6 @@
 //! MCP adapter: the forge protocol as tools for AI agents.
 //!
-//! `cairn mcp` speaks the Model Context Protocol over stdio (one
+//! `ambolt mcp` speaks the Model Context Protocol over stdio (one
 //! JSON-RPC 2.0 message per line) and proxies every tool call to a
 //! running forge's HTTP API — the same API every other consumer uses,
 //! carrying the same asserted principal. The adapter is deliberately
@@ -82,8 +82,8 @@ fn initialize_result(message: &Value) -> Value {
     json!({
         "protocolVersion": requested,
         "capabilities": { "tools": {} },
-        "serverInfo": { "name": "cairn", "version": env!("CARGO_PKG_VERSION") },
-        "instructions": "You are a principal on a cairn forge: an event log of tasks \
+        "serverInfo": { "name": "ambolt", "version": env!("CARGO_PKG_VERSION") },
+        "instructions": "You are a principal on a ambolt forge: an event log of tasks \
             (intent), sessions (attempts), changes and revisions (output), claims \
             (verification), and verdicts (judgment), where merges are decided by policy. \
             Typical flow: list_tasks, claim_task, open_session, open_change, \
@@ -872,7 +872,7 @@ impl ApiClient {
             .build();
         let auth = match (token, principal) {
             (Some(token), _) => ("Authorization", format!("Bearer {token}")),
-            (None, Some(principal)) => ("x-cairn-principal", principal.to_owned()),
+            (None, Some(principal)) => ("x-ambolt-principal", principal.to_owned()),
             (None, None) => unreachable!("main validates token or principal"),
         };
         ApiClient {

@@ -1,9 +1,9 @@
 # Architecture
 
-Cairn is built around a different core than existing forges: an
+Ambolt is built around a different core than existing forges: an
 append-only, queryable event log of how software actually comes to
 exist. Where a traditional forge stores code plus free-text conversation,
-Cairn records the causal chain as structured, subscribable data.
+Ambolt records the causal chain as structured, subscribable data.
 
 ## The objects
 
@@ -46,7 +46,7 @@ Every projection — the tree, the queue, blame, the ranking — is derived
 from the log. A schema change is therefore not a migration: on opening a
 database whose projection shape is out of date, the forge drops the
 derived tables and replays the log into fresh ones. The log itself is
-never touched. `cairn admin fsck` replays the log into empty projections
+never touched. `ambolt admin fsck` replays the log into empty projections
 and compares them with the live ones, and with `--repos` also checks that
 every branch really contains what the log says landed on it.
 
@@ -224,11 +224,11 @@ public key and its fingerprint, and `/api/forge/key` publishes the same,
 so a receipt can be checked against the forge or on its own.
 
 The signed receipt is written as a git note on the landed commit under
-`refs/notes/cairn`, and that ref is mirrored with the branch: clone the
+`refs/notes/ambolt`, and that ref is mirrored with the branch: clone the
 mirror and every commit that landed through the forge carries its own
-evidence (`git log --show-notes=cairn`). `GET /api/changes/{id}/receipt`
+evidence (`git log --show-notes=ambolt`). `GET /api/changes/{id}/receipt`
 serves one; `GET /api/repos/{name}/receipts` serves them all, newest
-first, paged; `cairn receipt verify receipt.json` checks one offline and
+first, paged; `ambolt receipt verify receipt.json` checks one offline and
 says what it certifies. Failing to write the note never fails a landing:
 the merge is the decision, the note is a copy of it.
 
@@ -366,7 +366,7 @@ granted you: typed verbs (`task`, `push`, `review`, `merge`, `verify`,
 `admin`), optionally repo-scoped and time-boxed, revocable with immediate
 effect. The same rules apply to people and to agents. Running the forge
 is itself a grant — an unscoped `admin` — held by whoever
-`cairn admin bootstrap` set up, and grantable onward like any other. A
+`ambolt admin bootstrap` set up, and grantable onward like any other. A
 refusal names the missing capability and the exact grant that would fix
 it.
 
@@ -460,4 +460,4 @@ stranger can post to are limited per source address instead.
 - `crates/git` — bare-repo storage, pkt-line codec, commit parsing
 - `crates/server` — JSON API, event stream, git smart HTTP, web interface
 - `crates/client` — the MCP adapter and the claim runner (Apache-2.0; everything else is AGPL-3.0)
-- `crates/cli` — the `cairn` binary: server, admin commands, push hook, and the client commands
+- `crates/cli` — the `ambolt` binary: server, admin commands, push hook, and the client commands

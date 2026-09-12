@@ -1,7 +1,7 @@
 //! The full protocol walk: intent → attempt → output → verification →
 //! judgment → policy-decided outcome, all against an in-memory store.
 
-use cairn_core::{
+use ambolt_core::{
     Capability, ChangeSpec, ClaimKind, ClaimSpec, CoreError, Disposition, Event, EventSeq,
     ObjectFormat, PrincipalId, PrincipalKind, ReviewDomain, SessionState, Store, TaskState,
 };
@@ -129,7 +129,7 @@ fn full_lifecycle_intent_to_merge() {
             revision,
             ClaimSpec {
                 kind: ClaimKind::Test,
-                command: Some("cargo test -p cairn-core".into()),
+                command: Some("cargo test -p ambolt-core".into()),
                 passed: true,
                 summary: "42 tests passed".into(),
                 unchecked: vec!["fuzzing beyond 10k property-test cases".into()],
@@ -190,7 +190,7 @@ fn full_lifecycle_intent_to_merge() {
     }
     assert_eq!(
         store.change(&change).unwrap().unwrap().state,
-        cairn_core::ChangeState::Merged
+        ambolt_core::ChangeState::Merged
     );
 
     // Attempt closes with knowledge, intent closes as landed.
@@ -512,12 +512,12 @@ fn tokens_authenticate_and_revoke_immediately() {
     let (token, secret, _) = store
         .mint_token(&scout, &scout, Some("laptop"), None)
         .unwrap();
-    assert!(secret.starts_with("cairn_"));
+    assert!(secret.starts_with("ambolt_"));
     assert_eq!(
         store.principal_for_token(&secret).unwrap(),
         Some(scout.clone())
     );
-    assert_eq!(store.principal_for_token("cairn_wrong").unwrap(), None);
+    assert_eq!(store.principal_for_token("ambolt_wrong").unwrap(), None);
 
     // An agent may not mint for someone else; a human may.
     assert!(matches!(
@@ -538,7 +538,7 @@ fn tokens_authenticate_and_revoke_immediately() {
     let tokens = store.tokens_of(&scout).unwrap();
     assert_eq!(tokens.len(), 2);
     assert!(tokens.iter().any(|t| t.revoked));
-    assert!(!serde_json::to_string(&tokens).unwrap().contains("cairn_"));
+    assert!(!serde_json::to_string(&tokens).unwrap().contains("ambolt_"));
 }
 
 #[test]
@@ -1064,7 +1064,7 @@ fn change_with_claim(
     owner: &PrincipalId,
     title: &str,
     spec: ClaimSpec,
-) -> cairn_core::ChangeId {
+) -> ambolt_core::ChangeId {
     let (change, _, _) = store
         .open_change(owner, ChangeSpec::new("ada/forge", "main", title))
         .unwrap();
@@ -1175,9 +1175,9 @@ fn attention_ranks_by_what_judgment_is_worth() {
     // evidence in graph terms behind it.
     let top = &ranked[0];
     assert!(top.headline().contains("disagree"));
-    assert!(top.score >= cairn_core::SignalKind::ReviewersDisagree.weight());
+    assert!(top.score >= ambolt_core::SignalKind::ReviewersDisagree.weight());
     let signal = &top.signals[0];
-    assert_eq!(signal.kind, cairn_core::SignalKind::ReviewersDisagree);
+    assert_eq!(signal.kind, ambolt_core::SignalKind::ReviewersDisagree);
     assert!(signal.evidence.contains("arbiter"));
     assert!(signal.evidence.contains("block"));
 
@@ -1187,8 +1187,8 @@ fn attention_ranks_by_what_judgment_is_worth() {
         .find(|i| i.change.id == argued)
         .expect("argued change should be ranked");
     let kinds: Vec<_> = argued_item.signals.iter().map(|s| s.kind).collect();
-    assert!(kinds.contains(&cairn_core::SignalKind::NoExecutedCheck));
-    assert!(kinds.contains(&cairn_core::SignalKind::DeclaredGap));
+    assert!(kinds.contains(&ambolt_core::SignalKind::NoExecutedCheck));
+    assert!(kinds.contains(&ambolt_core::SignalKind::DeclaredGap));
 }
 
 #[test]
@@ -1221,7 +1221,7 @@ fn sampling_draws_agent_only_work_deterministically() {
         if item.is_some_and(|i| {
             i.signals
                 .iter()
-                .any(|s| s.kind == cairn_core::SignalKind::SpotCheck)
+                .any(|s| s.kind == ambolt_core::SignalKind::SpotCheck)
         }) {
             drawn += 1;
         }
@@ -1234,13 +1234,13 @@ fn sampling_draws_agent_only_work_deterministically() {
     // The draw is a property of the change, not of when you asked.
     let first = store.attention_for("ada/forge").unwrap();
     let second = store.attention_for("ada/forge").unwrap();
-    let ids = |items: &[cairn_core::AttentionItem]| -> Vec<String> {
+    let ids = |items: &[ambolt_core::AttentionItem]| -> Vec<String> {
         items
             .iter()
             .filter(|i| {
                 i.signals
                     .iter()
-                    .any(|s| s.kind == cairn_core::SignalKind::SpotCheck)
+                    .any(|s| s.kind == ambolt_core::SignalKind::SpotCheck)
             })
             .map(|i| i.change.id.as_str().to_owned())
             .collect()
@@ -1251,7 +1251,7 @@ fn sampling_draws_agent_only_work_deterministically() {
     if let Some(sampled) = first.iter().find(|i| {
         i.signals
             .iter()
-            .any(|s| s.kind == cairn_core::SignalKind::SpotCheck)
+            .any(|s| s.kind == ambolt_core::SignalKind::SpotCheck)
     }) {
         store
             .give_verdict(
@@ -1268,7 +1268,7 @@ fn sampling_draws_agent_only_work_deterministically() {
             !after.iter().any(|i| i.change.id == sampled.change.id
                 && i.signals
                     .iter()
-                    .any(|s| s.kind == cairn_core::SignalKind::SpotCheck)),
+                    .any(|s| s.kind == ambolt_core::SignalKind::SpotCheck)),
             "a change a human judged should stop being sampled"
         );
     }
@@ -1280,7 +1280,7 @@ fn session_for(
     human: &PrincipalId,
     agent: &PrincipalId,
     title: &str,
-) -> cairn_core::SessionId {
+) -> ambolt_core::SessionId {
     let (task, _) = store
         .create_task(human, Some("ada/forge"), title, "spec", None)
         .unwrap();
@@ -1482,7 +1482,7 @@ fn a_repo_chooses_the_rules_its_work_must_meet() {
 
     // A repo that never says anything keeps the shipped defaults.
     let repo = store.repo("ada/forge").unwrap().unwrap();
-    assert_eq!(repo.policy, cairn_core::Policy::default());
+    assert_eq!(repo.policy, ambolt_core::Policy::default());
 
     let change = change_with_claim(&mut store, &scout, "Ordinary work", passing_with_command());
     store
@@ -1499,14 +1499,14 @@ fn a_repo_chooses_the_rules_its_work_must_meet() {
 
     // Tightening: a runner must have reproduced something, and
     // security must have signed off.
-    let strict = cairn_core::Policy {
+    let strict = ambolt_core::Policy {
         require_runner_verification: true,
         runner_quorum: 1,
         required_domains: vec![ReviewDomain::Security],
         require_concerns_resolved: true,
         attention_budget: None,
         agents_act_in_sessions: false,
-        ..cairn_core::Policy::default()
+        ..ambolt_core::Policy::default()
     };
 
     // Before committing to it, ask what it would cost.
@@ -1536,7 +1536,7 @@ fn a_repo_chooses_the_rules_its_work_must_meet() {
             .unwrap()
             .policy
             .independence,
-        cairn_core::Independence::HumanOrTwoModels
+        ambolt_core::Independence::HumanOrTwoModels
     );
 
     // Now the same change is short two requirements, each named.
@@ -1605,9 +1605,9 @@ fn a_repo_chooses_the_rules_its_work_must_meet() {
         .set_policy(
             &human,
             "ada/forge",
-            cairn_core::Policy {
+            ambolt_core::Policy {
                 require_executed_check: false,
-                independence: cairn_core::Independence::None,
+                independence: ambolt_core::Independence::None,
                 require_runner_verification: false,
                 runner_quorum: 1,
                 required_domains: vec![],
@@ -1678,9 +1678,9 @@ fn projections_rebuild_themselves_from_the_log() {
             .set_policy(
                 &human,
                 "ada/forge",
-                cairn_core::Policy {
-                    independence: cairn_core::Independence::HumanOnly,
-                    ..cairn_core::Policy::default()
+                ambolt_core::Policy {
+                    independence: ambolt_core::Independence::HumanOnly,
+                    ..ambolt_core::Policy::default()
                 },
             )
             .unwrap();
@@ -1722,12 +1722,12 @@ fn projections_rebuild_themselves_from_the_log() {
     assert_eq!(repo.default_branch, "main");
     assert_eq!(
         repo.policy.independence,
-        cairn_core::Independence::HumanOnly,
+        ambolt_core::Independence::HumanOnly,
         "a policy set by an event must survive the rebuild"
     );
     let changes = store.changes_in_repo("ada/forge").unwrap();
     assert_eq!(changes.len(), 1);
-    assert_eq!(changes[0].state, cairn_core::ChangeState::Merged);
+    assert_eq!(changes[0].state, ambolt_core::ChangeState::Merged);
     assert_eq!(changes[0].latest_revision, 1);
     assert_eq!(
         changes[0].landed_oid.as_deref(),
@@ -1917,7 +1917,7 @@ fn notices_go_to_whose_work_it_is_and_never_to_the_actor() {
 
 #[test]
 fn search_ranks_the_exact_thing_first_and_hides_what_you_cannot_read() {
-    use cairn_core::{HitKind, SearchQuery};
+    use ambolt_core::{HitKind, SearchQuery};
     let (mut store, human, scout, _) = seeded();
     let (open, _, _) = store
         .open_change(
@@ -2141,7 +2141,7 @@ fn an_expired_token_identifies_nobody() {
     let (_, stale, _) = store
         .mint_token(&human, &human, Some("stale"), Some(&yesterday))
         .unwrap();
-    let tomorrow = cairn_core::until_in_days(1);
+    let tomorrow = ambolt_core::until_in_days(1);
     let (_, fresh, _) = store
         .mint_token(&human, &human, Some("fresh"), Some(&tomorrow))
         .unwrap();
@@ -2174,13 +2174,13 @@ fn an_older_contact_table_lets_an_address_be_pending() {
         )
         .unwrap();
     }
-    let mut store = cairn_core::Store::open(&path).unwrap();
-    let ada = cairn_core::PrincipalId::new("ada").unwrap();
+    let mut store = ambolt_core::Store::open(&path).unwrap();
+    let ada = ambolt_core::PrincipalId::new("ada").unwrap();
     store
         .register_principal(
             &ada,
             &ada,
-            cairn_core::PrincipalKind::Human,
+            ambolt_core::PrincipalKind::Human,
             "Ada",
             None,
             None,
@@ -2200,7 +2200,7 @@ fn an_older_contact_table_lets_an_address_be_pending() {
     // The row that was there is still there. It was never confirmed,
     // since confirmation did not exist when it was written, so it does
     // not resolve by address; that is the standing rule, not the reshape.
-    let grace = cairn_core::PrincipalId::new("grace").unwrap();
+    let grace = ambolt_core::PrincipalId::new("grace").unwrap();
     assert_eq!(
         store.contact_of(&grace).unwrap().email.as_deref(),
         Some("grace@example.test")
@@ -2222,13 +2222,13 @@ fn an_older_contact_table_gains_its_columns_on_open() {
         )
         .unwrap();
     }
-    let mut store = cairn_core::Store::open(&path).unwrap();
-    let ada = cairn_core::PrincipalId::new("ada").unwrap();
+    let mut store = ambolt_core::Store::open(&path).unwrap();
+    let ada = ambolt_core::PrincipalId::new("ada").unwrap();
     store
         .register_principal(
             &ada,
             &ada,
-            cairn_core::PrincipalKind::Human,
+            ambolt_core::PrincipalKind::Human,
             "Ada",
             None,
             None,

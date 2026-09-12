@@ -105,10 +105,10 @@ async fn start_provider() -> Provider {
     provider
 }
 
-fn forge_provider(issuer: &str) -> cairn_server::oidc::Provider {
-    cairn_server::oidc::Provider {
+fn forge_provider(issuer: &str) -> ambolt_server::oidc::Provider {
+    ambolt_server::oidc::Provider {
         issuer: issuer.to_owned(),
-        client_id: "cairn".into(),
+        client_id: "ambolt".into(),
         client_secret: "shh".into(),
         label: "Example".into(),
         link_by_email: false,

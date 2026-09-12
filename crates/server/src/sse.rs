@@ -12,10 +12,10 @@
 use crate::auth::Actor;
 use crate::error::Query;
 use crate::state::AppState;
+use ambolt_core::{Envelope, EventSeq};
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use cairn_core::{Envelope, EventSeq};
 use serde::Deserialize;
 use std::convert::Infallible;
 use std::time::Duration;
@@ -36,10 +36,10 @@ pub struct StreamQuery {
 /// receiver is still listening.
 async fn drain_from_store(
     app: &AppState,
-    who: &cairn_core::PrincipalId,
+    who: &ambolt_core::PrincipalId,
     tx: &mpsc::Sender<Envelope>,
     last: &mut i64,
-) -> Result<bool, cairn_core::CoreError> {
+) -> Result<bool, ambolt_core::CoreError> {
     loop {
         // A reader who has gone is not worth another batch, whatever
         // they could or could not see of it: a scope that hides the

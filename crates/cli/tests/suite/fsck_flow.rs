@@ -9,7 +9,7 @@
 //!
 //! The companion test that gives this one its meaning — that fsck
 //! actually notices divergence, rather than always reporting "clean" —
-//! lives in cairn-core, where a projection can be corrupted directly.
+//! lives in ambolt-core, where a projection can be corrupted directly.
 
 use crate::common::*;
 

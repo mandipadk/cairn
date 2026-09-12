@@ -122,7 +122,7 @@ async fn a_branch_left_behind_by_a_crash_is_restored() {
         "the setup should have produced a real divergence"
     );
 
-    let stuck = cairn_server::reconcile_branches(&forge.state).await;
+    let stuck = ambolt_server::reconcile_branches(&forge.state).await;
     assert!(stuck.is_empty(), "this was repairable: {stuck:#?}");
 
     assert!(
@@ -158,7 +158,7 @@ async fn recovery_is_idempotent_and_does_nothing_when_healthy() {
     let landed = land_one(&forge, "one.txt", "Ione").await;
 
     for round in 0..3 {
-        let stuck = cairn_server::reconcile_branches(&forge.state).await;
+        let stuck = ambolt_server::reconcile_branches(&forge.state).await;
         assert!(stuck.is_empty(), "round {round}: {stuck:#?}");
     }
     let wc = forge.work.join("wc");
@@ -208,7 +208,7 @@ async fn a_branch_that_moved_elsewhere_is_reported_not_overwritten() {
     // *first* change's commit is not an ancestor of nothing; rewind
     // further so the tip is unrelated to what the log expects.
     rewind_branch(&forge, "ada/demo", "main", Some(&first));
-    let stuck = cairn_server::reconcile_branches(&forge.state).await;
+    let stuck = ambolt_server::reconcile_branches(&forge.state).await;
     // Being behind is repairable: this is a fast-forward.
     assert!(
         stuck.is_empty(),
@@ -240,7 +240,7 @@ async fn a_branch_that_moved_elsewhere_is_reported_not_overwritten() {
     );
     rewind_branch(&forge, "ada/demo", "main", Some(&unrelated));
 
-    let stuck = cairn_server::reconcile_branches(&forge.state).await;
+    let stuck = ambolt_server::reconcile_branches(&forge.state).await;
     assert!(
         stuck.iter().any(|s| s.contains("needs a person")),
         "an ambiguous branch must be reported, not overwritten: {stuck:#?}"

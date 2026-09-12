@@ -54,7 +54,7 @@ async fn raw(
 ) -> (StatusCode, String, String) {
     let mut request = Request::builder().method(method).uri(path);
     if let Some(actor) = actor {
-        request = request.header("x-cairn-principal", actor);
+        request = request.header("x-ambolt-principal", actor);
     }
     let response = app
         .clone()

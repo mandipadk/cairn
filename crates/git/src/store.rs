@@ -285,7 +285,7 @@ impl Service {
 /// names at spawn time, so the same bare repo works for production
 /// serving and for tests driving a freshly built binary.
 const HOOK_SCRIPT: &str =
-    "#!/bin/sh\nexec \"${CAIRN_HOOK_BIN:?cairn hook binary not set}\" internal-proc-receive\n";
+    "#!/bin/sh\nexec \"${AMBOLT_HOOK_BIN:?ambolt hook binary not set}\" internal-proc-receive\n";
 
 /// Branches advance only by policy-approved merges; every other write
 /// path is closed. proc-receive owns refs/for/* and refs/tags/* (the
@@ -298,13 +298,13 @@ while read old new ref; do
   case "$ref" in
     refs/for/*|refs/tags/*) ;;
     *)
-      echo "cairn: direct push to $ref refused; push to refs/for/<branch> - branches advance only by merge" >&2
+      echo "ambolt: direct push to $ref refused; push to refs/for/<branch> - branches advance only by merge" >&2
       status=1
       ;;
   esac
 done
 [ "$status" -eq 0 ] || exit "$status"
-exec "${CAIRN_HOOK_BIN:?cairn hook binary not set}" internal-pre-receive
+exec "${AMBOLT_HOOK_BIN:?ambolt hook binary not set}" internal-pre-receive
 "#;
 
 /// The largest pack one push may carry, said to receive-pack so git
@@ -399,7 +399,7 @@ pub fn preflight() -> GitResult<String> {
         return Err(GitError::CommandFailed {
             args: "--version".into(),
             stderr: format!(
-                "{found} is too old: cairn needs git {}.{} or newer. Merging uses \
+                "{found} is too old: ambolt needs git {}.{} or newer. Merging uses \
                  `merge-tree --write-tree`, which does not exist before 2.38",
                 MIN_GIT.0, MIN_GIT.1
             ),
@@ -407,6 +407,12 @@ pub fn preflight() -> GitResult<String> {
     }
     Ok(found)
 }
+
+/// Where a landed commit's receipt is kept, mirrored with the branch.
+pub const NOTES_REF: &str = "refs/notes/ambolt";
+/// The ref the receipts lived under before the forge was renamed;
+/// read only to carry them forward.
+pub const NOTES_REF_BEFORE: &str = "refs/notes/cairn";
 
 pub struct GitStore {
     root: PathBuf,
@@ -461,10 +467,10 @@ impl GitStore {
         // how this was learned.
         isolated(&mut command);
         command
-            .env("GIT_AUTHOR_NAME", "cairn")
-            .env("GIT_AUTHOR_EMAIL", "forge@cairn.invalid")
-            .env("GIT_COMMITTER_NAME", "cairn")
-            .env("GIT_COMMITTER_EMAIL", "forge@cairn.invalid");
+            .env("GIT_AUTHOR_NAME", "ambolt")
+            .env("GIT_AUTHOR_EMAIL", "forge@ambolt.invalid")
+            .env("GIT_COMMITTER_NAME", "ambolt")
+            .env("GIT_COMMITTER_EMAIL", "forge@ambolt.invalid");
         if let Some(dir) = current_dir {
             command.current_dir(dir);
         }
@@ -815,7 +821,7 @@ impl GitStore {
             .arg("--stateless-rpc")
             .arg(path)
             .envs(env)
-            .env("CAIRN_HOOK_BIN", &self.hook_bin)
+            .env("AMBOLT_HOOK_BIN", &self.hook_bin)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -1007,8 +1013,8 @@ impl GitStore {
         command
             .current_dir(&path)
             .args(["commit-tree", &tree, "-p", tip, "-m", &info.message])
-            .env("GIT_COMMITTER_NAME", "cairn")
-            .env("GIT_COMMITTER_EMAIL", "queue@cairn.invalid")
+            .env("GIT_COMMITTER_NAME", "ambolt")
+            .env("GIT_COMMITTER_EMAIL", "queue@ambolt.invalid")
             .stdin(Stdio::null());
         if let Some((author_name, email, date)) = &info.author {
             command
@@ -1083,7 +1089,25 @@ impl GitStore {
             .is_ok())
     }
 
-    /// Attach a note to a commit under `refs/notes/cairn`, replacing
+    /// Receipts written under the ref this forge used before it was
+    /// renamed are carried to the current one, once. The old ref is left
+    /// where it is: clones that still read it keep working, and a
+    /// rollback has nothing to undo. Returns whether anything moved.
+    pub async fn carry_notes_forward(&self, name: &str) -> GitResult<bool> {
+        if self.has_ref(name, NOTES_REF).await? || !self.has_ref(name, NOTES_REF_BEFORE).await? {
+            return Ok(false);
+        }
+        let repo = self.existing_repo_path(name)?;
+        let tip = self
+            .run(Some(&repo), &["rev-parse", "--verify", NOTES_REF_BEFORE])
+            .await?;
+        let tip = String::from_utf8_lossy(&tip).trim().to_owned();
+        self.run(Some(&repo), &["update-ref", NOTES_REF, &tip])
+            .await?;
+        Ok(true)
+    }
+
+    /// Attach a note to a commit under [`NOTES_REF`], replacing
     /// any earlier one. The text goes through a file: a receipt is
     /// larger than an argument should be.
     pub async fn attach_note(&self, name: &str, oid: &str, text: &str) -> GitResult<()> {
@@ -1092,7 +1116,7 @@ impl GitStore {
         // share a scratch file, or one commit gets the other's receipt.
         static NOTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let scratch = std::env::temp_dir().join(format!(
-            "cairn-note-{}-{}-{}.json",
+            "ambolt-note-{}-{}-{}.json",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1107,7 +1131,7 @@ impl GitStore {
                 Some(&repo),
                 &[
                     "notes",
-                    "--ref=refs/notes/cairn",
+                    &format!("--ref={NOTES_REF}"),
                     "add",
                     "-f",
                     "-F",
@@ -1289,8 +1313,8 @@ impl GitStore {
             format!("refs/heads/{branch}:refs/heads/{branch}"),
             "refs/tags/*:refs/tags/*".to_owned(),
         ];
-        if self.has_ref(name, "refs/notes/cairn").await? {
-            refspecs.push("refs/notes/cairn:refs/notes/cairn".to_owned());
+        if self.has_ref(name, NOTES_REF).await? {
+            refspecs.push(format!("{NOTES_REF}:{NOTES_REF}"));
         }
         let mut command = Command::new("git");
         command
@@ -1653,7 +1677,7 @@ mod tests {
 
     async fn sweep_scenario() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = GitStore::new(tmp.path().join("repos"), "/nonexistent/cairn");
+        let store = GitStore::new(tmp.path().join("repos"), "/nonexistent/ambolt");
         store.create_repo("ada/demo", "main", "sha1").await.unwrap();
         let objects = tmp.path().join("repos/ada/demo.git/objects");
         let dead = objects.join("tmp_objdir-incoming-dead");
@@ -1671,6 +1695,62 @@ mod tests {
         assert!(!dead.exists(), "the dead one is gone");
         assert!(live.exists(), "the live one is not touched");
         assert_eq!(store.sweep_quarantines("ada/demo").await.unwrap(), 0);
+    }
+
+    /// A receipt written under the ref the forge had before its rename
+    /// is carried to the current ref once, and the old ref is left
+    /// where it was.
+    #[test]
+    fn receipts_under_the_old_notes_ref_are_carried_forward_once() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let tmp = tempfile::tempdir().unwrap();
+            let store = GitStore::new(tmp.path().join("repos"), "/nonexistent/ambolt");
+            store.create_repo("ada/demo", "main", "sha1").await.unwrap();
+            let repo = tmp.path().join("repos/ada/demo.git");
+            let empty_tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+            let commit = store
+                .run(Some(&repo), &["commit-tree", empty_tree, "-m", "first"])
+                .await
+                .unwrap();
+            let commit = String::from_utf8_lossy(&commit).trim().to_owned();
+            assert!(
+                !store.carry_notes_forward("ada/demo").await.unwrap(),
+                "nothing to carry"
+            );
+            let old = format!("--ref={NOTES_REF_BEFORE}");
+            store
+                .run(
+                    Some(&repo),
+                    &["notes", &old, "add", "-m", "receipt", &commit],
+                )
+                .await
+                .unwrap();
+            assert!(
+                store.carry_notes_forward("ada/demo").await.unwrap(),
+                "carried"
+            );
+            assert!(store.has_ref("ada/demo", NOTES_REF).await.unwrap());
+            assert!(
+                store.has_ref("ada/demo", NOTES_REF_BEFORE).await.unwrap(),
+                "old ref kept"
+            );
+            let shown = store
+                .run(
+                    Some(&repo),
+                    &["notes", &format!("--ref={NOTES_REF}"), "show", &commit],
+                )
+                .await
+                .unwrap();
+            assert_eq!(String::from_utf8_lossy(&shown).trim(), "receipt");
+            assert!(
+                !store.carry_notes_forward("ada/demo").await.unwrap(),
+                "second run is a no-op"
+            );
+        });
     }
 
     /// Bytes no filesystem can compress away: the measurement is what

@@ -1,7 +1,7 @@
-//! Git storage and transport adapter for the cairn graph.
+//! Git storage and transport adapter for the ambolt graph.
 //!
 //! This crate is commodity glue by design: the differentiated model
-//! lives in `cairn-core`, and this layer's whole job is to let plain
+//! lives in `ambolt-core`, and this layer's whole job is to let plain
 //! `git` speak to it — hosting bare repos, serving smart HTTP by
 //! spawning real git, framing pkt-lines for the proc-receive hook, and
 //! parsing commit objects for the Change-Id trailer that keeps a
@@ -14,5 +14,5 @@ mod store;
 pub use commit::{CommitInfo, parse_commit_object};
 pub use store::{
     Blob, GitError, GitResult, GitStore, MAX_COMMAND_BYTES, MIN_GIT, MIN_GIT_SHA256_CLIENT,
-    RebaseOutcome, RpcInput, RpcStream, Service, preflight, version,
+    NOTES_REF, NOTES_REF_BEFORE, RebaseOutcome, RpcInput, RpcStream, Service, preflight, version,
 };

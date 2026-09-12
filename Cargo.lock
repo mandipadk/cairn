@@ -18,6 +18,99 @@ dependencies = [
 ]
 
 [[package]]
+name = "ambolt"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "ambolt-client",
+ "ambolt-core",
+ "ambolt-git",
+ "ambolt-server",
+ "anyhow",
+ "axum",
+ "base64 0.23.1",
+ "clap",
+ "http",
+ "http-body-util",
+ "jiff",
+ "jsonwebtoken",
+ "ring",
+ "rpassword",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "ureq",
+]
+
+[[package]]
+name = "ambolt-client"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "ring",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
+name = "ambolt-core"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "argon2",
+ "jiff",
+ "rand 0.10.2",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "ambolt-git"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
+name = "ambolt-server"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "ambolt-core",
+ "ambolt-git",
+ "axum",
+ "base64 0.23.1",
+ "flate2",
+ "http-body-util",
+ "jiff",
+ "jsonwebtoken",
+ "lettre",
+ "maud",
+ "pulldown-cmark",
+ "rand 0.10.2",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-stream",
+ "tower",
+ "tracing",
+ "ureq",
+ "webauthn-rs",
+]
+
+[[package]]
 name = "anstream"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -273,99 +366,6 @@ name = "bytes"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
-
-[[package]]
-name = "cairn"
-version = "0.1.0-alpha.1"
-dependencies = [
- "anyhow",
- "axum",
- "base64 0.23.1",
- "cairn-client",
- "cairn-core",
- "cairn-git",
- "cairn-server",
- "clap",
- "http",
- "http-body-util",
- "jiff",
- "jsonwebtoken",
- "ring",
- "rpassword",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tower",
- "tracing",
- "tracing-subscriber",
- "ureq",
-]
-
-[[package]]
-name = "cairn-client"
-version = "0.1.0-alpha.1"
-dependencies = [
- "anyhow",
- "base64 0.23.1",
- "ring",
- "serde_json",
- "ureq",
-]
-
-[[package]]
-name = "cairn-core"
-version = "0.1.0-alpha.1"
-dependencies = [
- "argon2",
- "jiff",
- "rand 0.10.2",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "cairn-git"
-version = "0.1.0-alpha.1"
-dependencies = [
- "bytes",
- "futures-core",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
-]
-
-[[package]]
-name = "cairn-server"
-version = "0.1.0-alpha.1"
-dependencies = [
- "axum",
- "base64 0.23.1",
- "cairn-core",
- "cairn-git",
- "flate2",
- "http-body-util",
- "jiff",
- "jsonwebtoken",
- "lettre",
- "maud",
- "pulldown-cmark",
- "rand 0.10.2",
- "ring",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "tokio-stream",
- "tower",
- "tracing",
- "ureq",
- "webauthn-rs",
-]
 
 [[package]]
 name = "cc"

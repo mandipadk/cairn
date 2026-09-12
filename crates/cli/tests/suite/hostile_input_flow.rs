@@ -135,7 +135,7 @@ async fn tree_paths_cannot_climb_out_of_the_repository() {
         "/ada/demo/blame/..%2f..%2fsecret.txt",
     ];
     for attempt in attempts {
-        let (status, body) = page_with_cookie(app, attempt, "cairn_dev=ada").await;
+        let (status, body) = page_with_cookie(app, attempt, "ambolt_dev=ada").await;
         assert!(
             !body.contains("TOP-SECRET-CANARY"),
             "{attempt} leaked a file from outside the repository (status {status})"

@@ -29,7 +29,7 @@ pub fn relying_party(public_url: &str) -> Result<Webauthn, String> {
         .to_owned();
     WebauthnBuilder::new(&host, &origin)
         .map_err(|e| format!("cannot build the relying party: {e}"))?
-        .rp_name("cairn")
+        .rp_name("ambolt")
         .build()
         .map_err(|e| format!("cannot build the relying party: {e}"))
 }
@@ -153,10 +153,10 @@ pub async fn login_begin(State(app): State<AppState>, body: Option<Json<LoginBeg
         return off();
     };
     let who = body.map(|Json(b)| b.who).unwrap_or_default();
-    let named = cairn_core::PrincipalId::new(who.trim()).filter(|id| {
+    let named = ambolt_core::PrincipalId::new(who.trim()).filter(|id| {
         matches!(
             app.with_store(|s| s.principal(id)),
-            Ok(Some(p)) if p.kind == cairn_core::PrincipalKind::Human
+            Ok(Some(p)) if p.kind == ambolt_core::PrincipalKind::Human
         )
     });
     if let Some(who) = named {
@@ -275,7 +275,7 @@ async fn finish_named(
     app: AppState,
     headers: HeaderMap,
     credential: &PublicKeyCredential,
-    who: cairn_core::PrincipalId,
+    who: ambolt_core::PrincipalId,
     state_json: &str,
 ) -> Response {
     let Some(webauthn) = app.webauthn() else {
@@ -307,7 +307,7 @@ async fn finish_named(
 async fn settle(
     app: AppState,
     headers: HeaderMap,
-    who: cairn_core::PrincipalId,
+    who: ambolt_core::PrincipalId,
     cred_id: String,
     stored: Vec<Passkey>,
     result: &AuthenticationResult,

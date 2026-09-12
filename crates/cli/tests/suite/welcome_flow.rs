@@ -55,7 +55,7 @@ async fn a_stranger_gets_the_page_rather_than_a_sign_in_form() {
 #[tokio::test(flavor = "multi_thread")]
 async fn signed_in_the_same_url_is_the_home() {
     let forge = boot().await;
-    let (status, body) = page_with_cookie(&forge.app, "/", "cairn_dev=ada").await;
+    let (status, body) = page_with_cookie(&forge.app, "/", "ambolt_dev=ada").await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         body.contains("Needs you") || body.contains("Nothing here yet"),

@@ -1,13 +1,13 @@
 //! Search parses what people type, ranks what it finds, and never shows
 //! what the searcher could not read.
 
-use cairn_core::{ChangeState, HitKind, SearchQuery};
+use ambolt_core::{ChangeState, HitKind, SearchQuery};
 
 #[test]
 fn a_query_is_words_plus_the_filters_everybody_types() {
-    let q = SearchQuery::parse("Carry children repo:cairn state:open by:scout kind:change");
+    let q = SearchQuery::parse("Carry children repo:ambolt state:open by:scout kind:change");
     assert_eq!(q.words, vec!["carry", "children"]);
-    assert_eq!(q.repo.as_deref(), Some("cairn"));
+    assert_eq!(q.repo.as_deref(), Some("ambolt"));
     assert_eq!(q.state, Some(ChangeState::Open));
     assert_eq!(q.by.as_deref(), Some("scout"));
     assert_eq!(q.kind, Some(HitKind::Change));

@@ -1,18 +1,18 @@
 mod hook;
 mod watch;
 
-use cairn_client::{mcp, verify};
+use ambolt_client::{mcp, verify};
 
+use ambolt_core::{PrincipalId, PrincipalKind, Store};
+use ambolt_git::GitStore;
+use ambolt_server::{AppState, router};
 use anyhow::Context;
-use cairn_core::{PrincipalId, PrincipalKind, Store};
-use cairn_git::GitStore;
-use cairn_server::{AppState, router};
 use clap::{Parser, Subcommand};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "cairn", version = cairn_core::VERSION, about = "An agent-native forge")]
+#[command(name = "ambolt", version = ambolt_core::VERSION, about = "An agent-native forge")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -24,7 +24,7 @@ enum Command {
     /// Run the forge server.
     Serve {
         /// Path to the forge database (created if absent).
-        #[arg(long, default_value = "cairn.db")]
+        #[arg(long, default_value = "ambolt.db")]
         db: PathBuf,
         /// Address to listen on.
         #[arg(long, default_value = "127.0.0.1:6160")]
@@ -47,7 +47,7 @@ enum Command {
         /// Directory holding the hosted bare repositories.
         #[arg(long, default_value = "repos")]
         repos: PathBuf,
-        /// Accept asserted identity via the x-cairn-principal header.
+        /// Accept asserted identity via the x-ambolt-principal header.
         /// Local development only.
         #[arg(long)]
         dev: bool,
@@ -56,7 +56,7 @@ enum Command {
         #[arg(long)]
         secure_cookies: bool,
         /// Credential used to authenticate mirror pushes, e.g. a
-        /// GitHub token. Read from CAIRN_MIRROR_TOKEN when unset.
+        /// GitHub token. Read from AMBOLT_MIRROR_TOKEN when unset.
         #[arg(long)]
         mirror_token: Option<String>,
         /// Believe X-Forwarded-For. Set this only when a proxy you
@@ -72,21 +72,21 @@ enum Command {
         /// SMTP relay for outbound mail, credentials included:
         /// `smtps://user:pass@host:465`, or
         /// `smtp://user:pass@host:587?tls=required`. Read from
-        /// CAIRN_SMTP_URL when unset, which keeps the password out of the
+        /// AMBOLT_SMTP_URL when unset, which keeps the password out of the
         /// process list.
         #[arg(long)]
         smtp_url: Option<String>,
         /// Instead of SMTP: a command that accepts one message on stdin,
-        /// such as `sendmail -t`. Read from CAIRN_MAIL_COMMAND when unset.
+        /// such as `sendmail -t`. Read from AMBOLT_MAIL_COMMAND when unset.
         #[arg(long)]
         mail_command: Option<String>,
         /// The From address on mail the forge sends. Read from
-        /// CAIRN_MAIL_FROM when unset.
+        /// AMBOLT_MAIL_FROM when unset.
         #[arg(long)]
         mail_from: Option<String>,
-        /// Where people reach this forge, e.g. https://cairn.example.org.
+        /// Where people reach this forge, e.g. https://ambolt.example.org.
         /// Passkeys bind to it, so it cannot change once they exist. Read
-        /// from CAIRN_PUBLIC_URL when unset; passkeys are off without it.
+        /// from AMBOLT_PUBLIC_URL when unset; passkeys are off without it.
         #[arg(long)]
         public_url: Option<String>,
         /// OpenID Connect issuer people may sign in with (e.g. https://accounts.google.com).
@@ -114,15 +114,15 @@ enum Command {
         workload_audience: Option<String>,
         /// API writes one principal may make per minute before being told
         /// to wait (429 with Retry-After). 0 turns the allowance off.
-        #[arg(long, default_value_t = cairn_server::DEFAULT_WRITES_PER_MINUTE)]
+        #[arg(long, default_value_t = ambolt_server::DEFAULT_WRITES_PER_MINUTE)]
         api_writes_per_minute: u32,
         /// Reads one principal may make per minute before being told to
         /// wait. 0 turns the allowance off.
-        #[arg(long, default_value_t = cairn_server::DEFAULT_READS_PER_MINUTE)]
+        #[arg(long, default_value_t = ambolt_server::DEFAULT_READS_PER_MINUTE)]
         reads_per_minute: u32,
         /// Reads one address with no account behind it may make per
         /// minute. 0 turns the allowance off.
-        #[arg(long, default_value_t = cairn_server::DEFAULT_ANONYMOUS_READS_PER_MINUTE)]
+        #[arg(long, default_value_t = ambolt_server::DEFAULT_ANONYMOUS_READS_PER_MINUTE)]
         anonymous_reads_per_minute: u32,
         /// Repositories one owner may have; `none` for no limit.
         #[arg(long)]
@@ -223,7 +223,7 @@ enum ReceiptCommand {
 enum AdminCommand {
     /// First-run setup: register the first human and print their token.
     Bootstrap {
-        #[arg(long, default_value = "cairn.db")]
+        #[arg(long, default_value = "ambolt.db")]
         db: PathBuf,
         /// Slug of the human principal, e.g. "ada".
         principal: String,
@@ -232,7 +232,7 @@ enum AdminCommand {
     },
     /// Mint an API token for an existing principal.
     MintToken {
-        #[arg(long, default_value = "cairn.db")]
+        #[arg(long, default_value = "ambolt.db")]
         db: PathBuf,
         principal: String,
         #[arg(long)]
@@ -245,7 +245,7 @@ enum AdminCommand {
     /// from the command line, where it would sit in shell history and in
     /// the process list for anyone on the machine to read.
     SetPassword {
-        #[arg(long, default_value = "cairn.db")]
+        #[arg(long, default_value = "ambolt.db")]
         db: PathBuf,
         principal: String,
     },
@@ -254,14 +254,14 @@ enum AdminCommand {
     /// admin to grant admin — which is the right rule there and an
     /// impossible one here.
     GrantAdmin {
-        #[arg(long, default_value = "cairn.db")]
+        #[arg(long, default_value = "ambolt.db")]
         db: PathBuf,
         principal: String,
     },
     /// Show who has asked to be told when this is ready, or remove
     /// someone who has asked to be forgotten.
     Waitlist {
-        #[arg(long, default_value = "cairn.db")]
+        #[arg(long, default_value = "ambolt.db")]
         db: PathBuf,
         /// Remove this address instead of listing.
         #[arg(long)]
@@ -269,14 +269,14 @@ enum AdminCommand {
     },
     /// The few numbers that say how full and how busy this forge is.
     Metrics {
-        #[arg(long, default_value = "cairn.db")]
+        #[arg(long, default_value = "ambolt.db")]
         db: PathBuf,
     },
     /// Who was invited and never came. With --purge, let go those whose
     /// invitation has lapsed: deactivated, on the record, as whoever
     /// runs this command.
     Unclaimed {
-        #[arg(long, default_value = "cairn.db")]
+        #[arg(long, default_value = "ambolt.db")]
         db: PathBuf,
         #[arg(long)]
         purge: bool,
@@ -291,7 +291,7 @@ enum AdminCommand {
     /// at all, and a limit this command is not told about keeps
     /// following the forge's own number.
     Quota {
-        #[arg(long, default_value = "cairn.db")]
+        #[arg(long, default_value = "ambolt.db")]
         db: PathBuf,
         /// The person or organisation.
         owner: String,
@@ -322,7 +322,7 @@ enum AdminCommand {
     /// weeks; this is for the owner who deleted things and wants their
     /// number to say so now.
     Gc {
-        #[arg(long, default_value = "cairn.db")]
+        #[arg(long, default_value = "ambolt.db")]
         db: PathBuf,
         #[arg(long, default_value = "repos")]
         repos: PathBuf,
@@ -333,7 +333,7 @@ enum AdminCommand {
     /// and a git bundle of each, in a directory and an archive under
     /// --into, for another forge to take in with `import` … `everything`.
     Export {
-        #[arg(long, default_value = "cairn.db")]
+        #[arg(long, default_value = "ambolt.db")]
         db: PathBuf,
         #[arg(long, default_value = "repos")]
         repos: PathBuf,
@@ -349,7 +349,7 @@ enum AdminCommand {
     /// and on disk. Run once when upgrading to a forge that expects
     /// owners; `serve` refuses to start until it has been.
     AdoptOwners {
-        #[arg(long, default_value = "cairn.db")]
+        #[arg(long, default_value = "ambolt.db")]
         db: PathBuf,
         /// The repositories directory, so each moves under its owner.
         #[arg(long, default_value = "repos")]
@@ -360,7 +360,7 @@ enum AdminCommand {
     },
     /// What people reported broke, newest first; or dismiss one.
     Reports {
-        #[arg(long, default_value = "cairn.db")]
+        #[arg(long, default_value = "ambolt.db")]
         db: PathBuf,
         /// Dismiss this report instead of listing.
         #[arg(long)]
@@ -383,11 +383,11 @@ enum AdminCommand {
     /// day while down, and exits non-zero while the forge is down so the
     /// timer's own status shows it too.
     Watch {
-        /// The forge's public address, e.g. https://cairn.example
+        /// The forge's public address, e.g. https://ambolt.example
         #[arg(long)]
         url: String,
         /// Where the watcher remembers what it last saw.
-        #[arg(long, default_value = "cairn-watch.json")]
+        #[arg(long, default_value = "ambolt-watch.json")]
         state: PathBuf,
         /// Who hears about it. Without this the result is only printed.
         #[arg(long)]
@@ -403,7 +403,7 @@ enum AdminCommand {
     /// it into empty projections and comparing. Exits non-zero on any
     /// divergence, so it can be run from cron or a health check.
     Fsck {
-        #[arg(long, default_value = "cairn.db")]
+        #[arg(long, default_value = "ambolt.db")]
         db: PathBuf,
         /// Also check that every branch really contains what the log
         /// says landed on it. Recording a merge and moving the branch
@@ -460,14 +460,14 @@ async fn main() -> anyhow::Result<()> {
             open_signup,
             signup_cap,
         } => {
-            let git_version = cairn_git::preflight().context("checking the git on PATH")?;
-            tracing::info!("cairn {}", cairn_core::VERSION);
+            let git_version = ambolt_git::preflight().context("checking the git on PATH")?;
+            tracing::info!("ambolt {}", ambolt_core::VERSION);
             // What an owner may take up here, before anything said
             // about one owner in particular. Absent leaves the built-in
             // number standing; `none` is no limit; 0 is zero, because
             // an operator who types 0 means none allowed and reading it
             // as "unlimited" is the wrong way round to be wrong.
-            let mut quota = cairn_core::Quota::default();
+            let mut quota = ambolt_core::Quota::default();
             let said = |given: Option<String>, what: &str| -> anyhow::Result<Option<Option<u64>>> {
                 match given.as_deref() {
                     None => Ok(None),
@@ -517,7 +517,7 @@ async fn main() -> anyhow::Result<()> {
                 .collect();
             if !unowned.is_empty() {
                 anyhow::bail!(
-                    "{} repositor{} named without an owner ({}): run `cairn admin adopt-owners --db {} --repos {} --as <admin>` first",
+                    "{} repositor{} named without an owner ({}): run `ambolt admin adopt-owners --db {} --repos {} --as <admin>` first",
                     unowned.len(),
                     if unowned.len() == 1 {
                         "y is"
@@ -539,12 +539,21 @@ async fn main() -> anyhow::Result<()> {
                 &repos,
                 std::env::current_exe().context("locating own binary")?,
             );
+            for repo in store.repos()? {
+                if git.carry_notes_forward(&repo.name).await? {
+                    tracing::info!(
+                        "{}: receipts carried to {}",
+                        repo.name,
+                        ambolt_git::NOTES_REF
+                    );
+                }
+            }
             let mut state = AppState::new(store).with_git(git, base_url);
             if dev {
-                tracing::warn!("dev identity enabled: the x-cairn-principal header is trusted");
+                tracing::warn!("dev identity enabled: the x-ambolt-principal header is trusted");
                 state = state.with_dev_identity();
             }
-            if let Some(token) = mirror_token.or_else(|| std::env::var("CAIRN_MIRROR_TOKEN").ok()) {
+            if let Some(token) = mirror_token.or_else(|| setting("MIRROR_TOKEN")) {
                 state = state.with_mirror_credential(token);
             }
             if trust_proxy {
@@ -570,7 +579,7 @@ async fn main() -> anyhow::Result<()> {
                     .unwrap_or(std::path::Path::new("."))
                     .join("signing.key")
             });
-            let signer = cairn_server::receipts::Signer::load_or_create(&key_path)
+            let signer = ambolt_server::receipts::Signer::load_or_create(&key_path)
                 .map_err(|e| anyhow::anyhow!("--signing-key-file: {e}"))?;
             tracing::info!("receipts: signing as key {}", signer.id());
             state = state.with_signer(signer);
@@ -580,11 +589,11 @@ async fn main() -> anyhow::Result<()> {
                     state = state.with_mailer(mailer);
                 }
                 None => tracing::warn!(
-                    "no mail configured (CAIRN_SMTP_URL and CAIRN_MAIL_FROM): \
+                    "no mail configured (AMBOLT_SMTP_URL and AMBOLT_MAIL_FROM): \
                      password resets and invitations fall back to the People page"
                 ),
             }
-            match public_url.or_else(|| std::env::var("CAIRN_PUBLIC_URL").ok()) {
+            match public_url.or_else(|| setting("PUBLIC_URL")) {
                 Some(url) => {
                     state = state
                         .with_public_url(&url)
@@ -592,7 +601,7 @@ async fn main() -> anyhow::Result<()> {
                     tracing::info!("passkeys: enabled for {url}");
                 }
                 None => {
-                    tracing::info!("no public URL configured (CAIRN_PUBLIC_URL): passkeys are off")
+                    tracing::info!("no public URL configured (AMBOLT_PUBLIC_URL): passkeys are off")
                 }
             }
             if secure_cookies {
@@ -608,7 +617,7 @@ async fn main() -> anyhow::Result<()> {
                             !client_secret.is_empty(),
                             "the client secret file is empty"
                         );
-                        Some(cairn_server::oidc::Provider {
+                        Some(ambolt_server::oidc::Provider {
                             issuer: issuer.trim_end_matches('/').to_owned(),
                             client_id,
                             client_secret,
@@ -628,7 +637,7 @@ async fn main() -> anyhow::Result<()> {
                     for issuer in &workload_issuer {
                         tracing::info!("workload identity trusted from {issuer}");
                     }
-                    state = state.with_oidc(cairn_server::oidc::Trust::new(
+                    state = state.with_oidc(ambolt_server::oidc::Trust::new(
                         provider,
                         workload_issuer
                             .iter()
@@ -666,7 +675,7 @@ async fn main() -> anyhow::Result<()> {
                     );
                 }
             }
-            cairn_server::spawn_queue_processor(state.clone());
+            ambolt_server::spawn_queue_processor(state.clone());
             // The operator's door, when it is served apart: the same
             // forge on a loopback listener, and the public listener
             // refusing everything that door is for.
@@ -691,7 +700,7 @@ async fn main() -> anyhow::Result<()> {
                 db = %db.display(),
                 repos = %repos.display(),
                 git = %git_version,
-                "cairn serving"
+                "ambolt serving"
             );
             // Connect info is what lets the sign-in limiter tell one
             // caller from another.
@@ -753,7 +762,7 @@ async fn main() -> anyhow::Result<()> {
                     &id,
                     &id,
                     label.as_deref(),
-                    days.map(|d| cairn_core::until_in_days(i64::from(d)))
+                    days.map(|d| ambolt_core::until_in_days(i64::from(d)))
                         .as_deref(),
                 )?;
                 println!("token (shown once, store it safely): {secret}");
@@ -801,7 +810,7 @@ async fn main() -> anyhow::Result<()> {
                     .principal(&owner_id)?
                     .with_context(|| format!("no principal named {owner}"))?;
                 anyhow::ensure!(
-                    record.kind != cairn_core::PrincipalKind::Agent,
+                    record.kind != ambolt_core::PrincipalKind::Agent,
                     "{owner} is an agent; a quota belongs to a person or an organisation"
                 );
                 // `none` rather than 0, because 0 is a real answer: it
@@ -825,7 +834,7 @@ async fn main() -> anyhow::Result<()> {
                         other => Ok(other.map(|value| value.map(|n| n as u32))),
                     }
                 };
-                let patch = cairn_core::QuotaOverride {
+                let patch = ambolt_core::QuotaOverride {
                     repos: narrow(said(repos.as_ref())?)?,
                     agents: narrow(said(agents.as_ref())?)?,
                     open_tasks: narrow(said(open_tasks.as_ref())?)?,
@@ -877,8 +886,8 @@ async fn main() -> anyhow::Result<()> {
                 );
                 say(
                     "disk",
-                    cairn_server::in_bytes(usage.disk),
-                    quota.disk.map(cairn_server::in_bytes),
+                    ambolt_server::in_bytes(usage.disk),
+                    quota.disk.map(ambolt_server::in_bytes),
                 );
                 say(
                     "open changes",
@@ -908,7 +917,7 @@ async fn main() -> anyhow::Result<()> {
                     git.gc(&name).await?;
                     let bytes = git.size(&name).await?;
                     store.record_repo_size(&name, bytes)?;
-                    println!("{name:<40} {}", cairn_server::in_bytes(bytes));
+                    println!("{name:<40} {}", ambolt_server::in_bytes(bytes));
                 }
             }
             AdminCommand::Export {
@@ -966,7 +975,7 @@ async fn main() -> anyhow::Result<()> {
                     println!("every repository already carries its owner's name");
                 }
                 for env in &renamed {
-                    if let cairn_core::Event::RepoRenamed { repo, to } = &env.event {
+                    if let ambolt_core::Event::RepoRenamed { repo, to } = &env.event {
                         match git.rename_repo(repo, to).await {
                             Ok(()) => println!("{repo} -> {to}"),
                             Err(err) => println!(
@@ -1036,7 +1045,7 @@ async fn main() -> anyhow::Result<()> {
                             .next()
                             .context("no admin on this forge to purge as")?
                     } else {
-                        cairn_core::PrincipalId::new(&r#as).context("--as is not a valid id")?
+                        ambolt_core::PrincipalId::new(&r#as).context("--as is not a valid id")?
                     };
                     let gone = store.purge_unclaimed(&actor)?;
                     println!("{} let go, as {actor}", gone.len());
@@ -1104,7 +1113,7 @@ async fn main() -> anyhow::Result<()> {
                     Err(err) => anyhow::bail!("{err}"),
                 },
                 None => anyhow::bail!(
-                    "no mail configured: set CAIRN_SMTP_URL (or CAIRN_MAIL_COMMAND) and CAIRN_MAIL_FROM"
+                    "no mail configured: set AMBOLT_SMTP_URL (or AMBOLT_MAIL_COMMAND) and AMBOLT_MAIL_FROM"
                 ),
             },
             AdminCommand::Watch {
@@ -1118,7 +1127,7 @@ async fn main() -> anyhow::Result<()> {
                 let mailer = mailer_from(smtp_url, mail_command, mail_from)?;
                 if mail_to.is_some() && mailer.is_none() {
                     anyhow::bail!(
-                        "--mail-to needs mail configured: set CAIRN_SMTP_URL (or CAIRN_MAIL_COMMAND) and CAIRN_MAIL_FROM"
+                        "--mail-to needs mail configured: set AMBOLT_SMTP_URL (or AMBOLT_MAIL_COMMAND) and AMBOLT_MAIL_FROM"
                     );
                 }
                 let seen = watch::once(&url, &state, mail_to.as_deref().zip(mailer.as_ref()))?;
@@ -1181,7 +1190,7 @@ async fn main() -> anyhow::Result<()> {
             if let Err(err) = hook::room() {
                 // Written where git shows it: the pusher's terminal
                 // prefixes anything a hook says with "remote:".
-                eprintln!("cairn: {err}");
+                eprintln!("ambolt: {err}");
                 std::process::exit(1);
             }
         }
@@ -1193,7 +1202,7 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let document = std::fs::read_to_string(&file)
                 .with_context(|| format!("reading {}", file.display()))?;
-            let summary = cairn_client::receipt::verify(&document, key.as_deref())?;
+            let summary = ambolt_client::receipt::verify(&document, key.as_deref())?;
             println!("{summary}");
         }
         Command::Mcp {
@@ -1211,22 +1220,71 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A setting from the environment as `AMBOLT_<name>`, or, for one
+/// release after the rename, as `CAIRN_<name>` with a word about it.
+fn setting(name: &str) -> Option<String> {
+    setting_via(name, |key| std::env::var(key).ok())
+}
+
+fn setting_via(name: &str, get: impl Fn(&str) -> Option<String>) -> Option<String> {
+    let current = format!("AMBOLT_{name}");
+    if let Some(value) = get(&current) {
+        return Some(value);
+    }
+    let before = format!("CAIRN_{name}");
+    let value = get(&before)?;
+    tracing::warn!("{before} is read for now; rename it to {current}, the old name goes away");
+    Some(value)
+}
+
 /// The mail configuration, from flags or the environment: a relay URL or
 /// a command, either with a From address, or nothing at all.
 fn mailer_from(
     smtp_url: Option<String>,
     mail_command: Option<String>,
     mail_from: Option<String>,
-) -> anyhow::Result<Option<cairn_server::Mailer>> {
-    let smtp_url = smtp_url.or_else(|| std::env::var("CAIRN_SMTP_URL").ok());
-    let mail_command = mail_command.or_else(|| std::env::var("CAIRN_MAIL_COMMAND").ok());
-    let mail_from = mail_from.or_else(|| std::env::var("CAIRN_MAIL_FROM").ok());
+) -> anyhow::Result<Option<ambolt_server::Mailer>> {
+    let smtp_url = smtp_url.or_else(|| setting("SMTP_URL"));
+    let mail_command = mail_command.or_else(|| setting("MAIL_COMMAND"));
+    let mail_from = mail_from.or_else(|| setting("MAIL_FROM"));
     match (smtp_url, mail_command, mail_from) {
-        (Some(url), _, Some(from)) => cairn_server::Mailer::smtp(&url, from)
+        (Some(url), _, Some(from)) => ambolt_server::Mailer::smtp(&url, from)
             .map(Some)
-            .map_err(|e| anyhow::anyhow!("CAIRN_SMTP_URL: {e}")),
-        (None, Some(command), Some(from)) => Ok(Some(cairn_server::Mailer::command(command, from))),
+            .map_err(|e| anyhow::anyhow!("AMBOLT_SMTP_URL: {e}")),
+        (None, Some(command), Some(from)) => {
+            Ok(Some(ambolt_server::Mailer::command(command, from)))
+        }
         (None, None, None) => Ok(None),
         _ => anyhow::bail!("mail needs a From address together with a relay URL or a command"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::setting_via;
+
+    /// The renamed setting wins; the old name still counts for one
+    /// release; neither set is nothing.
+    #[test]
+    fn a_setting_is_read_under_its_new_name_then_its_old_one() {
+        let env = |pairs: &[(&str, &str)]| {
+            let pairs: Vec<(String, String)> = pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            move |key: &str| pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+        };
+        assert_eq!(
+            setting_via(
+                "PUBLIC_URL",
+                env(&[("AMBOLT_PUBLIC_URL", "new"), ("CAIRN_PUBLIC_URL", "old")])
+            ),
+            Some("new".into())
+        );
+        assert_eq!(
+            setting_via("PUBLIC_URL", env(&[("CAIRN_PUBLIC_URL", "old")])),
+            Some("old".into())
+        );
+        assert_eq!(setting_via("PUBLIC_URL", env(&[])), None);
     }
 }

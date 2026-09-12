@@ -123,6 +123,6 @@ async fn a_private_repository_still_answers_a_stranger_as_if_it_were_not_there()
     assert_eq!(status, StatusCode::SEE_OTHER);
     assert_eq!(location, "/login");
     // A bad token is refused, not downgraded to a stranger.
-    let (status, _) = api_with_token(app, "GET", "/api/repos/ada/demo", "cairn_nope", None).await;
+    let (status, _) = api_with_token(app, "GET", "/api/repos/ada/demo", "ambolt_nope", None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }

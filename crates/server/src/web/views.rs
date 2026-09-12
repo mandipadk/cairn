@@ -4,11 +4,11 @@
 
 use super::diff::{FileDiff, LineKind};
 use super::{Brief, Chrome, LandingData, Sidebar, Viewer};
-use cairn_core::{
+use ambolt_core::{
     Anchor, Independence, Resolution, ReviewDomain, Session, SessionState, Side, TaskState, Thread,
     ThreadKind, Waiver,
 };
-use cairn_core::{
+use ambolt_core::{
     BrowserSession, Change, ChangeState, Claim, Contact, Disposition, Envelope, Event, HitKind,
     Notice, PasskeyRecord, PolicyTrace, PrincipalId, Repo, Revision, Task, Verdict, Verification,
     Visibility,
@@ -51,7 +51,7 @@ impl Theme {
 pub struct BlameRow {
     pub number: usize,
     pub text: String,
-    pub provenance: Option<std::sync::Arc<cairn_core::Provenance>>,
+    pub provenance: Option<std::sync::Arc<ambolt_core::Provenance>>,
 }
 
 /// One row of a tree listing, with the change that last touched it.
@@ -197,7 +197,7 @@ fn frame_in(
             head {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
-                title { (title) " · cairn" }
+                title { (title) " · ambolt" }
                 link rel="stylesheet" href=(super::stylesheet_href());
                 script defer src=(super::script_href()) {}
             }
@@ -245,7 +245,7 @@ fn topbar(theme: Theme, viewer: Option<&Viewer>) -> Markup {
         div class="bar" {
             a class="brand" href="/" aria-label="Home" {
                 span class="stones" aria-hidden="true" { span {} span {} span {} }
-                b { "cairn" }
+                b { "ambolt" }
             }
             form class="search" method="get" action="/search" {
                 input name="q" type="search" placeholder="Search repositories, changes, people"
@@ -388,7 +388,7 @@ pub fn signup(theme: Theme, state: super::Signup, error: Option<&str>) -> Markup
                 div class="login" {
                     div class="mark" {
                         span class="stones" aria-hidden="true" { span {} span {} span {} }
-                        b { "cairn" }
+                        b { "ambolt" }
                     }
                     @if let Some(error) = error { p class="error" { (error) } }
                     @if open {
@@ -431,7 +431,7 @@ pub fn signup(theme: Theme, state: super::Signup, error: Option<&str>) -> Markup
 
 /// What an account here gets, said in numbers from the forge's own
 /// defaults; "no limit" where there is none.
-fn allowance_words(quota: &cairn_core::Quota) -> String {
+fn allowance_words(quota: &ambolt_core::Quota) -> String {
     let count = |n: Option<u32>, what: &str| match n {
         Some(n) => format!("{n} {what}"),
         None => format!("{what} without limit"),
@@ -454,20 +454,20 @@ pub fn welcome(
     theme: Theme,
     joined: bool,
     error: Option<&str>,
-    quota: &cairn_core::Quota,
+    quota: &ambolt_core::Quota,
 ) -> Markup {
     layout(
         theme,
         None,
         None,
         None,
-        "cairn",
+        "ambolt",
         html! {
             div class="welcome" {
                 header {
                     div class="mark" {
                         span class="stones" aria-hidden="true" { span {} span {} span {} }
-                        b { "cairn" }
+                        b { "ambolt" }
                     }
                     a class="quiet" href="/login" { "Sign in" }
                 }
@@ -572,7 +572,7 @@ fn outside(theme: Theme, title: &str, body: Markup) -> Markup {
                 div class="login" {
                     div class="mark" {
                         span class="stones" aria-hidden="true" { span {} span {} span {} }
-                        b { "cairn" }
+                        b { "ambolt" }
                     }
                     p class="strong" { (title) }
                     (body)
@@ -654,7 +654,7 @@ pub fn login(
                 div class="login" {
                     div class="mark" {
                         span class="stones" aria-hidden="true" { span {} span {} span {} }
-                        b { "cairn" }
+                        b { "ambolt" }
                     }
                     @if let Some(error) = error { p class="error" { (error) } }
                     @if let Some(done) = done { p class="done" { (done) } }
@@ -781,7 +781,7 @@ pub fn home(theme: Theme, viewer: &Viewer, data: &super::HomeData) -> Markup {
                             @if let Some(draw) = &entry.item.drawn {
                                 span class="drawn" { "drawn " (draw.day) } span class="sec3" { " · " }
                             }
-                            @for (index, signal) in entry.item.signals.iter().filter(|s| s.kind != cairn_core::SignalKind::Drawn).take(2).enumerate() {
+                            @for (index, signal) in entry.item.signals.iter().filter(|s| s.kind != ambolt_core::SignalKind::Drawn).take(2).enumerate() {
                                 @if index > 0 { span class="sec3" { " · " } }
                                 span class={ @if index == 0 { "lead" } @else { "sec3" } } {
                                     (signal.description)
@@ -838,7 +838,7 @@ pub fn first_run(theme: Theme, viewer: &Viewer) -> Markup {
             div class="first" {
                 h2 { "Nothing here yet" }
                 p {
-                    "cairn records how software actually came to exist — who claimed what, \
+                    "ambolt records how software actually came to exist — who claimed what, \
                      who re-ran it, and why anything was allowed to land. It starts \
                      recording from the first push."
                 }
@@ -1213,7 +1213,7 @@ pub struct TaskFocus {
     pub verifications: Vec<Verification>,
     /// Readiness of the change while it is open.
     pub trace: Option<PolicyTrace>,
-    pub preference: Option<cairn_core::Preference>,
+    pub preference: Option<ambolt_core::Preference>,
 }
 
 pub struct TaskPage<'a> {
@@ -1445,7 +1445,7 @@ pub fn repo_settings(
     error: Option<&str>,
     done: bool,
     preview: Option<&[(Change, PolicyTrace)]>,
-    simulation: Option<&cairn_core::Simulation>,
+    simulation: Option<&ambolt_core::Simulation>,
 ) -> Markup {
     let policy = &repo.policy;
     let ninety_days_ago = (jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24 * 90))
@@ -1551,7 +1551,7 @@ pub fn repo_settings(
                         span class="hint" { "Start from a pack instead of the fields above" }
                         select name="pack" {
                             option value="" { "the fields above" }
-                            @for pack in cairn_core::packs() { option value=(pack.name) { (pack.name) " · " (pack.description) } }
+                            @for pack in ambolt_core::packs() { option value=(pack.name) { (pack.name) " · " (pack.description) } }
                         }
                         label for="pack_json" { "or paste a pack exported by another repository" }
                         textarea id="pack_json" name="pack_json" rows="3" placeholder="{ \"pack\": 1, \"name\": … }" {}
@@ -1804,7 +1804,7 @@ pub fn settings(
     contact: &Contact,
     can_mail: bool,
     passkeys: Option<&[PasskeyRecord]>,
-    identities: Option<(&str, &[cairn_core::IdentityLink])>,
+    identities: Option<(&str, &[ambolt_core::IdentityLink])>,
     note: SettingsNote<'_>,
 ) -> Markup {
     let SettingsNote {
@@ -1932,7 +1932,7 @@ pub fn settings(
 pub fn tokens(
     theme: Theme,
     viewer: &Viewer,
-    tokens: &[cairn_core::TokenInfo],
+    tokens: &[ambolt_core::TokenInfo],
     fresh: Option<&str>,
     error: Option<&str>,
 ) -> Markup {
@@ -2107,19 +2107,19 @@ fn allowance(what: &str, used: String, limit: Option<String>) -> Markup {
 pub fn owner(
     theme: Theme,
     who: Reading<'_>,
-    owner: &cairn_core::Principal,
-    repos: &[cairn_core::Repo],
-    members: &[cairn_core::PrincipalId],
+    owner: &ambolt_core::Principal,
+    repos: &[ambolt_core::Repo],
+    members: &[ambolt_core::PrincipalId],
     may_create: bool,
     // Whether the viewer may change who is on the organisation.
     may_manage: bool,
     // What this owner is taking up and what they may, shown only to
     // them and to whoever runs the forge: how full somebody's account
     // is is their business.
-    allowances: Option<(cairn_core::Usage, cairn_core::Quota)>,
+    allowances: Option<(ambolt_core::Usage, ambolt_core::Quota)>,
     error: Option<&str>,
 ) -> Markup {
-    let organisation = owner.kind == cairn_core::PrincipalKind::Team;
+    let organisation = owner.kind == ambolt_core::PrincipalKind::Team;
     layout_reading(
         theme,
         who,
@@ -2133,7 +2133,7 @@ pub fn owner(
                     p class="sec2" {
                         code { (owner.id.as_str()) }
                         " · "
-                        @if organisation { "organisation" } @else if owner.kind == cairn_core::PrincipalKind::Agent { "agent" } @else { "person" }
+                        @if organisation { "organisation" } @else if owner.kind == ambolt_core::PrincipalKind::Agent { "agent" } @else { "person" }
                         @if !owner.active { " · deactivated" }
                     }
                 }
@@ -2148,12 +2148,12 @@ pub fn owner(
                 }
                 div class="ftable" {
                     @for repo in repos {
-                        @let short = cairn_core::split_repo_name(&repo.name).map(|(_, s)| s).unwrap_or(&repo.name);
+                        @let short = ambolt_core::split_repo_name(&repo.name).map(|(_, s)| s).unwrap_or(&repo.name);
                         div class="trow link" {
                             a class="fname" href={ "/" (repo.name) } { (short) }
                             span class="last sec2" { (repo.description) }
                             span class="sec3 r" {
-                                @if repo.visibility == cairn_core::Visibility::Public { "public" } @else { "private" }
+                                @if repo.visibility == ambolt_core::Visibility::Public { "public" } @else { "private" }
                                 @if repo.archived { " · archived" }
                             }
                         }
@@ -2265,7 +2265,7 @@ pub fn report(
 pub fn reports(
     theme: Theme,
     viewer: &Viewer,
-    reports: &[cairn_core::Report],
+    reports: &[ambolt_core::Report],
     error: Option<&str>,
 ) -> Markup {
     layout(
@@ -3627,7 +3627,7 @@ pub fn landing(
                                     @if let Some(draw) = &item.drawn {
                                         span class="drawn" { "drawn " (draw.day) } span class="sec3" { " · " }
                                     }
-                                    @for (index, signal) in item.signals.iter().filter(|s| s.kind != cairn_core::SignalKind::Drawn).enumerate() {
+                                    @for (index, signal) in item.signals.iter().filter(|s| s.kind != ambolt_core::SignalKind::Drawn).enumerate() {
                                         @if index > 0 { span class="sec3" { " · " } }
                                         span class={ @if index == 0 { "lead" } @else { "sec3" } } {
                                             (signal.description)
@@ -3698,7 +3698,7 @@ fn change_ref(numbers: &Refs, id: &str) -> Markup {
 }
 
 /// Everything behind a ranking, for the reader who wants the facts.
-fn attention_evidence(item: &cairn_core::AttentionItem) -> String {
+fn attention_evidence(item: &ambolt_core::AttentionItem) -> String {
     item.signals
         .iter()
         .map(|s| format!("{}: {}", s.description, s.evidence))
@@ -4208,13 +4208,14 @@ pub fn log(
 /// question "which code here was never actually verified" is the one
 /// this view exists to answer.
 pub fn blame(theme: Theme, who: Reading<'_>, repo: &str, path: &str, rows: &[BlameRow]) -> Markup {
-    let state_of = |row: &BlameRow| cairn_core::line_state(row.provenance.as_deref());
-    let count = |state: cairn_core::LineState| rows.iter().filter(|r| state_of(r) == state).count();
-    let reproduced = count(cairn_core::LineState::Reproduced);
-    let claimed = count(cairn_core::LineState::Claimed);
-    let with_gaps = count(cairn_core::LineState::Gap);
-    let argued = count(cairn_core::LineState::Argued);
-    let unattributed = count(cairn_core::LineState::Imported);
+    let state_of = |row: &BlameRow| ambolt_core::line_state(row.provenance.as_deref());
+    let count =
+        |state: ambolt_core::LineState| rows.iter().filter(|r| state_of(r) == state).count();
+    let reproduced = count(ambolt_core::LineState::Reproduced);
+    let claimed = count(ambolt_core::LineState::Claimed);
+    let with_gaps = count(ambolt_core::LineState::Gap);
+    let argued = count(ambolt_core::LineState::Argued);
+    let unattributed = count(ambolt_core::LineState::Imported);
     layout_reading(
         theme,
         who,
@@ -4267,7 +4268,7 @@ pub fn blame(theme: Theme, who: Reading<'_>, repo: &str, path: &str, rows: &[Bla
 
 /// The tooltip a line carries: what was claimed, who approved, and
 /// what nobody checked.
-fn attribution(p: &cairn_core::Provenance) -> String {
+fn attribution(p: &ambolt_core::Provenance) -> String {
     let mut parts = vec![p.change.title.clone()];
     for claim in &p.claims {
         let mark = if claim.passed { "passed" } else { "failed" };
@@ -4292,15 +4293,15 @@ fn attribution(p: &cairn_core::Provenance) -> String {
 
 /// Everything the changes behind this file declared out of scope,
 /// collected in one place.
-fn state_words(state: cairn_core::LineState) -> &'static str {
+fn state_words(state: ambolt_core::LineState) -> &'static str {
     match state {
-        cairn_core::LineState::Reproduced => {
+        ambolt_core::LineState::Reproduced => {
             "reproduced: a runner re-ran the claim that landed this"
         }
-        cairn_core::LineState::Claimed => "claimed: its author ran something nobody re-ran",
-        cairn_core::LineState::Gap => "gap: the claim that landed this said what it did not check",
-        cairn_core::LineState::Argued => "argued: only a reasoning claim, nothing executed",
-        cairn_core::LineState::Imported => {
+        ambolt_core::LineState::Claimed => "claimed: its author ran something nobody re-ran",
+        ambolt_core::LineState::Gap => "gap: the claim that landed this said what it did not check",
+        ambolt_core::LineState::Argued => "argued: only a reasoning claim, nothing executed",
+        ambolt_core::LineState::Imported => {
             "imported: from before the forge; nothing here judged it"
         }
     }
@@ -4311,9 +4312,9 @@ fn state_words(state: cairn_core::LineState) -> &'static str {
 /// stylesheet policy allows where an inline style would be refused.
 /// Two lines over the tips the map was drawn at: total debt, and the
 /// imported part of it. No axes: the legend under it carries the numbers.
-fn burndown(history: &[cairn_core::DebtSnapshot]) -> Markup {
+fn burndown(history: &[ambolt_core::DebtSnapshot]) -> Markup {
     let (w, h) = (700.0_f64, 120.0_f64);
-    let debt = |p: &cairn_core::DebtSnapshot| (p.claimed + p.gap + p.argued + p.imported) as f64;
+    let debt = |p: &ambolt_core::DebtSnapshot| (p.claimed + p.gap + p.argued + p.imported) as f64;
     let top = history.iter().map(debt).fold(1.0_f64, f64::max);
     let x = |i: usize| {
         if history.len() < 2 {
@@ -4323,7 +4324,7 @@ fn burndown(history: &[cairn_core::DebtSnapshot]) -> Markup {
         }
     };
     let y = |v: f64| h - 6.0 - (v / top) * (h - 14.0);
-    let points = |f: &dyn Fn(&cairn_core::DebtSnapshot) -> f64| -> String {
+    let points = |f: &dyn Fn(&ambolt_core::DebtSnapshot) -> f64| -> String {
         history
             .iter()
             .enumerate()
@@ -4388,7 +4389,7 @@ pub fn debt(
     who: Reading<'_>,
     repo: &str,
     map: &crate::debt::DebtMap,
-    history: &[cairn_core::DebtSnapshot],
+    history: &[ambolt_core::DebtSnapshot],
 ) -> Markup {
     let c = &map.counts;
     let signed = who.viewer().is_some();
@@ -4552,7 +4553,7 @@ pub fn lessons(
     who: Reading<'_>,
     repo: &str,
     search: Option<&str>,
-    lessons: &[cairn_core::Lesson],
+    lessons: &[ambolt_core::Lesson],
 ) -> Markup {
     layout_reading(
         theme,
@@ -4579,7 +4580,7 @@ pub fn lessons(
             }
             @for lesson in lessons {
                 div class="lesson-row" {
-                    span class={ "dot " @if lesson.state == cairn_core::SessionState::Failed { "bad" } @else { "ok" } } {}
+                    span class={ "dot " @if lesson.state == ambolt_core::SessionState::Failed { "bad" } @else { "ok" } } {}
                     div {
                         div class="head" {
                             span class="t" { (lesson.task_title) }
@@ -4596,7 +4597,7 @@ pub fn lessons(
 
 /// A principal's record in one quiet line: what the log says a runner
 /// found of their claims, and what humans said of their changes.
-pub fn record_words(record: &cairn_core::Record) -> String {
+pub fn record_words(record: &ambolt_core::Record) -> String {
     let mut words = match record.reproduced_percent {
         Some(percent) => format!("{percent}% of {} judged claims reproduced", record.judged),
         None if record.claims > 0 => format!("{} claims, none judged yet", record.claims),

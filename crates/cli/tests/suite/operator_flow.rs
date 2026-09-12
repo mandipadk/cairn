@@ -332,7 +332,7 @@ async fn the_waitlist_is_read_and_answered_behind_the_door() {
         .headers()
         .get_all("set-cookie")
         .iter()
-        .any(|v| v.to_str().unwrap_or("").starts_with("cairn_session="));
+        .any(|v| v.to_str().unwrap_or("").starts_with("ambolt_session="));
     assert!(signed, "following the invitation signs jane in");
     let request = Request::builder().uri(&path).body(Body::empty()).unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -340,7 +340,7 @@ async fn the_waitlist_is_read_and_answered_behind_the_door() {
         .headers()
         .get_all("set-cookie")
         .iter()
-        .any(|v| v.to_str().unwrap_or("").starts_with("cairn_session="));
+        .any(|v| v.to_str().unwrap_or("").starts_with("ambolt_session="));
     assert!(!again, "and only once");
     // Inviting again replaces the open invitation rather than adding one.
     let (status, twice) = api(
@@ -483,7 +483,7 @@ async fn sign_up_is_a_switch() {
         .headers()
         .get_all("set-cookie")
         .iter()
-        .any(|v| v.to_str().unwrap_or("").starts_with("cairn_session="));
+        .any(|v| v.to_str().unwrap_or("").starts_with("ambolt_session="));
     assert!(signed, "a new account is signed in");
     let (status, jane) = api_with_token(
         &open.app,

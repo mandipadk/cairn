@@ -158,7 +158,7 @@ async fn a_sign_in_answer_is_judged_against_the_state_it_was_issued_for() {
 
 #[test]
 fn the_script_defines_what_it_uses() {
-    let script = cairn_server::passkeys::SCRIPT;
+    let script = ambolt_server::passkeys::SCRIPT;
     for helper in ["explain", "say", "post", "enc", "dec"] {
         let defined = script
             .find(&format!("var {helper} = "))

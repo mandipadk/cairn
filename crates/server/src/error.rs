@@ -1,7 +1,7 @@
+use ambolt_core::CoreError;
 use axum::Json as AxumJson;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use cairn_core::CoreError;
 use serde_json::json;
 
 pub type ApiResult<T> = Result<T, ApiError>;
@@ -50,9 +50,9 @@ impl From<CoreError> for ApiError {
     }
 }
 
-impl From<cairn_git::GitError> for ApiError {
-    fn from(err: cairn_git::GitError) -> Self {
-        use cairn_git::GitError as G;
+impl From<ambolt_git::GitError> for ApiError {
+    fn from(err: ambolt_git::GitError) -> Self {
+        use ambolt_git::GitError as G;
         let (status, kind) = match &err {
             G::InvalidRepoName(_) => (StatusCode::BAD_REQUEST, "invalid"),
             G::RepoMissing(_) => (StatusCode::NOT_FOUND, "not_found"),

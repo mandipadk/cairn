@@ -1211,7 +1211,7 @@ fn rebuild_projections(conn: &mut Connection) -> CoreResult<()> {
 /// Rebuilding is rare and worth a line in the log of whoever is
 /// watching, but the core does not depend on a logging framework.
 fn tracing_replay(events: u64) {
-    eprintln!("cairn: projections rebuilt by replaying {events} events");
+    eprintln!("ambolt: projections rebuilt by replaying {events} events");
 }
 
 /// Who an event is addressed to, and in what words.

@@ -52,7 +52,7 @@ async fn a_reset_link_arrives_by_mail_and_works_exactly_once() {
     );
     let confirm = std::fs::read_to_string(&mail_file).unwrap();
     assert!(
-        confirm.contains("Subject: Confirm your address on cairn"),
+        confirm.contains("Subject: Confirm your address on ambolt"),
         "{confirm}"
     );
     std::fs::remove_file(&mail_file).unwrap();
@@ -73,10 +73,10 @@ async fn a_reset_link_arrives_by_mail_and_works_exactly_once() {
     assert_eq!(location, "/forgot?done=1");
     let mail = std::fs::read_to_string(&mail_file).expect("a mail was written");
     assert!(
-        mail.starts_with("From: cairn@forge.example\r\nTo: ada@example.org\r\n"),
+        mail.starts_with("From: ambolt@forge.example\r\nTo: ada@example.org\r\n"),
         "{mail}"
     );
-    assert!(mail.contains("Subject: Reset your cairn password"));
+    assert!(mail.contains("Subject: Reset your ambolt password"));
     let link = link_in(&mail);
     assert!(link.contains("/reset?token="), "{link}");
     std::fs::remove_file(&mail_file).unwrap();
@@ -228,7 +228,7 @@ async fn a_sign_in_link_signs_you_in_once_and_only_to_a_confirmed_address() {
     let (_, location) = post_form(app, "/login/link", "", "who=ada%40example.org").await;
     assert_eq!(location, "/login?sent=1");
     let mail = std::fs::read_to_string(&mail_file).expect("a sign-in link was mailed");
-    assert!(mail.contains("Subject: Your cairn sign-in link"), "{mail}");
+    assert!(mail.contains("Subject: Your ambolt sign-in link"), "{mail}");
     let path = path_of(&link_in(&mail));
     assert!(path.starts_with("/signin?token="), "{path}");
 

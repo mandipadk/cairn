@@ -1,5 +1,5 @@
 [package]
-name = "cairn"
+name = "ambolt"
 version.workspace = true
 edition = "2024"
 license.workspace = true
@@ -8,10 +8,10 @@ repository.workspace = true
 [dependencies]
 anyhow = "1.0.104"
 axum = "0.8.9"
-cairn-client = { path = "../client" }
-cairn-core = { path = "../core" }
-cairn-git = { path = "../git" }
-cairn-server = { path = "../server" }
+ambolt-client = { path = "../client" }
+ambolt-core = { path = "../core" }
+ambolt-git = { path = "../git" }
+ambolt-server = { path = "../server" }
 clap = { version = "4.6.6", features = ["derive"] }
 jiff = "0.2.35"
 rpassword = "7.5.4"

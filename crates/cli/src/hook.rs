@@ -17,9 +17,9 @@
 //! The hook holds no state and makes no decisions: it is a translator,
 //! and the API's typed refusals become push failures verbatim.
 
+use ambolt_git::pkt;
+use ambolt_git::pkt::Packet;
 use anyhow::{Context, bail};
-use cairn_git::pkt;
-use cairn_git::pkt::Packet;
 use serde_json::{Value, json};
 use std::io::{Read, Write};
 
@@ -59,9 +59,9 @@ fn die_with_receive_pack() {
 /// arrives as the forge worded it rather than as an HTTP status.
 pub fn room() -> anyhow::Result<()> {
     die_with_receive_pack();
-    let server = std::env::var("CAIRN_SERVER").context("CAIRN_SERVER not set")?;
-    let token = std::env::var("CAIRN_TOKEN").context("CAIRN_TOKEN not set")?;
-    let repo = std::env::var("CAIRN_REPO").context("CAIRN_REPO not set")?;
+    let server = std::env::var("AMBOLT_SERVER").context("AMBOLT_SERVER not set")?;
+    let token = std::env::var("AMBOLT_TOKEN").context("AMBOLT_TOKEN not set")?;
+    let repo = std::env::var("AMBOLT_REPO").context("AMBOLT_REPO not set")?;
     let client = Client {
         server: &server,
         token: &token,
@@ -131,9 +131,9 @@ fn occupied(dir: &std::path::Path) -> u64 {
 
 pub fn run() -> anyhow::Result<()> {
     die_with_receive_pack();
-    let server = std::env::var("CAIRN_SERVER").context("CAIRN_SERVER not set")?;
-    let token = std::env::var("CAIRN_TOKEN").context("CAIRN_TOKEN not set")?;
-    let repo = std::env::var("CAIRN_REPO").context("CAIRN_REPO not set")?;
+    let server = std::env::var("AMBOLT_SERVER").context("AMBOLT_SERVER not set")?;
+    let token = std::env::var("AMBOLT_TOKEN").context("AMBOLT_TOKEN not set")?;
+    let repo = std::env::var("AMBOLT_REPO").context("AMBOLT_REPO not set")?;
     let stdin = std::io::stdin().lock();
     let stdout = std::io::stdout().lock();
     conversation(stdin, stdout, &server, &token, &repo)
@@ -253,7 +253,7 @@ fn handle_push(
     }
     let mut entries = Vec::new();
     for oid in &commits {
-        let info = cairn_git::parse_commit_object(&read_commit(oid)?);
+        let info = ambolt_git::parse_commit_object(&read_commit(oid)?);
         entries.push(json!({
             "commit_oid": oid,
             "title": info.title,
@@ -495,7 +495,7 @@ mod tests {
             Cursor::new(request),
             &mut response,
             "http://127.0.0.1:9", // discard port: nothing listens
-            "cairnpush_test",
+            "amboltpush_test",
             "demo",
         )
         .unwrap();
@@ -514,7 +514,7 @@ mod tests {
     fn non_refs_for_pushes_are_rejected_without_touching_the_forge() {
         let client = Client {
             server: "http://127.0.0.1:9",
-            token: "cairnpush_test",
+            token: "amboltpush_test",
         };
         let err = handle_push(&client, "demo", &"a".repeat(40), "refs/heads/main").unwrap_err();
         assert!(err.contains("refs/for/<branch>"));

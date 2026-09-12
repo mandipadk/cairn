@@ -26,8 +26,8 @@
 //! because then each attempt costs a test run; revisit it then.
 
 use crate::state::AppState;
-use cairn_core::{Event, QueueEntry};
-use cairn_git::RebaseOutcome;
+use ambolt_core::{Event, QueueEntry};
+use ambolt_git::RebaseOutcome;
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -239,7 +239,7 @@ async fn land(
         dequeue(state, entry, "change no longer exists").await;
         return Ok(true);
     };
-    if change.state != cairn_core::ChangeState::Open {
+    if change.state != ambolt_core::ChangeState::Open {
         dequeue(
             state,
             entry,
@@ -377,12 +377,12 @@ pub(crate) async fn mirror_branch(state: &AppState, repo: &str, branch: &str, la
 /// Mirror pushes are the forge's own act, so they are attributed to
 /// whoever configured the repository — the first admin-capable human,
 /// falling back to the queue entry's enqueuer.
-fn record_actor(store: &cairn_core::Store) -> cairn_core::PrincipalId {
+fn record_actor(store: &ambolt_core::Store) -> ambolt_core::PrincipalId {
     store
-        .events_after(cairn_core::EventSeq(0), 1)
+        .events_after(ambolt_core::EventSeq(0), 1)
         .ok()
         .and_then(|events| events.first().map(|e| e.actor.clone()))
-        .unwrap_or_else(|| cairn_core::PrincipalId("cairn".to_owned()))
+        .unwrap_or_else(|| ambolt_core::PrincipalId("ambolt".to_owned()))
 }
 
 /// Rebase every open child of a just-landed change onto the new tip.

@@ -16,13 +16,13 @@ mod views;
 use crate::auth::resolve_bearer;
 use crate::repo_path::RepoName;
 use crate::state::AppState;
+use ambolt_core::{Disposition, PrincipalId, Repo, ReviewDomain};
 use axum::Router;
 use axum::extract::{Form, FromRequestParts, Path, Query, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
-use cairn_core::{Disposition, PrincipalId, Repo, ReviewDomain};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -37,10 +37,10 @@ const MAX_RENDERED_BLOB: u64 = 2 * 1024 * 1024;
 /// diff is parsed into per-file structures before it is displayed.
 const MAX_RENDERED_DIFF: usize = 1024 * 1024;
 
-pub(crate) const SESSION_COOKIE: &str = "cairn_session";
-const TOKEN_COOKIE: &str = "cairn_token";
-const DEV_COOKIE: &str = "cairn_dev";
-const THEME_COOKIE: &str = "cairn_theme";
+pub(crate) const SESSION_COOKIE: &str = "ambolt_session";
+const TOKEN_COOKIE: &str = "ambolt_token";
+const DEV_COOKIE: &str = "ambolt_dev";
+const THEME_COOKIE: &str = "ambolt_theme";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -242,8 +242,8 @@ pub struct Hit {
 
 /// Where a hit leads. A person leads to their work, because a page
 /// about a person is a list of what they did.
-fn hit_href(hit: &cairn_core::SearchHit) -> String {
-    use cairn_core::HitKind::*;
+fn hit_href(hit: &ambolt_core::SearchHit) -> String {
+    use ambolt_core::HitKind::*;
     match (hit.kind, &hit.repo, hit.number, &hit.principal) {
         (Change, Some(repo), Some(number), _) => format!("/{repo}/changes/{number}"),
         (Repository, Some(repo), _, _) => format!("/{repo}"),
@@ -262,7 +262,7 @@ async fn search_page(
     viewer: Viewer,
     Query(query): Query<SearchQuery>,
 ) -> Response {
-    let parsed = cairn_core::SearchQuery::parse(&query.q);
+    let parsed = ambolt_core::SearchQuery::parse(&query.q);
     let hits = app.with_store(|store| store.search(&viewer.0, &parsed, 100));
     match hits {
         Ok(hits) => {
@@ -335,7 +335,7 @@ async fn create_from_form(
     let name = form.name.trim().to_owned();
     let owner = match form.owner.trim() {
         "" => None,
-        given => match cairn_core::PrincipalId::new(given) {
+        given => match ambolt_core::PrincipalId::new(given) {
             Some(id) => Some(id),
             None => {
                 return Redirect::to("/new?error=That+owner+is+not+a+valid+name").into_response();
@@ -357,7 +357,7 @@ async fn create_from_form(
 
     let created = app.with_store(|store| {
         store.check_new_repo(&viewer.0, owner.as_ref(), &name, &branch)?;
-        Ok::<_, cairn_core::CoreError>(())
+        Ok::<_, ambolt_core::CoreError>(())
     });
     if let Err(err) = created {
         return views::new_repo(
@@ -389,7 +389,7 @@ async fn create_from_form(
             owner.as_ref(),
             &name,
             &branch,
-            cairn_core::ObjectFormat::Sha1,
+            ambolt_core::ObjectFormat::Sha1,
         )
     });
     match env {
@@ -437,7 +437,7 @@ async fn import_into(
     // somebody allowed to import here, and only to https.
     app.with_store(|s| s.check_import(who, repo))
         .map_err(|e| humane(&e))?;
-    cairn_core::Store::validate_import_source(source, app.dev_identity())
+    ambolt_core::Store::validate_import_source(source, app.dev_identity())
         .map_err(|e| humane(&e))?;
     let git = app.git().ok_or("this forge has no git storage")?;
     if git
@@ -521,11 +521,11 @@ async fn you_page(
     viewer: Viewer,
 ) -> Response {
     let mine = app.with_store(
-        |store| -> Result<Vec<(String, cairn_core::Change)>, cairn_core::CoreError> {
+        |store| -> Result<Vec<(String, ambolt_core::Change)>, ambolt_core::CoreError> {
             let mut mine = Vec::new();
             for repo in store.repos()? {
                 for change in store.changes_in_repo(&repo.name)? {
-                    if change.owner == viewer.0 && change.state == cairn_core::ChangeState::Open {
+                    if change.owner == viewer.0 && change.state == ambolt_core::ChangeState::Open {
                         mine.push((repo.name.clone(), change));
                     }
                 }
@@ -690,7 +690,7 @@ async fn change_email(
     let body = confirmation_body(&viewer.0, &link);
     let to = email.clone();
     let sent = tokio::task::spawn_blocking(move || {
-        mailer.send(&to, "Confirm your address on cairn", &body)
+        mailer.send(&to, "Confirm your address on ambolt", &body)
     })
     .await
     .unwrap_or_else(|e| Err(e.to_string()));
@@ -801,7 +801,7 @@ async fn forgot_submit(
         PrincipalId::new(who).filter(|id| {
             matches!(
                 app.with_store(|s| s.principal(id)),
-                Ok(Some(p)) if p.kind == cairn_core::PrincipalKind::Human
+                Ok(Some(p)) if p.kind == ambolt_core::PrincipalKind::Human
             )
         })
     };
@@ -831,7 +831,7 @@ async fn forgot_submit(
                     who.as_str()
                 );
                 let sent = tokio::task::spawn_blocking(move || {
-                    mailer.send(&email, "Reset your cairn password", &body)
+                    mailer.send(&email, "Reset your ambolt password", &body)
                 })
                 .await
                 .unwrap_or_else(|e| Err(e.to_string()));
@@ -896,7 +896,7 @@ async fn reset_submit(State(app): State<AppState>, Form(form): Form<ResetForm>) 
     if form.password != form.confirm {
         return back("Those two did not match");
     }
-    if let Err(err) = cairn_core::password_acceptable(&form.password) {
+    if let Err(err) = ambolt_core::password_acceptable(&form.password) {
         return back(&humane(&err));
     }
     let who = match app.with_store(|s| s.redeem_password_reset(form.token.trim())) {
@@ -992,7 +992,7 @@ async fn token_action(
 ) -> Response {
     let outcome = match form.action.as_str() {
         "revoke" => app
-            .with_store(|s| s.revoke_token(&viewer.0, &cairn_core::TokenId(form.token.clone())))
+            .with_store(|s| s.revoke_token(&viewer.0, &ambolt_core::TokenId(form.token.clone())))
             .map(|env| {
                 app.publish(&env);
                 None
@@ -1004,7 +1004,7 @@ async fn token_action(
             // script to matter, short enough that a forgotten one dies.
             let until = match form.days.as_deref().unwrap_or("90") {
                 "0" | "never" => None,
-                d => Some(cairn_core::until_in_days(
+                d => Some(ambolt_core::until_in_days(
                     d.parse::<i64>().unwrap_or(90).clamp(1, 3650),
                 )),
             };
@@ -1038,9 +1038,9 @@ async fn token_action(
 /// An agent and everything it is allowed to do.
 /// A team as the teams page shows it: its members and what it holds.
 pub struct TeamRow {
-    pub principal: cairn_core::Principal,
+    pub principal: ambolt_core::Principal,
     pub members: Vec<PrincipalId>,
-    pub grants: Vec<cairn_core::Grant>,
+    pub grants: Vec<ambolt_core::Grant>,
 }
 
 /// Teams: authority held in one place and carried by whoever is on the
@@ -1057,7 +1057,7 @@ async fn teams_page(
     let data = app.with_store(|store| {
         let mut teams = Vec::new();
         for principal in store.principals()? {
-            if principal.kind != cairn_core::PrincipalKind::Team {
+            if principal.kind != ambolt_core::PrincipalKind::Team {
                 continue;
             }
             teams.push(TeamRow {
@@ -1067,7 +1067,7 @@ async fn teams_page(
             });
         }
         let repos: Vec<String> = store.repos()?.into_iter().map(|r| r.name).collect();
-        Ok::<_, cairn_core::CoreError>((teams, repos))
+        Ok::<_, ambolt_core::CoreError>((teams, repos))
     });
     match data {
         Ok((teams, repos)) => {
@@ -1129,7 +1129,7 @@ async fn teams_action(
                 s.register_principal(
                     &viewer.0,
                     &id,
-                    cairn_core::PrincipalKind::Team,
+                    ambolt_core::PrincipalKind::Team,
                     display,
                     None,
                     None,
@@ -1153,13 +1153,13 @@ async fn teams_action(
             let Some(team) = PrincipalId::new(form.team.trim()) else {
                 return back(Some("Say which team".to_owned()));
             };
-            let actions: Vec<cairn_core::Capability> = [
-                (form.task.is_some(), cairn_core::Capability::Task),
-                (form.push.is_some(), cairn_core::Capability::Push),
-                (form.review.is_some(), cairn_core::Capability::Review),
-                (form.merge.is_some(), cairn_core::Capability::Merge),
-                (form.verify.is_some(), cairn_core::Capability::Verify),
-                (form.admin.is_some(), cairn_core::Capability::Admin),
+            let actions: Vec<ambolt_core::Capability> = [
+                (form.task.is_some(), ambolt_core::Capability::Task),
+                (form.push.is_some(), ambolt_core::Capability::Push),
+                (form.review.is_some(), ambolt_core::Capability::Review),
+                (form.merge.is_some(), ambolt_core::Capability::Merge),
+                (form.verify.is_some(), ambolt_core::Capability::Verify),
+                (form.admin.is_some(), ambolt_core::Capability::Admin),
             ]
             .into_iter()
             .filter_map(|(ticked, capability)| ticked.then_some(capability))
@@ -1193,12 +1193,12 @@ async fn teams_action(
 /// A person as the people page shows them: who they are, and whether
 /// they can sign in yet.
 pub struct PersonRow {
-    pub principal: cairn_core::Principal,
+    pub principal: ambolt_core::Principal,
     pub has_password: bool,
-    pub contact: cairn_core::Contact,
+    pub contact: ambolt_core::Contact,
     pub admin: bool,
     /// The open invitation, if one is out.
-    pub invitation: Option<cairn_core::TokenInfo>,
+    pub invitation: Option<ambolt_core::TokenInfo>,
     /// The live agents they hold, which stop with them.
     pub agents: usize,
 }
@@ -1218,7 +1218,7 @@ async fn people_page(
     let people = app.with_store(|store| {
         let mut rows = Vec::new();
         for principal in store.principals()? {
-            if principal.kind != cairn_core::PrincipalKind::Human {
+            if principal.kind != ambolt_core::PrincipalKind::Human {
                 continue;
             }
             rows.push(PersonRow {
@@ -1237,7 +1237,7 @@ async fn people_page(
                 principal,
             });
         }
-        Ok::<_, cairn_core::CoreError>(rows)
+        Ok::<_, ambolt_core::CoreError>(rows)
     });
     let once = take(&app, &viewer.0, flash.once.as_deref());
     let join_link = once
@@ -1305,7 +1305,7 @@ async fn people_action(
                 s.register_principal(
                     &viewer.0,
                     &id,
-                    cairn_core::PrincipalKind::Human,
+                    ambolt_core::PrincipalKind::Human,
                     display,
                     None,
                     None,
@@ -1332,13 +1332,13 @@ async fn people_action(
         }
         "relink" | "cancel" => {
             match app.with_store(|s| s.principal(&id)) {
-                Ok(Some(p)) if p.kind == cairn_core::PrincipalKind::Human => {}
+                Ok(Some(p)) if p.kind == ambolt_core::PrincipalKind::Human => {}
                 Ok(_) => return back(&format!("{id} is not a person here")),
                 Err(err) => return oops(err),
             }
             // Only one invitation is ever live: a new link kills the old,
             // and cancelling kills it without a new one.
-            let open: Vec<cairn_core::TokenInfo> = app
+            let open: Vec<ambolt_core::TokenInfo> = app
                 .with_store(|s| s.tokens_of(&id))
                 .unwrap_or_default()
                 .into_iter()
@@ -1366,7 +1366,7 @@ async fn people_action(
             &viewer.0,
             &id,
             will_mail,
-            Some(&cairn_core::until_in_days(INVITATION_DAYS)),
+            Some(&ambolt_core::until_in_days(INVITATION_DAYS)),
         )
     }) {
         Ok((_, secret, env)) => {
@@ -1408,11 +1408,11 @@ pub(crate) async fn mail_invitation(
         return Err("this forge does not send mail".to_owned());
     };
     let body = format!(
-        "{by} has invited you to cairn.\n\nOpen this link to sign in; it works once, and \
+        "{by} has invited you to ambolt.\n\nOpen this link to sign in; it works once, and \
          you will be asked to set a password:\n\n  {link}\n"
     );
     let to = to.to_owned();
-    tokio::task::spawn_blocking(move || mailer.send(&to, "You are invited to cairn", &body))
+    tokio::task::spawn_blocking(move || mailer.send(&to, "You are invited to ambolt", &body))
         .await
         .unwrap_or_else(|e| Err(e.to_string()))
 }
@@ -1441,12 +1441,12 @@ pub(crate) fn join_link(app: &AppState, headers: &HeaderMap, secret: &str) -> St
 
 /// The labels that mark a token as an invitation rather than a
 /// credential; the store writes them, and refuses them from anyone else.
-const INVITE_LABEL: &str = cairn_core::INVITATION_LABEL;
-const MAILED_INVITE_LABEL: &str = cairn_core::MAILED_INVITATION_LABEL;
+const INVITE_LABEL: &str = ambolt_core::INVITATION_LABEL;
+const MAILED_INVITE_LABEL: &str = ambolt_core::MAILED_INVITATION_LABEL;
 /// How long an invitation stays open. A week is what everyone expects.
 pub(crate) const INVITATION_DAYS: i64 = 7;
 
-pub(crate) fn is_invitation(token: &cairn_core::TokenInfo) -> bool {
+pub(crate) fn is_invitation(token: &ambolt_core::TokenInfo) -> bool {
     token
         .label
         .as_deref()
@@ -1501,10 +1501,10 @@ async fn join(
 }
 
 pub struct AgentRow {
-    pub principal: cairn_core::Principal,
-    pub grants: Vec<cairn_core::Grant>,
+    pub principal: ambolt_core::Principal,
+    pub grants: Vec<ambolt_core::Grant>,
     /// What the log says about it over the last 90 days.
-    pub record: cairn_core::Record,
+    pub record: ambolt_core::Record,
 }
 
 async fn agents_page(
@@ -1518,7 +1518,7 @@ async fn agents_page(
         // sees all of them, because they answer for all of them.
         let mut agents = Vec::new();
         for principal in store.principals()? {
-            if principal.kind != cairn_core::PrincipalKind::Agent {
+            if principal.kind != ambolt_core::PrincipalKind::Agent {
                 continue;
             }
             let held = match &principal.owner {
@@ -1546,7 +1546,7 @@ async fn agents_page(
         }
         let mut owners = vec![viewer.0.to_string()];
         owners.extend(store.teams_of(&viewer.0)?);
-        Ok::<_, cairn_core::CoreError>((agents, repos, owners))
+        Ok::<_, ambolt_core::CoreError>((agents, repos, owners))
     });
     let once = take(&app, &viewer.0, flash.once.as_deref());
     match data {
@@ -1674,12 +1674,12 @@ async fn agent_action(
             }
         }
         "grant" => {
-            let actions: Vec<cairn_core::Capability> = [
-                (form.task.is_some(), cairn_core::Capability::Task),
-                (form.push.is_some(), cairn_core::Capability::Push),
-                (form.review.is_some(), cairn_core::Capability::Review),
-                (form.merge.is_some(), cairn_core::Capability::Merge),
-                (form.verify.is_some(), cairn_core::Capability::Verify),
+            let actions: Vec<ambolt_core::Capability> = [
+                (form.task.is_some(), ambolt_core::Capability::Task),
+                (form.push.is_some(), ambolt_core::Capability::Push),
+                (form.review.is_some(), ambolt_core::Capability::Review),
+                (form.merge.is_some(), ambolt_core::Capability::Merge),
+                (form.verify.is_some(), ambolt_core::Capability::Verify),
             ]
             .into_iter()
             .filter_map(|(ticked, capability)| ticked.then_some(capability))
@@ -1711,7 +1711,11 @@ async fn agent_action(
                 given => given.to_owned(),
             };
             match app.with_store(|s| {
-                s.revoke_grant(&viewer.0, &cairn_core::GrantId(form.grant.clone()), &reason)
+                s.revoke_grant(
+                    &viewer.0,
+                    &ambolt_core::GrantId(form.grant.clone()),
+                    &reason,
+                )
             }) {
                 Ok(env) => {
                     app.publish(&env);
@@ -1747,7 +1751,7 @@ async fn agent_action(
 }
 
 /// Everything the chrome needs, in one pass over the store./// Everything the chrome needs, in one pass over the store.
-fn chrome_for(app: &AppState, who: &PrincipalId) -> Result<Chrome, cairn_core::CoreError> {
+fn chrome_for(app: &AppState, who: &PrincipalId) -> Result<Chrome, ambolt_core::CoreError> {
     app.with_store(|store| {
         let mut repos = Vec::new();
         let mut owned = Vec::new();
@@ -1761,7 +1765,7 @@ fn chrome_for(app: &AppState, who: &PrincipalId) -> Result<Chrome, cairn_core::C
             let changes = store.changes_in_repo(&repo.name)?;
             let open: Vec<_> = changes
                 .iter()
-                .filter(|c| c.state == cairn_core::ChangeState::Open)
+                .filter(|c| c.state == ambolt_core::ChangeState::Open)
                 .collect();
             yours += open.iter().filter(|c| c.owner == *who).count();
             repos.push(ChromeRepo {
@@ -1771,7 +1775,7 @@ fn chrome_for(app: &AppState, who: &PrincipalId) -> Result<Chrome, cairn_core::C
         }
 
         // Who is mid-session, and what they said they would touch. This
-        // is cairn's version of a live activity view: not what people
+        // is ambolt's version of a live activity view: not what people
         // published, but what is being worked on at this moment.
         let working = store
             .active_sessions()?
@@ -1937,17 +1941,17 @@ impl FromRequestParts<AppState> for Reader {
 }
 
 /// The chrome a stranger sees: the public repositories, nothing personal.
-fn chrome_public(app: &AppState) -> Result<Chrome, cairn_core::CoreError> {
+fn chrome_public(app: &AppState) -> Result<Chrome, ambolt_core::CoreError> {
     app.with_store(|store| {
         let mut repos = Vec::new();
         for repo in store.repos()? {
-            if repo.visibility != cairn_core::Visibility::Public {
+            if repo.visibility != ambolt_core::Visibility::Public {
                 continue;
             }
             let open = store
                 .changes_in_repo(&repo.name)?
                 .iter()
-                .filter(|c| c.state == cairn_core::ChangeState::Open)
+                .filter(|c| c.state == ambolt_core::ChangeState::Open)
                 .count();
             repos.push(ChromeRepo {
                 name: repo.name.clone(),
@@ -2043,7 +2047,7 @@ async fn owner_page(
     let repos: Vec<Repo> = owned
         .into_iter()
         .filter(|repo| match &who {
-            Who::Anonymous(_) => repo.visibility == cairn_core::Visibility::Public,
+            Who::Anonymous(_) => repo.visibility == ambolt_core::Visibility::Public,
             Who::Signed(viewer) => readable(&app, viewer, &repo.name).is_ok(),
         })
         .collect();
@@ -2052,7 +2056,7 @@ async fn owner_page(
     if matches!(who, Who::Anonymous(_)) && repos.is_empty() {
         return not_found();
     }
-    let organisation = principal.kind == cairn_core::PrincipalKind::Team;
+    let organisation = principal.kind == ambolt_core::PrincipalKind::Team;
     // Who is on an organisation is not a secret among the forge's own
     // principals, and the API says so; to a stranger it is a list of
     // names, which nothing else on the forge hands out for free.
@@ -2077,7 +2081,7 @@ async fn owner_page(
     let allowances = match &who {
         Who::Signed(viewer) if may_create || viewer.1.admin => app
             .with_store(|s| {
-                Ok::<_, cairn_core::CoreError>((s.usage(&owner_id)?, s.quota(&owner_id)?))
+                Ok::<_, ambolt_core::CoreError>((s.usage(&owner_id)?, s.quota(&owner_id)?))
             })
             .ok(),
         _ => None,
@@ -2131,7 +2135,7 @@ fn read_repo(app: &AppState, reader: Reader, repo: &str) -> Result<(Repo, Who), 
         Err(err) => return Err(Box::new(oops(err))),
     };
     match (record, reader.0) {
-        (Some(record), None) if record.visibility == cairn_core::Visibility::Public => {
+        (Some(record), None) if record.visibility == ambolt_core::Visibility::Public => {
             match chrome_public(app) {
                 Ok(chrome) => Ok((record, Who::Anonymous(chrome))),
                 Err(err) => Err(Box::new(oops(err))),
@@ -2159,7 +2163,7 @@ impl FromRequestParts<AppState> for Viewer {
 /// A change wanting judgment, and which repository it lives in.
 pub struct HomeAttention {
     pub repo: String,
-    pub item: cairn_core::AttentionItem,
+    pub item: ambolt_core::AttentionItem,
 }
 
 /// One line of "what happened lately", already resolved to words.
@@ -2178,10 +2182,10 @@ pub struct Lane {
 
 pub struct HomeData {
     pub needs_you: Vec<HomeAttention>,
-    pub mine: Vec<(String, cairn_core::Change)>,
+    pub mine: Vec<(String, ambolt_core::Change)>,
     pub recent: Vec<Recent>,
     pub lanes: Vec<Lane>,
-    pub lessons: Vec<cairn_core::Lesson>,
+    pub lessons: Vec<ambolt_core::Lesson>,
 }
 
 #[derive(Deserialize)]
@@ -2256,7 +2260,7 @@ async fn join_waitlist(
         // Whether they were already on it is not the visitor's business
         // to learn, and not worth a different answer.
         Ok(_) => Redirect::to("/?joined=1").into_response(),
-        Err(cairn_core::CoreError::Invalid(message)) => {
+        Err(ambolt_core::CoreError::Invalid(message)) => {
             Redirect::to(&format!("/?error={}", urlencode(&message))).into_response()
         }
         Err(err) => oops(err),
@@ -2337,7 +2341,7 @@ async fn sign_up(
         display
     };
     let email = form.email.trim().to_owned();
-    if let Err(err) = cairn_core::password_acceptable(&form.password) {
+    if let Err(err) = ambolt_core::password_acceptable(&form.password) {
         return back(&humane(&err));
     }
     // Registered, then the password and the address: the password
@@ -2348,7 +2352,7 @@ async fn sign_up(
         // Taken or reserved, the answer is the same: which names exist
         // is not something a public form should be willing to confirm,
         // five guesses an hour or not.
-        Err(cairn_core::CoreError::Conflict(_)) => {
+        Err(ambolt_core::CoreError::Conflict(_)) => {
             return back("That name is not available here; choose another");
         }
         Err(err) => return back(&humane(&err)),
@@ -2369,7 +2373,7 @@ async fn sign_up(
                     let body = confirmation_body(&id, &link);
                     let to = email.clone();
                     let sent = tokio::task::spawn_blocking(move || {
-                        mailer.send(&to, "Confirm your address on cairn", &body)
+                        mailer.send(&to, "Confirm your address on ambolt", &body)
                     })
                     .await
                     .unwrap_or_else(|e| Err(e.to_string()));
@@ -2390,7 +2394,7 @@ async fn sign_up(
 /// The mail that confirms an address, worded once.
 fn confirmation_body(who: &PrincipalId, link: &str) -> String {
     format!(
-        "This address was given for {who} on cairn.\n\nOpen this link within a day to confirm it; \
+        "This address was given for {who} on ambolt.\n\nOpen this link within a day to confirm it; \
          it works once:\n\n  {link}\n\nIf that was not you, ignore this and nothing changes.\n"
     )
 }
@@ -2446,12 +2450,12 @@ async fn file_report(
             &form.place,
             &form.contact,
             by.as_deref(),
-            cairn_core::VERSION,
+            ambolt_core::VERSION,
         )
     });
     let id = match filed {
         Ok(id) => id,
-        Err(cairn_core::CoreError::Invalid(message)) => {
+        Err(ambolt_core::CoreError::Invalid(message)) => {
             return Redirect::to(&format!("/report?error={}", urlencode(&message))).into_response();
         }
         Err(err) => return oops(err),
@@ -2468,13 +2472,13 @@ async fn file_report(
             (contact, Some(by)) => format!("{contact}, signed in as {by}"),
         };
         let body = format!(
-            "Report {id} on cairn {}\nWhere: {}\nFrom: {from}\n\n{}\n",
-            cairn_core::VERSION,
+            "Report {id} on ambolt {}\nWhere: {}\nFrom: {from}\n\n{}\n",
+            ambolt_core::VERSION,
             form.place.trim(),
             form.what.trim()
         );
         for to in addresses {
-            if let Err(err) = mailer.send(&to, &format!("cairn report {id}"), &body) {
+            if let Err(err) = mailer.send(&to, &format!("ambolt report {id}"), &body) {
                 tracing::warn!(error = %err, to, "report mail not sent");
             }
         }
@@ -2533,7 +2537,7 @@ pub(crate) fn urlencode(value: &str) -> String {
         .collect()
 }
 
-fn gather_home(app: &AppState, who: &PrincipalId) -> Result<HomeData, cairn_core::CoreError> {
+fn gather_home(app: &AppState, who: &PrincipalId) -> Result<HomeData, ambolt_core::CoreError> {
     app.with_store(|store| {
         let mut needs_you = Vec::new();
         let mut mine = Vec::new();
@@ -2546,7 +2550,7 @@ fn gather_home(app: &AppState, who: &PrincipalId) -> Result<HomeData, cairn_core
                 });
             }
             for change in store.changes_in_repo(&repo.name)? {
-                if change.owner == *who && change.state == cairn_core::ChangeState::Open {
+                if change.owner == *who && change.state == ambolt_core::ChangeState::Open {
                     mine.push((repo.name.clone(), change));
                 }
             }
@@ -2567,7 +2571,7 @@ fn gather_home(app: &AppState, who: &PrincipalId) -> Result<HomeData, cairn_core
 
         let latest = store.latest_seq()?.0;
         let recent = store
-            .events_visible_to(who, cairn_core::EventSeq((latest - 300).max(0)), 320)?
+            .events_visible_to(who, ambolt_core::EventSeq((latest - 300).max(0)), 320)?
             .into_iter()
             .rev()
             .filter_map(describe)
@@ -2588,8 +2592,8 @@ fn gather_home(app: &AppState, who: &PrincipalId) -> Result<HomeData, cairn_core
 
 /// Turn an event into a line worth reading. Anything not worth a
 /// person's attention on a home page is left out rather than padded in.
-fn describe(envelope: cairn_core::Envelope) -> Option<Recent> {
-    use cairn_core::Event;
+fn describe(envelope: ambolt_core::Envelope) -> Option<Recent> {
+    use ambolt_core::Event;
     let actor = envelope.actor.as_str().to_owned();
     match envelope.event {
         Event::ChangeMerged { change, .. } => Some(Recent {
@@ -2679,7 +2683,7 @@ async fn login_link(
         PrincipalId::new(who).filter(|id| {
             matches!(
                 app.with_store(|s| s.principal(id)),
-                Ok(Some(p)) if p.kind == cairn_core::PrincipalKind::Human
+                Ok(Some(p)) if p.kind == ambolt_core::PrincipalKind::Human
             )
         })
     };
@@ -2694,12 +2698,12 @@ async fn login_link(
                 &format!("/signin?token={}", urlencode(&secret)),
             );
             let body = format!(
-                "Here is your sign-in link for {} on cairn. It works once, for fifteen \
+                "Here is your sign-in link for {} on ambolt. It works once, for fifteen \
                  minutes:\n\n  {link}\n\nIf you did not ask for it, ignore this; nothing changes.\n",
                 who.as_str()
             );
             let sent = tokio::task::spawn_blocking(move || {
-                mailer.send(&email, "Your cairn sign-in link", &body)
+                mailer.send(&email, "Your ambolt sign-in link", &body)
             })
             .await
             .unwrap_or_else(|e| Err(e.to_string()));
@@ -2767,7 +2771,7 @@ async fn login_submit(
         };
         let (hash, real) = app.with_store(|s| s.password_hash_for_check(&principal));
         let matches = tokio::task::spawn_blocking(move || {
-            cairn_core::verify_password(&password, &hash) && real
+            ambolt_core::verify_password(&password, &hash) && real
         })
         .await
         .unwrap_or(false);
@@ -2875,7 +2879,7 @@ fn take(app: &AppState, who: &PrincipalId, id: Option<&str>) -> Once {
 /// An error as a page should say it: the message, without the kind the
 /// API prefixes it with. "invalid: that does not look like an email
 /// address" is for a machine; a person gets the second half.
-pub(crate) fn humane(err: &cairn_core::CoreError) -> String {
+pub(crate) fn humane(err: &ambolt_core::CoreError) -> String {
     let text = err.to_string();
     match text.split_once(": ") {
         Some((kind, rest)) if !kind.contains(' ') => rest.to_owned(),
@@ -2982,7 +2986,7 @@ pub(crate) async fn old_names(
                 .with_store(|s| s.repo(&current))
                 .ok()
                 .flatten()
-                .is_some_and(|repo| repo.visibility == cairn_core::Visibility::Public),
+                .is_some_and(|repo| repo.visibility == ambolt_core::Visibility::Public),
         };
         if !may_read {
             return response;
@@ -3034,7 +3038,7 @@ pub(crate) fn not_found() -> Response {
         .into_response()
 }
 
-pub(crate) const FALLBACK: &str = "x-cairn-fallback";
+pub(crate) const FALLBACK: &str = "x-ambolt-fallback";
 
 /// 404 and 500 pages are produced deep inside handlers that never saw
 /// the theme cookie. This runs after them: a marked fallback is rendered
@@ -3139,11 +3143,11 @@ async fn render_tree(
                     .unwrap_or(false);
                 if !is_dir {
                     let text = match blob {
-                        cairn_git::Blob::Text(text) => text,
-                        cairn_git::Blob::Binary { bytes } => {
+                        ambolt_git::Blob::Text(text) => text,
+                        ambolt_git::Blob::Binary { bytes } => {
                             format!("Binary file, {}.", human_bytes(bytes))
                         }
-                        cairn_git::Blob::TooLarge { bytes } => format!(
+                        ambolt_git::Blob::TooLarge { bytes } => format!(
                             "File is {}, larger than the {} this forge renders. \
                              Clone the repository to read it.",
                             human_bytes(bytes),
@@ -3220,7 +3224,7 @@ async fn render_tree(
             .read_blob(&repo, &rev, "README.md", MAX_RENDERED_BLOB)
             .await
         {
-            Ok(Some(cairn_git::Blob::Text(text))) => Some(text),
+            Ok(Some(ambolt_git::Blob::Text(text))) => Some(text),
             _ => None,
         }
     } else {
@@ -3248,12 +3252,12 @@ async fn render_tree(
 
 pub(crate) struct Sidebar {
     /// Names the repository has given landed commits, newest first.
-    pub tags: Vec<cairn_core::Tag>,
-    pub open_changes: Vec<cairn_core::Change>,
-    pub queue: Vec<cairn_core::QueueEntry>,
-    pub sessions: Vec<cairn_core::Session>,
+    pub tags: Vec<ambolt_core::Tag>,
+    pub open_changes: Vec<ambolt_core::Change>,
+    pub queue: Vec<ambolt_core::QueueEntry>,
+    pub sessions: Vec<ambolt_core::Session>,
     /// What each live session declared it is working on.
-    pub leases: Vec<cairn_core::Lease>,
+    pub leases: Vec<ambolt_core::Lease>,
     /// Change id → (number, title), so queued entries read as changes.
     pub numbers: HashMap<String, (i64, String)>,
 }
@@ -3262,7 +3266,7 @@ fn sidebar_data(
     app: &AppState,
     repo: &str,
     target: &str,
-) -> Result<Sidebar, cairn_core::CoreError> {
+) -> Result<Sidebar, ambolt_core::CoreError> {
     let all = app.with_store(|s| s.changes_in_repo(repo))?;
     let numbers = all
         .iter()
@@ -3270,7 +3274,7 @@ fn sidebar_data(
         .collect();
     let mut open_changes: Vec<_> = all
         .into_iter()
-        .filter(|c| c.state == cairn_core::ChangeState::Open)
+        .filter(|c| c.state == ambolt_core::ChangeState::Open)
         .collect();
     open_changes.reverse();
     open_changes.truncate(5);
@@ -3330,7 +3334,8 @@ async fn blame_page(
         .unwrap_or_default();
 
     // One lookup per distinct commit, not per line.
-    let mut known: HashMap<String, Option<std::sync::Arc<cairn_core::Provenance>>> = HashMap::new();
+    let mut known: HashMap<String, Option<std::sync::Arc<ambolt_core::Provenance>>> =
+        HashMap::new();
     let mut rows = Vec::new();
     for (index, line) in text.lines().enumerate() {
         let oid = oids.get(index).cloned().unwrap_or_default();
@@ -3369,7 +3374,7 @@ async fn changes_page(
     let filter = query
         .state
         .as_deref()
-        .and_then(cairn_core::ChangeState::parse);
+        .and_then(ambolt_core::ChangeState::parse);
     match app.with_store(|s| s.changes_page(&repo, filter, query.before, CHANGES_PER_PAGE)) {
         Ok(changes) => {
             let older = (changes.len() as i64 == CHANGES_PER_PAGE)
@@ -3426,7 +3431,7 @@ async fn change_page(
         .filter(|r| (1..=change.latest_revision).contains(r))
         .unwrap_or_else(|| change.judged_revision());
     let (claims, verifications, verdicts, trace) = match app.with_store(|s| {
-        Ok::<_, cairn_core::CoreError>((
+        Ok::<_, ambolt_core::CoreError>((
             s.claims_on(&change.id, shown)?,
             s.verifications_on(&change.id, shown)?,
             s.verdicts_on(&change.id, shown)?,
@@ -3532,7 +3537,7 @@ async fn submit_claim(
     Form(form): Form<ClaimForm>,
 ) -> Response {
     let back = format!("/{repo}/changes/{number}");
-    let Some(kind) = cairn_core::ClaimKind::parse(&form.kind) else {
+    let Some(kind) = ambolt_core::ClaimKind::parse(&form.kind) else {
         return flash(&back, "Pick a kind");
     };
     let passed = match form.passed.as_str() {
@@ -3549,7 +3554,7 @@ async fn submit_claim(
         Err(err) => return oops(err),
     };
     let command = form.command.trim();
-    let spec = cairn_core::ClaimSpec {
+    let spec = ambolt_core::ClaimSpec {
         kind,
         command: (!command.is_empty()).then(|| command.to_owned()),
         passed,
@@ -3687,29 +3692,29 @@ async fn submit_thread(
     Form(form): Form<ThreadForm>,
 ) -> Response {
     let back = format!("/{repo}/changes/{number}");
-    let Some(kind) = cairn_core::ThreadKind::parse(&form.kind) else {
+    let Some(kind) = ambolt_core::ThreadKind::parse(&form.kind) else {
         return flash(&back, "Pick a kind");
     };
     let anchor = match form.on.as_str() {
-        "change" => cairn_core::Anchor::Change,
+        "change" => ambolt_core::Anchor::Change,
         "line" => {
-            let Some(side) = cairn_core::Side::parse(&form.side) else {
+            let Some(side) = ambolt_core::Side::parse(&form.side) else {
                 return flash(&back, "Pick a side of the diff");
             };
             let Some(line) = form.line else {
                 return flash(&back, "Pick a line");
             };
-            cairn_core::Anchor::Line {
+            ambolt_core::Anchor::Line {
                 path: form.path.trim().to_owned(),
                 side,
                 line,
             }
         }
-        "claim" => cairn_core::Anchor::Claim {
-            claim: cairn_core::ClaimId(form.claim.trim().to_owned()),
+        "claim" => ambolt_core::Anchor::Claim {
+            claim: ambolt_core::ClaimId(form.claim.trim().to_owned()),
         },
-        "verdict" => cairn_core::Anchor::Verdict {
-            verdict: cairn_core::VerdictId(form.verdict.trim().to_owned()),
+        "verdict" => ambolt_core::Anchor::Verdict {
+            verdict: ambolt_core::VerdictId(form.verdict.trim().to_owned()),
         },
         _ => return flash(&back, "Say what the thread is about"),
     };
@@ -3734,7 +3739,7 @@ async fn submit_thread(
         Ok((thread, env)) => {
             app.publish(&env);
             let revision = match &env.event {
-                cairn_core::Event::ThreadOpened { revision, .. } => *revision,
+                ambolt_core::Event::ThreadOpened { revision, .. } => *revision,
                 _ => form.revision,
             };
             Redirect::to(&format!("{back}?r={revision}#{}", thread.as_str())).into_response()
@@ -3760,7 +3765,7 @@ async fn submit_reply(
     if let Err(response) = readable(&app, &viewer, &repo) {
         return *response;
     }
-    let id = cairn_core::ThreadId(thread);
+    let id = ambolt_core::ThreadId(thread);
     match app.with_store(|s| s.reply_thread(&viewer.0, &id, form.body.trim())) {
         Ok(env) => {
             app.publish(&env);
@@ -3792,15 +3797,15 @@ async fn submit_resolve(
     }
     let (how, fixed) = match form.how.split_once(':') {
         Some(("fixed", revision)) => (
-            cairn_core::Resolution::Fixed,
+            ambolt_core::Resolution::Fixed,
             revision.trim().parse::<i64>().ok(),
         ),
-        _ => match cairn_core::Resolution::parse(&form.how) {
+        _ => match ambolt_core::Resolution::parse(&form.how) {
             Some(how) => (how, None),
             None => return flash(&back, "Say how it was resolved"),
         },
     };
-    let id = cairn_core::ThreadId(thread);
+    let id = ambolt_core::ThreadId(thread);
     match app.with_store(|s| s.resolve_thread(&viewer.0, &id, how, fixed, form.note.trim())) {
         Ok(env) => {
             app.publish(&env);
@@ -3996,12 +4001,12 @@ async fn landing_page(
 
 pub(crate) struct LandingData {
     /// What a human should look at, ranked and explained.
-    pub needs_you: Vec<cairn_core::AttentionItem>,
-    pub queue: Vec<cairn_core::QueueEntry>,
+    pub needs_you: Vec<ambolt_core::AttentionItem>,
+    pub queue: Vec<ambolt_core::QueueEntry>,
     /// Recent merged/dequeued outcomes, newest first.
-    pub outcomes: Vec<cairn_core::Envelope>,
-    pub live: Vec<cairn_core::Envelope>,
-    pub sessions: Vec<cairn_core::Session>,
+    pub outcomes: Vec<ambolt_core::Envelope>,
+    pub live: Vec<ambolt_core::Envelope>,
+    pub sessions: Vec<ambolt_core::Session>,
     /// Change id → (number, title), for readable references.
     pub numbers: HashMap<String, (i64, String)>,
     /// The cursor a consumer would resume from right now.
@@ -4016,7 +4021,7 @@ pub(crate) struct Brief {
     pub since: i64,
     pub landed: usize,
     pub dequeued: Vec<(String, String)>,
-    pub failed_sessions: Vec<cairn_core::Lesson>,
+    pub failed_sessions: Vec<ambolt_core::Lesson>,
     pub disputed: usize,
 }
 
@@ -4024,7 +4029,7 @@ fn landing_data(
     app: &AppState,
     repo: &str,
     target: &str,
-) -> Result<LandingData, cairn_core::CoreError> {
+) -> Result<LandingData, ambolt_core::CoreError> {
     let changes = app.with_store(|s| s.changes_in_repo(repo))?;
     let numbers: HashMap<String, (i64, String)> = changes
         .iter()
@@ -4035,7 +4040,7 @@ fn landing_data(
 
     let latest = app.with_store(|s| s.latest_seq())?.0;
     let events = app.with_store(|s| {
-        s.events_for_repo(repo, cairn_core::EventSeq((latest - 200).max(0)), 220)
+        s.events_for_repo(repo, ambolt_core::EventSeq((latest - 200).max(0)), 220)
     })?;
     let outcomes: Vec<_> = events
         .iter()
@@ -4043,7 +4048,7 @@ fn landing_data(
         .filter(|e| {
             matches!(
                 e.event,
-                cairn_core::Event::ChangeMerged { .. } | cairn_core::Event::ChangeDequeued { .. }
+                ambolt_core::Event::ChangeMerged { .. } | ambolt_core::Event::ChangeDequeued { .. }
             )
         })
         .take(6)
@@ -4059,17 +4064,17 @@ fn landing_data(
     let mut disputed = 0;
     for envelope in &events {
         match &envelope.event {
-            cairn_core::Event::ChangeMerged { change, .. } => {
+            ambolt_core::Event::ChangeMerged { change, .. } => {
                 if numbers.contains_key(change.as_str()) {
                     landed += 1;
                 }
             }
-            cairn_core::Event::ChangeDequeued { change, reason } => {
+            ambolt_core::Event::ChangeDequeued { change, reason } => {
                 if let Some((number, title)) = numbers.get(change.as_str()) {
                     dequeued.push((format!("#{number} {title}"), reason.clone()));
                 }
             }
-            cairn_core::Event::ClaimVerified { agrees: false, .. } => disputed += 1,
+            ambolt_core::Event::ClaimVerified { agrees: false, .. } => disputed += 1,
             _ => {}
         }
     }
@@ -4177,7 +4182,7 @@ async fn tasks_page(
     let filter = query
         .state
         .as_deref()
-        .and_then(cairn_core::TaskState::parse);
+        .and_then(ambolt_core::TaskState::parse);
     let tasks = app.with_store(|s| {
         let mut tasks = s.tasks(filter)?;
         tasks.retain(|t| {
@@ -4186,7 +4191,7 @@ async fn tasks_page(
                 .is_none_or(|repo| s.may_read(&viewer.0, repo))
         });
         tasks.reverse();
-        Ok::<_, cairn_core::CoreError>(tasks)
+        Ok::<_, ambolt_core::CoreError>(tasks)
     });
     match tasks {
         Ok(tasks) => views::tasks(theme, &viewer, &tasks, filter).into_response(),
@@ -4200,7 +4205,7 @@ async fn task_page(
     viewer: Viewer,
     Path(id): Path<String>,
 ) -> Response {
-    let id = cairn_core::TaskId(id);
+    let id = ambolt_core::TaskId(id);
     let task = match app.with_store(|s| s.task(&id)) {
         Ok(Some(task)) => task,
         Ok(None) => return not_found(),
@@ -4212,7 +4217,7 @@ async fn task_page(
         return not_found();
     }
     let (sessions, changes) = match app.with_store(|s| {
-        Ok::<_, cairn_core::CoreError>((s.sessions_for_task(&id)?, s.changes_for_task(&id)?))
+        Ok::<_, ambolt_core::CoreError>((s.sessions_for_task(&id)?, s.changes_for_task(&id)?))
     }) {
         Ok(found) => found,
         Err(err) => return oops(err),
@@ -4221,7 +4226,7 @@ async fn task_page(
     // the attempts put on it, so the task page can be where they are read.
     let focus = changes
         .iter()
-        .find(|c| c.state == cairn_core::ChangeState::Open)
+        .find(|c| c.state == ambolt_core::ChangeState::Open)
         .or(changes.last())
         .cloned();
     let focus = match focus {
@@ -4233,13 +4238,13 @@ async fn task_page(
                 claims.extend(s.claims_on(&change.id, revision.number)?);
                 verifications.extend(s.verifications_on(&change.id, revision.number)?);
             }
-            let trace = if change.state == cairn_core::ChangeState::Open {
+            let trace = if change.state == ambolt_core::ChangeState::Open {
                 Some(s.merge_readiness(&change.id)?)
             } else {
                 None
             };
             let preference = s.preference(&change.id)?;
-            Ok::<_, cairn_core::CoreError>(views::TaskFocus {
+            Ok::<_, ambolt_core::CoreError>(views::TaskFocus {
                 change,
                 revisions,
                 claims,
@@ -4279,10 +4284,10 @@ async fn task_action(
     Form(form): Form<TaskStateForm>,
 ) -> Response {
     let back = format!("/tasks/{id}");
-    let Some(state) = cairn_core::TaskState::parse(&form.state) else {
+    let Some(state) = ambolt_core::TaskState::parse(&form.state) else {
         return flash(&back, "Pick a state");
     };
-    match app.with_store(|s| s.set_task_state(&viewer.0, &cairn_core::TaskId(id.clone()), state)) {
+    match app.with_store(|s| s.set_task_state(&viewer.0, &ambolt_core::TaskId(id.clone()), state)) {
         Ok(env) => {
             app.publish(&env);
             Redirect::to(&back).into_response()
@@ -4309,7 +4314,7 @@ async fn forge_log_page(
     }
     let after = query.after.unwrap_or(0);
     let events = match app
-        .with_store(|s| s.events_visible_to(&viewer.0, cairn_core::EventSeq(after), 200))
+        .with_store(|s| s.events_visible_to(&viewer.0, ambolt_core::EventSeq(after), 200))
     {
         Ok(events) => events,
         Err(err) => return oops(err),
@@ -4325,10 +4330,10 @@ async fn forge_log_page(
             }
         }
         let mut scopes = HashMap::new();
-        for scoped in s.events_after_scoped(cairn_core::EventSeq(after), 200)? {
+        for scoped in s.events_after_scoped(ambolt_core::EventSeq(after), 200)? {
             scopes.insert(scoped.envelope.seq.0, scoped.repo.clone());
         }
-        Ok::<_, cairn_core::CoreError>((numbers, scopes))
+        Ok::<_, ambolt_core::CoreError>((numbers, scopes))
     }) {
         Ok(found) => found,
         Err(err) => return oops(err),
@@ -4443,27 +4448,27 @@ fn urldecode(value: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-fn policy_from(form: &PolicyForm) -> Result<cairn_core::Policy, &'static str> {
+fn policy_from(form: &PolicyForm) -> Result<ambolt_core::Policy, &'static str> {
     // A pack, pasted or picked, stands in for the fields entirely; it is
     // still only a proposal until it is saved.
     if !form.pack_json.trim().is_empty() {
-        let pack: cairn_core::PolicyPack =
+        let pack: ambolt_core::PolicyPack =
             serde_json::from_str(&form.pack_json).map_err(|_| "That is not a policy pack")?;
         return Ok(pack.policy);
     }
     if !form.pack.trim().is_empty() {
-        return cairn_core::packs()
+        return ambolt_core::packs()
             .into_iter()
             .find(|p| p.name == form.pack.trim())
             .map(|p| p.policy)
             .ok_or("No pack by that name");
     }
     let independence =
-        cairn_core::Independence::parse(&form.independence).ok_or("Pick an approval rule")?;
+        ambolt_core::Independence::parse(&form.independence).ok_or("Pick an approval rule")?;
     let mut required_domains = Vec::new();
     for domain in &form.domains {
         required_domains
-            .push(cairn_core::ReviewDomain::parse(domain).ok_or("Unknown review domain")?);
+            .push(ambolt_core::ReviewDomain::parse(domain).ok_or("Unknown review domain")?);
     }
     let attention_budget = match form.attention_budget.trim() {
         "" | "0" => None,
@@ -4487,7 +4492,7 @@ fn policy_from(form: &PolicyForm) -> Result<cairn_core::Policy, &'static str> {
     } else {
         let mut waives = Vec::new();
         for waiver in &form.trust_waives {
-            waives.push(cairn_core::Waiver::parse(waiver).ok_or("Unknown waiver")?);
+            waives.push(ambolt_core::Waiver::parse(waiver).ok_or("Unknown waiver")?);
         }
         let number =
             |value: &str, low: u32, high: u32, what: &'static str| -> Result<u32, &'static str> {
@@ -4498,7 +4503,7 @@ fn policy_from(form: &PolicyForm) -> Result<cairn_core::Policy, &'static str> {
                     .filter(|n| (low..=high).contains(n))
                     .ok_or(what)
             };
-        Some(cairn_core::EarnedTrust {
+        Some(ambolt_core::EarnedTrust {
             min_reproduced_percent: number(
                 &form.trust_percent,
                 50,
@@ -4527,7 +4532,7 @@ fn policy_from(form: &PolicyForm) -> Result<cairn_core::Policy, &'static str> {
             waives,
         })
     };
-    Ok(cairn_core::Policy {
+    Ok(ambolt_core::Policy {
         require_executed_check: form.require_executed_check.is_some(),
         independence,
         require_runner_verification: form.require_runner_verification.is_some(),
@@ -4619,7 +4624,7 @@ async fn repo_mirror(
     Form(form): Form<MirrorForm>,
 ) -> Response {
     let back = format!("/{repo}/settings");
-    let mirror = (!form.url.trim().is_empty()).then(|| cairn_core::Mirror {
+    let mirror = (!form.url.trim().is_empty()).then(|| ambolt_core::Mirror {
         url: form.url.trim().to_owned(),
         enabled: form.enabled.is_some(),
     });
@@ -4639,7 +4644,7 @@ async fn repo_visibility(
     Form(form): Form<VisibilityForm>,
 ) -> Response {
     let back = format!("/{repo}/settings");
-    let Some(visibility) = cairn_core::Visibility::parse(&form.visibility) else {
+    let Some(visibility) = ambolt_core::Visibility::parse(&form.visibility) else {
         return flash(&back, "Pick a visibility");
     };
     match app.with_store(|s| s.set_visibility(&viewer.0, &repo, visibility)) {
@@ -4647,7 +4652,7 @@ async fn repo_visibility(
             app.publish(&env);
             Redirect::to(&format!("{back}?done=1")).into_response()
         }
-        Err(cairn_core::CoreError::NotFound(_)) => not_found(),
+        Err(ambolt_core::CoreError::NotFound(_)) => not_found(),
         Err(err) => flash(&back, &humane(&err)),
     }
 }
@@ -4765,7 +4770,7 @@ async fn repo_transfer(
             app.publish(&env);
             Redirect::to(&format!("{back}?done=1")).into_response()
         }
-        Err(cairn_core::CoreError::NotFound(_)) => not_found(),
+        Err(ambolt_core::CoreError::NotFound(_)) => not_found(),
         Err(err) => flash(&back, &humane(&err)),
     }
 }
@@ -4832,7 +4837,7 @@ async fn transfer_answer(
                         let _ = git.store.rename_repo(&new_name, &repo).await;
                     }
                     match err {
-                        cairn_core::CoreError::NotFound(_) => not_found(),
+                        ambolt_core::CoreError::NotFound(_) => not_found(),
                         err => flash(&format!("/{repo}/transfer"), &humane(&err)),
                     }
                 }
@@ -4843,7 +4848,7 @@ async fn transfer_answer(
                 app.publish(&env);
                 Redirect::to("/inbox").into_response()
             }
-            Err(cairn_core::CoreError::NotFound(_)) => not_found(),
+            Err(ambolt_core::CoreError::NotFound(_)) => not_found(),
             Err(err) => flash(&format!("/{repo}/transfer"), &humane(&err)),
         },
         _ => flash(&format!("/{repo}/transfer"), "Unknown action"),
@@ -4872,7 +4877,7 @@ async fn log_page(
     };
     // This repository's own log, not the forge's. The scope is on the
     // event, so the page does not have to guess which rows belong here.
-    match app.with_store(|s| s.events_for_repo(&repo, cairn_core::EventSeq(after), 100)) {
+    match app.with_store(|s| s.events_for_repo(&repo, ambolt_core::EventSeq(after), 100)) {
         Ok(events) => {
             views::log(theme, who.reading(), &repo, &numbers, after, &events).into_response()
         }

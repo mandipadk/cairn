@@ -111,7 +111,7 @@ random_id!(
 /// A fresh token secret: high-entropy, prefixed for secret scanners.
 /// Shown once at mint; only its hash is ever stored.
 pub(crate) fn random_token_secret() -> String {
-    format!("cairn_{}{}", random_suffix(), random_suffix())
+    format!("ambolt_{}{}", random_suffix(), random_suffix())
 }
 
 /// Principals are named by chosen slug, not random id: identity that

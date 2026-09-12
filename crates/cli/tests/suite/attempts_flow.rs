@@ -305,7 +305,7 @@ async fn two_attempts_are_revisions_of_one_change_and_a_reviewer_compares() {
         .unwrap()
         .to_owned();
     let workspace = forge.work.join("runner");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_cairn"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ambolt"))
         .args([
             "verify",
             "--server",
@@ -346,7 +346,7 @@ async fn two_attempts_are_revisions_of_one_change_and_a_reviewer_compares() {
     );
     assert_eq!(verifications[0]["by"], "runner");
     // The page opens on the judged revision: r3 carries the claim, r4 none.
-    let (status, page) = page_with_cookie(app, "/ada/demo/changes/1", "cairn_dev=ada").await;
+    let (status, page) = page_with_cookie(app, "/ada/demo/changes/1", "ambolt_dev=ada").await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         page.contains("green"),

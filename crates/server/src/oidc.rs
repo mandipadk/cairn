@@ -221,7 +221,7 @@ struct Pending {
 fn to_provider(
     app: &AppState,
     kind: &str,
-    principal: Option<&cairn_core::PrincipalId>,
+    principal: Option<&ambolt_core::PrincipalId>,
 ) -> Response {
     let Some((trust, provider)) = provider_of(app) else {
         return login_error("Sign-in with a provider is not set up here");

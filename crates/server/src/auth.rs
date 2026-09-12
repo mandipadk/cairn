@@ -2,9 +2,9 @@
 //!
 //! Two ways in for ordinary requests, tried in order:
 //!
-//! 1. `Authorization: Bearer cairn_…` — a minted API token, resolved
+//! 1. `Authorization: Bearer ambolt_…` — a minted API token, resolved
 //!    through its stored hash. The normal path.
-//! 2. The `x-cairn-principal` dev header — an asserted identity,
+//! 2. The `x-ambolt-principal` dev header — an asserted identity,
 //!    honored only when the server explicitly opted in (`--dev`).
 //!
 //! There is a third credential, deliberately kept out of that list: the
@@ -20,15 +20,15 @@
 
 use crate::error::ApiError;
 use crate::state::AppState;
+use ambolt_core::PrincipalId;
 use axum::extract::FromRequestParts;
 use axum::http::StatusCode;
 use axum::http::request::Parts;
-use cairn_core::PrincipalId;
 
-pub const PRINCIPAL_HEADER: &str = "x-cairn-principal";
+pub const PRINCIPAL_HEADER: &str = "x-ambolt-principal";
 
 /// The authenticated principal performing the request.
-pub struct Actor(pub PrincipalId, pub Option<cairn_core::Scope>);
+pub struct Actor(pub PrincipalId, pub Option<ambolt_core::Scope>);
 
 fn unauthenticated(message: &str) -> ApiError {
     ApiError::new(StatusCode::UNAUTHORIZED, "unauthenticated", message)
@@ -37,7 +37,7 @@ fn unauthenticated(message: &str) -> ApiError {
 pub(crate) fn resolve_bearer(
     app: &AppState,
     token: &str,
-) -> Result<(PrincipalId, Option<cairn_core::Scope>), ApiError> {
+) -> Result<(PrincipalId, Option<ambolt_core::Scope>), ApiError> {
     app.with_store(|s| s.identity_for_token(token))?
         .ok_or_else(|| unauthenticated("unknown or revoked token"))
 }
@@ -56,7 +56,7 @@ fn bearer(parts: &Parts) -> Option<&str> {
 pub struct MaybeActor(pub Option<Actor>);
 
 impl MaybeActor {
-    pub fn scope(&self) -> Option<&cairn_core::Scope> {
+    pub fn scope(&self) -> Option<&ambolt_core::Scope> {
         self.0.as_ref().and_then(|actor| actor.1.as_ref())
     }
 }
@@ -89,7 +89,7 @@ impl FromRequestParts<AppState> for MaybeActor {
 /// proper, where the checks that live in the hooks are asked again.
 pub struct Pusher {
     pub principal: PrincipalId,
-    pub scope: Option<cairn_core::Scope>,
+    pub scope: Option<ambolt_core::Scope>,
     /// The repository the push is into.
     pub repo: String,
     /// The secret itself, which is what the push is known by.
@@ -144,7 +144,7 @@ impl FromRequestParts<AppState> for Actor {
         }
 
         Err(unauthenticated(
-            "authenticate with 'Authorization: Bearer <token>' (mint one via cairn admin or /api/principals/{id}/tokens)",
+            "authenticate with 'Authorization: Bearer <token>' (mint one via ambolt admin or /api/principals/{id}/tokens)",
         ))
     }
 }
@@ -153,9 +153,9 @@ impl FromRequestParts<AppState> for Actor {
 mod tests {
     use super::*;
     use crate::router;
+    use ambolt_core::{PrincipalKind, Store};
     use axum::body::Body;
     use axum::http::Request;
-    use cairn_core::{PrincipalKind, Store};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
@@ -245,7 +245,7 @@ mod tests {
         // somebody to be signed in.
         let request = Request::builder()
             .uri("/you")
-            .header("cookie", format!("cairn_token={push_token}"))
+            .header("cookie", format!("ambolt_token={push_token}"))
             .body(Body::empty())
             .unwrap();
         let response = router(state.clone()).oneshot(request).await.unwrap();

@@ -1,8 +1,8 @@
-//! MCP end-to-end: the real `cairn mcp` binary as a subprocess, speaking
+//! MCP end-to-end: the real `ambolt mcp` binary as a subprocess, speaking
 //! newline-delimited JSON-RPC over stdio to a live forge server.
 
-use cairn_core::{PrincipalId, PrincipalKind, Store};
-use cairn_server::{AppState, router};
+use ambolt_core::{PrincipalId, PrincipalKind, Store};
+use ambolt_server::{AppState, router};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
@@ -16,13 +16,13 @@ struct McpChild {
 
 impl McpChild {
     fn spawn(server_url: &str, principal: &str) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_cairn"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_ambolt"))
             .args(["mcp", "--server", server_url, "--principal", principal])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn cairn mcp");
+            .expect("spawn ambolt mcp");
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let (tx, lines) = tokio::sync::mpsc::unbounded_channel();
@@ -103,14 +103,14 @@ async fn full_agent_workflow_over_mcp() {
         )
         .unwrap();
     store
-        .create_repo(&ada, None, "demo", "main", cairn_core::ObjectFormat::Sha1)
+        .create_repo(&ada, None, "demo", "main", ambolt_core::ObjectFormat::Sha1)
         .unwrap();
     store
         .issue_grant(
             &ada,
             &scout,
             None,
-            vec![cairn_core::Capability::Task, cairn_core::Capability::Push],
+            vec![ambolt_core::Capability::Task, ambolt_core::Capability::Push],
             None,
         )
         .unwrap();
@@ -139,7 +139,7 @@ async fn full_agent_workflow_over_mcp() {
     }));
     let reply = mcp.recv().await;
     assert_eq!(reply["result"]["protocolVersion"], "2025-06-18");
-    assert_eq!(reply["result"]["serverInfo"]["name"], "cairn");
+    assert_eq!(reply["result"]["serverInfo"]["name"], "ambolt");
     mcp.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
 
     // Discovery: the protocol verbs are all present as tools.

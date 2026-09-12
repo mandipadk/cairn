@@ -1,4 +1,4 @@
-/* cairn web ui.
+/* ambolt web ui.
    Monochrome on one continuous surface: hierarchy from type weight and
    hairline dividers; color only as small status dots and diff tints;
    monospace only for code, oids, commands, and paths; labels sentence
@@ -560,7 +560,7 @@ a.srow:hover .t { text-decoration: underline; }
 /* Home: what wants a person, then where things live. The two lists read
    as one column so the eye runs straight down rather than hunting. */
 /* On the home the first column carries a repository name as well as a
-   number, so it needs room and must not break "cairn #1" across lines. */
+   number, so it needs room and must not break "ambolt #1" across lines. */
 .homeneed .trow { grid-template-columns: minmax(0, 150px) minmax(0, 1fr) minmax(0, 22rem); }
 .homeneed .trow > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* One line per row, always: a list scanned for what to do next loses its

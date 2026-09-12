@@ -24,7 +24,7 @@ async fn call(
     let mut request = Request::builder()
         .method(method)
         .uri(path)
-        .header("x-cairn-principal", actor);
+        .header("x-ambolt-principal", actor);
     if let Some(key) = key {
         request = request.header("idempotency-key", key);
     }
@@ -324,7 +324,7 @@ async fn the_inbox_pages_by_seq() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_caller_who_will_not_wait_is_told_how_long() {
     let forge = boot().await;
-    let app = cairn_server::router(forge.state.clone().with_write_allowance(2));
+    let app = ambolt_server::router(forge.state.clone().with_write_allowance(2));
     let task = |i: i32| json!({ "title": format!("Write {i}"), "spec": "counted" });
 
     for i in 0..2 {

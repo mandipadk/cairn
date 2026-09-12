@@ -60,10 +60,10 @@ async fn a_stranger_reports_and_whoever_runs_the_forge_hears_of_it() {
     // It reached ada by mail, with the version and the address.
     let mail = std::fs::read_to_string(&mail_file).expect("the report was mailed");
     assert!(mail.contains("To: ada@example.org"), "{mail}");
-    assert!(mail.contains("Subject: cairn report 1"), "{mail}");
+    assert!(mail.contains("Subject: ambolt report 1"), "{mail}");
     assert!(mail.contains("landing page said nothing"), "{mail}");
     assert!(mail.contains("someone@example.test"), "{mail}");
-    assert!(mail.contains(cairn_core::VERSION), "{mail}");
+    assert!(mail.contains(ambolt_core::VERSION), "{mail}");
 
     // And it is on her page, and on nobody else's.
     let (status, page) = page_with_cookie(app, "/reports", &cookie).await;
@@ -116,5 +116,5 @@ async fn a_report_needs_words_and_a_real_address_if_any() {
     assert_eq!(reports.len(), 1);
     assert_eq!(reports[0].by.as_deref(), Some("ada"));
     assert_eq!(reports[0].contact, None);
-    assert_eq!(reports[0].version, cairn_core::VERSION);
+    assert_eq!(reports[0].version, ambolt_core::VERSION);
 }

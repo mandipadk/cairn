@@ -1,5 +1,5 @@
-use cairn_core::{Envelope, PrincipalId, Store};
-use cairn_git::GitStore;
+use ambolt_core::{Envelope, PrincipalId, Store};
+use ambolt_git::GitStore;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -58,7 +58,7 @@ pub(crate) struct GitContext {
 /// quarantine, so that the next push's room check counts this one.
 pub(crate) struct PushToken {
     principal: PrincipalId,
-    scope: Option<cairn_core::Scope>,
+    scope: Option<ambolt_core::Scope>,
     repo: String,
     owner: PrincipalId,
     reserved: u64,
@@ -68,7 +68,7 @@ pub(crate) struct PushToken {
 /// The identity a push token resolves to.
 pub(crate) struct PushIdentity {
     pub principal: PrincipalId,
-    pub scope: Option<cairn_core::Scope>,
+    pub scope: Option<ambolt_core::Scope>,
     pub repo: String,
 }
 
@@ -249,7 +249,7 @@ impl AppState {
         &self,
         principal: &PrincipalId,
         agent: Option<&str>,
-    ) -> cairn_core::CoreResult<String> {
+    ) -> ambolt_core::CoreResult<String> {
         self.with_store(|store| store.start_session(principal, SESSION_TTL_DAYS, agent))
     }
 
@@ -299,7 +299,7 @@ impl AppState {
 
     /// Token ids of a principal, for tests that need to revoke them.
     pub fn tokens_of_for_tests(&self, who: &str) -> Vec<String> {
-        let Some(id) = cairn_core::PrincipalId::new(who) else {
+        let Some(id) = ambolt_core::PrincipalId::new(who) else {
             return Vec::new();
         };
         self.with_store(|s| s.tokens_of(&id))
@@ -442,11 +442,11 @@ impl AppState {
     pub(crate) fn issue_push_token(
         &self,
         principal: &PrincipalId,
-        scope: Option<&cairn_core::Scope>,
+        scope: Option<&ambolt_core::Scope>,
         repo: &str,
         owner: &PrincipalId,
     ) -> String {
-        let secret = format!("cairnpush_{:032x}", rand::random::<u128>());
+        let secret = format!("amboltpush_{:032x}", rand::random::<u128>());
         let mut tokens = self
             .push_tokens
             .lock()
@@ -641,31 +641,31 @@ impl AppState {
     /// Check that live state is still exactly the log applied. Public
     /// because this is a question an operator asks of a *running* forge,
     /// not only of a database file at rest.
-    pub fn fsck(&self) -> cairn_core::CoreResult<Vec<String>> {
+    pub fn fsck(&self) -> ambolt_core::CoreResult<Vec<String>> {
         self.with_store(|store| store.fsck())
     }
 
     /// The waitlist, and removing someone from it. Exposed on the state
     /// because it is operational data an operator asks a running forge
     /// about, not part of the graph.
-    pub fn waitlist(&self) -> cairn_core::CoreResult<Vec<cairn_core::WaitlistEntry>> {
+    pub fn waitlist(&self) -> ambolt_core::CoreResult<Vec<ambolt_core::WaitlistEntry>> {
         self.with_store(|store| store.waitlist())
     }
 
-    /// What an owner leaves with, as `cairn admin export` writes it.
+    /// What an owner leaves with, as `ambolt admin export` writes it.
     pub fn graduation(
         &self,
         owner: &PrincipalId,
-    ) -> cairn_core::CoreResult<cairn_core::Graduation> {
+    ) -> ambolt_core::CoreResult<ambolt_core::Graduation> {
         self.with_store(|store| store.graduation(owner))
     }
 
     /// What people reported broke; operational, like the waitlist.
-    pub fn reports(&self) -> cairn_core::CoreResult<Vec<cairn_core::Report>> {
+    pub fn reports(&self) -> ambolt_core::CoreResult<Vec<ambolt_core::Report>> {
         self.with_store(|store| store.reports())
     }
 
-    pub fn leave_waitlist(&self, email: &str) -> cairn_core::CoreResult<bool> {
+    pub fn leave_waitlist(&self, email: &str) -> ambolt_core::CoreResult<bool> {
         self.with_store(|store| store.leave_waitlist(email))
     }
 
@@ -677,7 +677,7 @@ impl AppState {
     /// branch that moved somewhere else in between needs a person — and
     /// nothing else would ever notice, because every other query answers
     /// from the graph. This is how someone finds out.
-    pub async fn branches_match_the_log(&self) -> cairn_core::CoreResult<Vec<String>> {
+    pub async fn branches_match_the_log(&self) -> ambolt_core::CoreResult<Vec<String>> {
         let mut divergences: Vec<String> = self
             .all_merges_missing_from_branches()
             .await?
@@ -749,12 +749,12 @@ impl AppState {
     }
 
     /// Everything the log says landed.
-    fn landed_changes(&self) -> cairn_core::CoreResult<Vec<Landed>> {
+    fn landed_changes(&self) -> ambolt_core::CoreResult<Vec<Landed>> {
         self.with_store(|store| {
             let mut landed = Vec::new();
             for repo in store.repos()? {
                 for change in store.changes_in_repo(&repo.name)? {
-                    if change.state == cairn_core::ChangeState::Merged {
+                    if change.state == ambolt_core::ChangeState::Merged {
                         landed.push(Landed {
                             repo: repo.name.clone(),
                             target: change.target.clone(),
@@ -773,7 +773,7 @@ impl AppState {
         &self,
         repo: &str,
         target: &str,
-    ) -> cairn_core::CoreResult<Vec<(i64, String)>> {
+    ) -> ambolt_core::CoreResult<Vec<(i64, String)>> {
         let Some(git) = self.git() else {
             return Ok(Vec::new());
         };
@@ -799,7 +799,7 @@ impl AppState {
     /// The same across every repository, for recovery at startup.
     pub(crate) async fn all_merges_missing_from_branches(
         &self,
-    ) -> cairn_core::CoreResult<Vec<(String, String, i64, String)>> {
+    ) -> ambolt_core::CoreResult<Vec<(String, String, i64, String)>> {
         let Some(git) = self.git() else {
             return Ok(Vec::new());
         };
@@ -877,19 +877,19 @@ mod tests {
     /// A public URL that is an address still builds links, without passkeys.
     #[test]
     fn an_address_as_public_url_runs_without_passkeys() {
-        let state = super::AppState::new(cairn_core::Store::open_in_memory().unwrap())
+        let state = super::AppState::new(ambolt_core::Store::open_in_memory().unwrap())
             .with_public_url("http://127.0.0.1:6160/")
             .expect("an address is allowed");
         assert_eq!(state.public_url(), Some("http://127.0.0.1:6160"));
         assert!(state.webauthn().is_none());
-        let named = super::AppState::new(cairn_core::Store::open_in_memory().unwrap())
+        let named = super::AppState::new(ambolt_core::Store::open_in_memory().unwrap())
             .with_public_url("https://forge.example")
             .expect("a host is allowed");
         assert!(named.webauthn().is_some());
     }
 
     use super::*;
-    use cairn_core::Store;
+    use ambolt_core::Store;
 
     fn state() -> AppState {
         AppState::new(Store::open_in_memory().unwrap())
@@ -923,7 +923,7 @@ mod tests {
         assert!(app.resolve_push_token(&first).is_none());
         assert_eq!(app.arriving_elsewhere(&ada, &second), 0);
         // A secret nobody issued resolves to nobody.
-        assert!(app.resolve_push_token("cairnpush_nope").is_none());
+        assert!(app.resolve_push_token("amboltpush_nope").is_none());
     }
 
     /// One caller holds a few transfers, not all of them.

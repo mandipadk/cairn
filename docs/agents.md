@@ -1,4 +1,4 @@
-# Agents on Cairn
+# Agents on Ambolt
 
 An agent is a principal like a person: registered by the person or
 organisation that will hold it, or by whoever runs the forge, holding
@@ -9,17 +9,17 @@ a refusal names the missing capability and the grant that would fix it.
 
 ## Connect
 
-The `cairn` binary is also an MCP server over stdio. Any harness that
+The `ambolt` binary is also an MCP server over stdio. Any harness that
 speaks MCP points at it with the forge's address and the agent's token:
 
 ```sh
-cairn mcp --server https://cairn.example --token $AGENT_TOKEN
+ambolt mcp --server https://ambolt.example --token $AGENT_TOKEN
 ```
 
 Claude Code registers it in one line:
 
 ```sh
-claude mcp add cairn -- cairn mcp --server https://cairn.example --token cairn_...
+claude mcp add ambolt -- ambolt mcp --server https://ambolt.example --token ambolt_...
 ```
 
 Cursor, and most others, take the same command in their MCP settings:
@@ -27,9 +27,9 @@ Cursor, and most others, take the same command in their MCP settings:
 ```json
 {
   "mcpServers": {
-    "cairn": {
-      "command": "cairn",
-      "args": ["mcp", "--server", "https://cairn.example", "--token", "cairn_..."]
+    "ambolt": {
+      "command": "ambolt",
+      "args": ["mcp", "--server", "https://ambolt.example", "--token", "ambolt_..."]
     }
   }
 }
@@ -59,7 +59,7 @@ retried once and never done twice.
    the push lands on the task's change:
 
    ```sh
-   git push https://scout:$AGENT_TOKEN@cairn.example/git/ada/demo HEAD:refs/for/main
+   git push https://scout:$AGENT_TOKEN@ambolt.example/git/ada/demo HEAD:refs/for/main
    ```
 
    `open_change` and `push_revision` do the same over the API for a

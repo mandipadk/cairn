@@ -404,7 +404,7 @@ async fn the_pack_is_what_a_clone_costs() {
     // A clone is an advertisement and then the pack. Counting only the
     // advertisement meters the asking and leaves the answering free,
     // and the answering is the part that forks git.
-    let app = cairn_server::router(forge.state.clone().with_read_allowance(25, 25));
+    let app = ambolt_server::router(forge.state.clone().with_read_allowance(25, 25));
     api(
         &app,
         "POST",
@@ -434,7 +434,7 @@ async fn the_pack_is_what_a_clone_costs() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_reader_who_will_not_wait_is_told_how_long() {
     let forge = boot().await;
-    let app = cairn_server::router(forge.state.clone().with_read_allowance(3, 3));
+    let app = ambolt_server::router(forge.state.clone().with_read_allowance(3, 3));
 
     for _ in 0..3 {
         let (status, _) = api(&app, "GET", "/api/repos/ada/demo", "ada", None).await;
@@ -927,7 +927,7 @@ async fn a_fresh_credential_per_request_is_not_a_fresh_allowance() {
     // In-process callers have no address, and every such request shares
     // one bucket; that is exactly what a rotating garbage credential
     // would try to escape. It must not.
-    let app = cairn_server::router(forge.state.clone().with_read_allowance(1000, 3));
+    let app = ambolt_server::router(forge.state.clone().with_read_allowance(1000, 3));
     api(
         &app,
         "POST",
@@ -941,7 +941,7 @@ async fn a_fresh_credential_per_request_is_not_a_fresh_allowance() {
         let request = axum::http::Request::builder()
             .method("GET")
             .uri("/api/repos/ada/demo")
-            .header("authorization", format!("Bearer cairn_not_a_token_{n}"))
+            .header("authorization", format!("Bearer ambolt_not_a_token_{n}"))
             .body(axum::body::Body::empty())
             .unwrap();
         let status = tower::ServiceExt::oneshot(app.clone(), request)

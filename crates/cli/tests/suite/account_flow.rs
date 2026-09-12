@@ -20,24 +20,24 @@ async fn a_minted_token_is_shown_once_and_then_never_again() {
     let (_, location) = post_form(
         app,
         "/you/tokens",
-        "cairn_dev=ada",
+        "ambolt_dev=ada",
         "action=mint&label=laptop",
     )
     .await;
-    let secret = shown_once(app, &location, "cairn_dev=ada").await;
+    let secret = shown_once(app, &location, "ambolt_dev=ada").await;
     assert!(
-        secret.starts_with("cairn_"),
+        secret.starts_with("ambolt_"),
         "and actually be there: {secret}"
     );
 
     // Coming back - even to the same address - shows the token but not
     // the secret: the flash was spent on the first page.
-    let (_, again) = page_with_cookie(app, &location, "cairn_dev=ada").await;
+    let (_, again) = page_with_cookie(app, &location, "ambolt_dev=ada").await;
     assert!(
         !again.contains("Copy this now"),
         "the same URL shows nothing twice"
     );
-    let (_, later) = page_with_cookie(app, "/you/tokens", "cairn_dev=ada").await;
+    let (_, later) = page_with_cookie(app, "/you/tokens", "ambolt_dev=ada").await;
     assert!(later.contains("laptop"), "the token is listed");
     assert!(
         !later.contains("Copy this now"),
@@ -108,11 +108,11 @@ async fn a_new_agent_gets_a_token_but_no_capability() {
     let (_, location) = post_form(
         app,
         "/agents",
-        "cairn_dev=ada",
+        "ambolt_dev=ada",
         "action=register&id=helper&display=Helper&model=some-model",
     )
     .await;
-    let secret = shown_once(app, &location, "cairn_dev=ada").await;
+    let secret = shown_once(app, &location, "ambolt_dev=ada").await;
 
     // It can authenticate - its own record is the one thing a credential
     // with no authority may read - and do nothing else.
@@ -141,7 +141,7 @@ async fn a_new_agent_gets_a_token_but_no_capability() {
     post_form(
         app,
         "/agents",
-        "cairn_dev=ada",
+        "ambolt_dev=ada",
         "action=grant&grantee=helper&task=on&repo=ada/demo",
     )
     .await;
@@ -155,7 +155,7 @@ async fn a_new_agent_gets_a_token_but_no_capability() {
     .await;
     assert_eq!(status, StatusCode::OK, "now it can do that one thing");
 
-    let (_, page) = page_with_cookie(app, "/agents", "cairn_dev=ada").await;
+    let (_, page) = page_with_cookie(app, "/agents", "ambolt_dev=ada").await;
     assert!(page.contains("helper"), "and the page shows the agent");
     assert!(page.contains("task"), "with what it may do");
     assert!(page.contains("demo"), "and where");

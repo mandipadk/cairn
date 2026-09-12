@@ -1,4 +1,4 @@
-# Running Cairn
+# Running Ambolt
 
 A runbook: what to do, in the order you meet it, and what to do when
 something is wrong. The reference at the end lists every command, flag
@@ -30,17 +30,17 @@ it. Check the sum before you unpack:
 
 ```sh
 V=0.1.0-alpha.1
-curl -sSfLO "https://dl.cairn.mandip.dev/releases/$V/cairn-$V-x86_64-linux.tar.gz"
+curl -sSfLO "https://dl.cairn.mandip.dev/releases/$V/ambolt-$V-x86_64-linux.tar.gz"
 curl -sSfL "https://dl.cairn.mandip.dev/releases/$V/SHA256SUMS" | sha256sum -c --ignore-missing
 ```
 
 From source, anywhere with a Rust toolchain:
 
 ```sh
-cargo install --git https://cairn.mandip.dev/git/cairn/cairn cairn
+cargo install --git https://cairn.mandip.dev/git/cairn/cairn ambolt
 ```
 
-The mirror at `github.com/mandipadk/cairn` is the same code. `cairn
+The mirror at `github.com/mandipadk/cairn` is the same code. `ambolt
 --version` names the version and the commit it was built from, and
 `/healthz` on a running forge carries the same string. `scripts/release.sh`
 is what produces a release archive; run it anywhere to package a build
@@ -50,8 +50,8 @@ for that machine.
 
 ```sh
 # register the first human and mint their token (shown once)
-cairn admin bootstrap --db forge.db ada --display "Ada"
-cairn serve --db forge.db --listen 127.0.0.1:6160 --repos repos
+ambolt admin bootstrap --db forge.db ada --display "Ada"
+ambolt serve --db forge.db --listen 127.0.0.1:6160 --repos repos
 ```
 
 The web interface is served at the same address; sign in with the token
@@ -85,11 +85,11 @@ curl -N 'localhost:6160/api/events/stream?after=0' -H "Authorization: Bearer $TO
 
 The pages offer the same: **New** creates a repository, and **Agents**
 registers, grants and mints. Agents connect natively over MCP — the
-adapter proxies the same API, and [Agents on Cairn](agents.md) says what
+adapter proxies the same API, and [Agents on Ambolt](agents.md) says what
 they do from there:
 
 ```sh
-cairn mcp --server http://127.0.0.1:6160 --token $AGENT_TOKEN
+ambolt mcp --server http://127.0.0.1:6160 --token $AGENT_TOKEN
 ```
 
 Git authenticates with a token as the Basic-auth password, on clone as
@@ -104,13 +104,13 @@ git commit -m $'Do the thing\n\nChange-Id: I8f3a1c2e'
 git push http://scout@127.0.0.1:6160/git/ada/demo HEAD:refs/for/main
 ```
 
-Add `--dev` to accept asserted identity via the `x-cairn-principal`
+Add `--dev` to accept asserted identity via the `x-ambolt-principal`
 header, for local development only.
 
 ## Put it where others can reach it
 
 Before putting a forge somewhere strangers can reach it: serve it over
-HTTPS, pass `--secure-cookies`, set `--public-url` (or `CAIRN_PUBLIC_URL`)
+HTTPS, pass `--secure-cookies`, set `--public-url` (or `AMBOLT_PUBLIC_URL`)
 to the address people use, keep `--dev` off, and note what is and is not
 defended. The public URL is the only authority on where the forge lives:
 every link it mails — invitations, confirmations, resets, sign-in links —
@@ -135,11 +135,11 @@ repository, inviting) is refused to an agent whatever it holds.
 
 Nobody is kept. A company on a forge of its own leaves with the nightly
 bundle — the database, the key and the repositories — and serves it
-with `cairn serve` wherever it likes. An owner on a shared forge asks,
+with `ambolt serve` wherever it likes. An owner on a shared forge asks,
 and the operator exports their repositories on the box:
 
 ```sh
-cairn admin export --db cairn.db --repos repos --owner ada --into /tmp/out
+ambolt admin export --db ambolt.db --repos repos --owner ada --into /tmp/out
 ```
 
 writes `ada-<stamp>/manifest.json` (each repository: name, default
@@ -184,7 +184,7 @@ identities, with the pages that do the same — can be served on a
 listener of its own:
 
 ```sh
-cairn serve --listen 127.0.0.1:6160 --operator-listen 127.0.0.1:6161 …
+ambolt serve --listen 127.0.0.1:6160 --operator-listen 127.0.0.1:6161 …
 ```
 
 The operator's door then answers on `6161` and nowhere else: the public
@@ -222,7 +222,7 @@ the unscoped admin grant:
 - `GET /api/invitations/unclaimed` — who was invited and never came,
   with when their invitation lapses; `POST /api/invitations/purge` lets
   go those whose invitation has lapsed: each is deactivated and its
-  invitations revoked, on the record (`cairn admin unclaimed --purge`
+  invitations revoked, on the record (`ambolt admin unclaimed --purge`
   offline). The name stays on the log; whoever runs the forge can
   reactivate an account that turns up after all.
 - `GET /api/reports` — what people said broke; `POST /api/reports/{id}/dismiss`.
@@ -230,9 +230,9 @@ the unscoped admin grant:
   busy the forge is: people (and how many made their own account),
   organisations, agents, repositories, changes open and landed, tasks
   open, the waitlist, open reports, disk as last measured, and the
-  log's length. `cairn admin metrics` prints the same offline. What
+  log's length. `ambolt admin metrics` prints the same offline. What
   the console's fleet page will draw its numbers from.
-- The switch for strangers: `cairn serve --open-signup` lets anyone make
+- The switch for strangers: `ambolt serve --open-signup` lets anyone make
   an account at `/signup` (name, password, an address to confirm), rate
   limited by source like every public form. Off — the default — the page
   says the forge takes people by invitation and points at the front
@@ -319,13 +319,13 @@ Point the forge at an SMTP relay — your own, or a provider's — as one URL
 with the credentials in it, plus the address to send from:
 
 ```sh
-CAIRN_SMTP_URL='smtps://user:pass@smtp.example.com:465' \
-CAIRN_MAIL_FROM='forge@example.org' cairn serve ...
+AMBOLT_SMTP_URL='smtps://user:pass@smtp.example.com:465' \
+AMBOLT_MAIL_FROM='forge@example.org' ambolt serve ...
 # smtp://user:pass@host:587?tls=required for STARTTLS; unencrypted is refused
 ```
 
 Put them in the service's environment file rather than on the command
-line, so the password is not in the process list. `cairn admin
+line, so the password is not in the process list. `ambolt admin
 mail-check` proves the configuration — reaches the relay, negotiates TLS,
 authenticates, hangs up — without sending anyone anything. On a machine
 that already has a mail system, `--mail-command "sendmail -t"` hands each
@@ -360,8 +360,8 @@ another started.
 **An OpenID Connect provider**:
 
 ```sh
-cairn serve ... --oidc-issuer https://accounts.google.com \
-  --oidc-client-id <id> --oidc-client-secret-file /data/cairn/oidc.secret \
+ambolt serve ... --oidc-issuer https://accounts.google.com \
+  --oidc-client-id <id> --oidc-client-secret-file /data/ambolt/oidc.secret \
   --oidc-label Google
 ```
 
@@ -428,7 +428,7 @@ repository's page, and copied to the mirror along with the branches.
 ### Mirroring
 
 ```sh
-cairn serve --db forge.db --mirror-token $GITHUB_TOKEN   # or CAIRN_MIRROR_TOKEN
+ambolt serve --db forge.db --mirror-token $GITHUB_TOKEN   # or AMBOLT_MIRROR_TOKEN
 curl -X POST localhost:6160/api/repos/ada/demo/mirror \
   -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   -d '{"mirror": {"url": "https://github.com/you/demo.git", "enabled": true}}'
@@ -440,7 +440,7 @@ and the attempt recorded either way as a `mirror_pushed` event.
 
 ### Runners and CI
 
-`cairn verify` is the runner. Given a change it re-runs that change's
+`ambolt verify` is the runner. Given a change it re-runs that change's
 claims; given none, it works through every change whose claims name a
 command nobody has re-run, fetching each revision from the forge rather
 than trusting whatever directory it was started in. It exits non-zero
@@ -470,12 +470,12 @@ database (owner-only, generated on first start) or wherever
 losing it means a new fingerprint while receipts already issued still
 verify against the key they carry. The public key is at `/api/forge/key`.
 Each receipt is also a git note on the landed commit under
-`refs/notes/cairn`, pushed to the mirror with the branch.
+`refs/notes/ambolt`, pushed to the mirror with the branch.
 
 ```sh
 curl -s https://forge.example/api/changes/c-…/receipt > receipt.json
-cairn receipt verify receipt.json --key 3f9a1c…        # the fingerprint /api/forge/key shows
-git -C clone log --show-notes=cairn -1                  # the same document, on the commit
+ambolt receipt verify receipt.json --key 3f9a1c…        # the fingerprint /api/forge/key shows
+git -C clone log --show-notes=ambolt -1                  # the same document, on the commit
 ```
 
 ### Whose agent
@@ -515,7 +515,7 @@ An agent's session can draw a short-lived credential:
 `{"minutes": 60, "actions": ["push","task"]}` returns a bearer token shown
 once, scoped to the task's repository and no more than the agent holds
 there, good for an hour by default and never more than eight, and refused
-from the moment the session ends. `cairn mcp` does this on `open_session`
+from the moment the session ends. `ambolt mcp` does this on `open_session`
 and works under the credential until `end_session`. A repository whose
 policy carries `"agents_act_in_sessions": true` refuses agents' standing
 tokens for push, review and merge; `task` and `verify` remain open, so an
@@ -556,7 +556,7 @@ again, which is a different thing from a limit of `null`. `GET` on the
 same address gives what holds, what was said about that owner in
 particular, what they are using, and the forge's own numbers, and is
 readable by that owner, by the members of an organisation, and by
-whoever runs the forge. `cairn admin quota <owner> --as <admin>
+whoever runs the forge. `ambolt admin quota <owner> --as <admin>
 --repos 200` does the same offline and prints the result; with no
 limits given it only prints. An owner sees their own on their page.
 
@@ -601,7 +601,7 @@ repository's once a day, after the hourly measurement picks it, and
 prunes only objects older than an hour: a push's objects are named by
 nothing between leaving quarantine and the reconciliation that writes
 their ref, and a collection that pruned them at once would delete a
-push in flight. `cairn admin gc [owner/name]` runs the same collection
+push in flight. `ambolt admin gc [owner/name]` runs the same collection
 now and measures again, for the owner who deleted things and wants
 their number to say so.
 
@@ -626,7 +626,7 @@ with the code and stays true somewhere else. `GET
 /api/repos/{owner}/{name}/receipts` is the whole record for a
 repository, and a mirror set by the operator keeps a copy moving on its
 own. There is no export button and nothing to unlock: to leave with
-everything at once, ask, and the operator runs `cairn admin export`
+everything at once, ask, and the operator runs `ambolt admin export`
 for you (under "Leaving" above), which is the same git plus a
 manifest.
 
@@ -701,14 +701,14 @@ keeps recent writes in its WAL file, and a plain copy can miss them.
 copy before keeping it, and prunes old bundles:
 
 ```sh
-CAIRN_DB=/srv/cairn/cairn.db CAIRN_REPOS=/srv/cairn/repos scripts/backup.sh
+AMBOLT_DB=/srv/ambolt/ambolt.db AMBOLT_REPOS=/srv/ambolt/repos scripts/backup.sh
 ```
 
 Run it from a timer, and keep a copy of the bundle somewhere the machine's
 disk is not: `scripts/upload-s3.py` puts a file into any S3-compatible
 bucket (Cloudflare R2 included) with only python and curl, and the
 bucket's lifecycle rule is the retention. To restore, extract the bundle
-and point `serve` at the copies; `cairn admin fsck --db <copy> --repos
+and point `serve` at the copies; `ambolt admin fsck --db <copy> --repos
 <copy>/repos` proves the bundle before you need it, and the first-run walk
 does exactly that on every change to these documents.
 
@@ -716,7 +716,7 @@ does exactly that on every change to these documents.
 
 Stop the service, take a backup, install the new binary, start it.
 Upgrading a forge made before repositories carried their owner's name
-needs one more step, once: `cairn admin adopt-owners --db <db> --repos
+needs one more step, once: `ambolt admin adopt-owners --db <db> --repos
 <dir> --as <admin>` renames every repository from `demo` to
 `ada/demo`, as ordinary rename events, and moves its directory; `serve`
 refuses to start until it has run, and the old addresses redirect
@@ -725,24 +725,24 @@ first open after an upgrade that changed the schema rebuilds every
 projection from the log — the tree, the queue, blame, the rankings — and
 the forge serves only once that is done; the log itself, tokens, sessions
 and the idempotency ledger are not touched. On the reference instance the
-rebuild takes seconds, and it grows with the log. Run `cairn admin fsck`
-afterwards, and read `cairn --version` or `/healthz` to be sure which
+rebuild takes seconds, and it grows with the log. Run `ambolt admin fsck`
+afterwards, and read `ambolt --version` or `/healthz` to be sure which
 build is answering.
 
 ### Watch it
 
 A forge cannot report its own absence, so something else has to ask.
-`cairn admin watch` asks once and remembers the answer:
+`ambolt admin watch` asks once and remembers the answer:
 
 ```sh
-cairn admin watch --url https://cairn.example --state /var/lib/cairn/watch.json --mail-to you@example
+ambolt admin watch --url https://ambolt.example --state /var/lib/ambolt/watch.json --mail-to you@example
 ```
 
 It fetches `/healthz`, compares with what it saw last time, and mails only
 when that changes — down, then back — and once a day while it stays down.
 It exits non-zero while the forge is down, so the timer's own status says
-so as well. Mail uses the same settings as `serve` (`CAIRN_SMTP_URL` and
-`CAIRN_MAIL_FROM`, or `CAIRN_MAIL_COMMAND`); without `--mail-to` the
+so as well. Mail uses the same settings as `serve` (`AMBOLT_SMTP_URL` and
+`AMBOLT_MAIL_FROM`, or `AMBOLT_MAIL_COMMAND`); without `--mail-to` the
 answer is only printed. Run it every few minutes from a timer on a machine
 that is not the forge. Run on the forge's own machine, it still catches a
 hung process or a dead tunnel, but not the machine going away.
@@ -753,18 +753,18 @@ On macOS, a script such as
 
 ```sh
 #!/bin/sh
-# ~/.cairn/notify.sh — the message arrives on stdin
+# ~/.ambolt/notify.sh — the message arrives on stdin
 subject=$(grep -m1 '^Subject:' | cut -d' ' -f2-)
-osascript -e "display notification \"$subject\" with title \"cairn\""
+osascript -e "display notification \"$subject\" with title \"ambolt\""
 ```
 
 run from a launchd agent every five minutes with
-`--mail-command ~/.cairn/notify.sh --mail-from cairn@laptop --mail-to you@laptop`
+`--mail-command ~/.ambolt/notify.sh --mail-from ambolt@laptop --mail-to you@laptop`
 turns "down" and "back" into notifications.
 
 ### Check the record against itself
 
-`cairn admin fsck --db <db> --repos <dir>` replays the log into empty
+`ambolt admin fsck --db <db> --repos <dir>` replays the log into empty
 projections and compares, and checks that every branch contains what the
 log says landed on it and that the tags in git are exactly the tags on
 the record. It exits non-zero on any divergence. Run it after every
@@ -777,7 +777,7 @@ deploy.
 did, where, and how to reach them if they like. The forge version is
 recorded with it. Reports live beside the waitlist and outside the log,
 so one can be removed when the person asks. Whoever runs the forge reads
-them at `/reports` or with `cairn admin reports`, and, when the forge can
+them at `/reports` or with `ambolt admin reports`, and, when the forge can
 send mail, hears of each one at their confirmed address as it arrives.
 The form is rate limited by source like the waitlist.
 
@@ -827,8 +827,8 @@ tool on the runner's PATH shows up as a refusal, not a dispute.
 **Somebody is locked out.** With mail, the sign-in page offers a reset
 link and a sign-in link, each to a confirmed address. Without mail, or
 without an address, the request reaches whoever runs the forge, who sends
-a sign-in link from the People page. With file access, `cairn admin
-set-password <slug>` and `cairn admin mint-token <slug>` work offline.
+a sign-in link from the People page. With file access, `ambolt admin
+set-password <slug>` and `ambolt admin mint-token <slug>` work offline.
 
 **Adding an address fails, or says to try again in a while.** Three
 confirmation mails an hour is the allowance for one person; a refused
@@ -843,7 +843,7 @@ database to keep the fingerprint.
 **The disk is full.** The write that hit the limit failed whole and the
 log is intact; free space and carry on. Nothing needs repairing.
 
-**Mail does not arrive.** `cairn admin mail-check` reaches the relay,
+**Mail does not arrive.** `ambolt admin mail-check` reaches the relay,
 negotiates TLS and authenticates without sending anything, and says
 which step failed. Invitations and resets fall back to the People page.
 
@@ -851,51 +851,51 @@ which step failed. Invitations and resets fall back to the People page.
 
 Offline administration, against the database file (root authority):
 
-- `cairn admin bootstrap <slug>` — register the first human, give them
+- `ambolt admin bootstrap <slug>` — register the first human, give them
   the unscoped admin grant, print a token.
-- `cairn admin mint-token <slug>` — mint an API token for an existing
+- `ambolt admin mint-token <slug>` — mint an API token for an existing
   principal.
-- `cairn admin set-password <slug>` — set a human's password, read from
+- `ambolt admin set-password <slug>` — set a human's password, read from
   stdin so it never touches shell history or the process list.
-- `cairn admin grant-admin <slug>` — give somebody the unscoped admin
+- `ambolt admin grant-admin <slug>` — give somebody the unscoped admin
   grant. Offline because over the API you would already need admin to
   grant admin.
-- `cairn admin waitlist [--remove <email>]` — list the waitlist, or
+- `ambolt admin waitlist [--remove <email>]` — list the waitlist, or
   remove someone who asked to be forgotten.
-- `cairn admin quota <owner> [--as <admin>] [--repos n|none]
+- `ambolt admin quota <owner> [--as <admin>] [--repos n|none]
   [--agents n|none] [--open-tasks n|none] [--open-changes n|none]
   [--tokens n|none] [--disk-mb n|none]` — what one owner may take up and
   what they are using; with no limits given, it only prints. `--as` is
   required whenever a limit is given.
-- `cairn admin gc [owner/name]` — prune what nothing refers to and
+- `ambolt admin gc [owner/name]` — prune what nothing refers to and
   measure again, in one repository or all of them.
-- `cairn admin reports [--dismiss <id>]` — what people reported broke,
+- `ambolt admin reports [--dismiss <id>]` — what people reported broke,
   newest first; or dismiss one.
-- `cairn admin mail-check` — reach the relay and authenticate, sending
+- `ambolt admin mail-check` — reach the relay and authenticate, sending
   nothing; reads the same flags and environment as `serve`.
-- `cairn admin watch --url <forge> --state <file> [--mail-to <addr>]` —
+- `ambolt admin watch --url <forge> --state <file> [--mail-to <addr>]` —
   one look at a forge from outside; see Watch it.
-- `cairn admin fsck [--db <db>] [--repos <dir>]` — the record against
+- `ambolt admin fsck [--db <db>] [--repos <dir>]` — the record against
   itself; see Check the record against itself.
 
-Other commands: `cairn serve`, `cairn mcp --server <url> --token <t>`,
-`cairn verify --server <url> --token <t> [--repo <r>] [<change>]`, and
-`cairn receipt verify <file> [--key <fingerprint>]`.
+Other commands: `ambolt serve`, `ambolt mcp --server <url> --token <t>`,
+`ambolt verify --server <url> --token <t> [--repo <r>] [<change>]`, and
+`ambolt receipt verify <file> [--key <fingerprint>]`.
 
-`cairn serve` flags:
+`ambolt serve` flags:
 
-- `--db <path>` (default `cairn.db`), `--repos <dir>` (default `repos`),
+- `--db <path>` (default `ambolt.db`), `--repos <dir>` (default `repos`),
   `--listen <addr>`.
-- `--public-url <url>` or `CAIRN_PUBLIC_URL`: where people reach the
+- `--public-url <url>` or `AMBOLT_PUBLIC_URL`: where people reach the
   forge; every mailed link and every passkey is bound to it.
   A URL whose host is an address rather than a name (`http://192.168.1.10:6160`)
   still builds the links; passkeys, which bind to a host name, are off
   on such a forge, and the start-up log says so.
 - `--secure-cookies` behind HTTPS; `--trust-proxy` behind a reverse
   proxy; `--dev` for asserted identity on a laptop only.
-- `--smtp-url`, `--mail-from`, `--mail-command`, or `CAIRN_SMTP_URL`,
-  `CAIRN_MAIL_FROM`, `CAIRN_MAIL_COMMAND`.
-- `--mirror-token <t>` or `CAIRN_MIRROR_TOKEN`: the credential mirror
+- `--smtp-url`, `--mail-from`, `--mail-command`, or `AMBOLT_SMTP_URL`,
+  `AMBOLT_MAIL_FROM`, `AMBOLT_MAIL_COMMAND`.
+- `--mirror-token <t>` or `AMBOLT_MIRROR_TOKEN`: the credential mirror
   pushes carry.
 - `--oidc-issuer`, `--oidc-client-id`, `--oidc-client-secret-file`,
   `--oidc-label`, `--oidc-link-by-email`; `--workload-issuer`
@@ -912,7 +912,7 @@ Other commands: `cairn serve`, `cairn mcp --server <url> --token <t>`,
 Files beside the database: `signing.key` (owner-only). Under `--repos`:
 one bare repository per name. `/healthz` answers
 `{"ok": true, "seq": <last event>, "version": "<version> (<build>)"}`.
-`CAIRN_BUILD`, set when building, overrides the build stamp for whoever
+`AMBOLT_BUILD`, set when building, overrides the build stamp for whoever
 packages from an archive without git.
 
 ## Development

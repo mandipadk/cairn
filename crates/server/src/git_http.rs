@@ -17,14 +17,14 @@ use crate::error::{ApiError, ApiResult};
 use crate::repo_path::RepoName;
 use crate::routes::committed;
 use crate::state::AppState;
+use ambolt_core::{ChangeState, PrincipalId};
+use ambolt_git::Service;
+use ambolt_git::{RpcInput, RpcStream};
 use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use base64::prelude::*;
-use cairn_core::{ChangeState, PrincipalId};
-use cairn_git::Service;
-use cairn_git::{RpcInput, RpcStream};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -242,7 +242,7 @@ fn unpacked(headers: &HeaderMap, body: Bytes, ceiling: u64) -> ApiResult<Vec<u8>
 fn push_principal(
     app: &AppState,
     headers: &HeaderMap,
-) -> ApiResult<(PrincipalId, Option<cairn_core::Scope>)> {
+) -> ApiResult<(PrincipalId, Option<ambolt_core::Scope>)> {
     let unauthorized = || {
         ApiError::new(
             StatusCode::UNAUTHORIZED,
@@ -301,7 +301,7 @@ fn push_principal(
 pub(crate) fn reader(
     app: &AppState,
     headers: &HeaderMap,
-) -> ApiResult<(PrincipalId, Option<cairn_core::Scope>)> {
+) -> ApiResult<(PrincipalId, Option<ambolt_core::Scope>)> {
     let unauthorized = || {
         ApiError::new(
             StatusCode::UNAUTHORIZED,
@@ -350,7 +350,7 @@ pub(crate) fn reader(
 fn may_read(app: &AppState, name: &str, headers: &HeaderMap) -> ApiResult<()> {
     let repo = app.with_store(|s| s.repo(name))?;
     if let Some(repo) = &repo
-        && repo.visibility == cairn_core::Visibility::Public
+        && repo.visibility == ambolt_core::Visibility::Public
     {
         return Ok(());
     }
@@ -373,7 +373,7 @@ fn challenge_basic(err: ApiError) -> Response {
     if response.status() == StatusCode::UNAUTHORIZED {
         response.headers_mut().insert(
             header::WWW_AUTHENTICATE,
-            "Basic realm=\"cairn\"".parse().unwrap(),
+            "Basic realm=\"ambolt\"".parse().unwrap(),
         );
     }
     response
@@ -568,9 +568,9 @@ pub async fn receive_pack(
             secret: secret.clone(),
         };
         let env = vec![
-            ("CAIRN_SERVER".to_owned(), git.base_url.clone()),
-            ("CAIRN_TOKEN".to_owned(), secret),
-            ("CAIRN_REPO".to_owned(), name.clone()),
+            ("AMBOLT_SERVER".to_owned(), git.base_url.clone()),
+            ("AMBOLT_TOKEN".to_owned(), secret),
+            ("AMBOLT_REPO".to_owned(), name.clone()),
         ];
         let output = git
             .store
@@ -925,7 +925,7 @@ pub async fn record_push(
     }
 
     let mut results = Vec::new();
-    let mut parent: Option<cairn_core::ChangeId> = None;
+    let mut parent: Option<ambolt_core::ChangeId> = None;
     let mut last_seq = 0i64;
     for commit in &body.commits {
         let existing = match &commit.change_id {
@@ -940,7 +940,7 @@ pub async fn record_push(
         let task = commit
             .task
             .as_deref()
-            .map(|t| cairn_core::TaskId(t.to_owned()));
+            .map(|t| ambolt_core::TaskId(t.to_owned()));
         let existing = match (existing, &task) {
             (Some(change), _) => Some(change),
             (None, Some(task)) => app
@@ -954,7 +954,9 @@ pub async fn record_push(
             Some(task) => app
                 .with_store(|s| s.acting_as(actor.scope.as_ref()).sessions_for_task(task))?
                 .into_iter()
-                .find(|s| s.agent == actor.principal && s.state == cairn_core::SessionState::Active)
+                .find(|s| {
+                    s.agent == actor.principal && s.state == ambolt_core::SessionState::Active
+                })
                 .map(|s| s.id),
             None => None,
         };
@@ -991,11 +993,11 @@ pub async fn record_push(
                 ));
             }
             None => {
-                let spec = cairn_core::ChangeSpec {
+                let spec = ambolt_core::ChangeSpec {
                     external_key: commit.change_id.clone(),
                     parent_change: parent.clone(),
                     task: task.clone(),
-                    ..cairn_core::ChangeSpec::new(&body.repo, &body.target, &commit.title)
+                    ..ambolt_core::ChangeSpec::new(&body.repo, &body.target, &commit.title)
                 };
                 let (id, number, env) = app.with_store(|s| {
                     s.acting_as(actor.scope.as_ref())
@@ -1055,7 +1057,7 @@ pub async fn record_push(
 pub async fn merge_with_git(
     app: &AppState,
     actor: &Actor,
-    change_id: &cairn_core::ChangeId,
+    change_id: &ambolt_core::ChangeId,
 ) -> ApiResult<Json<Value>> {
     let git = git_enabled(app)?;
     let change = app
@@ -1138,7 +1140,7 @@ pub async fn blame(
     let rev = format!("refs/heads/{}", record.default_branch);
     let oids = git.store.blame_lines(&repo, &rev, &query.path).await?;
 
-    let mut known: HashMap<String, Option<cairn_core::Provenance>> = HashMap::new();
+    let mut known: HashMap<String, Option<ambolt_core::Provenance>> = HashMap::new();
     let mut states: std::collections::BTreeMap<&'static str, usize> = Default::default();
     let mut lines = Vec::with_capacity(oids.len());
     for (index, oid) in oids.iter().enumerate() {
@@ -1149,7 +1151,7 @@ pub async fn blame(
             );
         }
         let provenance = known.get(oid).and_then(Option::as_ref);
-        let state = cairn_core::line_state(provenance);
+        let state = ambolt_core::line_state(provenance);
         *states.entry(state.as_str()).or_insert(0usize) += 1;
         lines.push(json!({
             "line": index + 1,

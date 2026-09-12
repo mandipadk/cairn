@@ -4,9 +4,9 @@
 //! notes as they are — and is clean by its own fsck afterwards.
 
 use crate::common::*;
+use ambolt_core::PrincipalId;
+use ambolt_git::GitStore;
 use axum::http::StatusCode;
-use cairn_core::PrincipalId;
-use cairn_git::GitStore;
 use serde_json::json;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -67,7 +67,7 @@ async fn an_owner_leaves_with_bundles_and_another_forge_takes_them_in() {
     )
     .await;
 
-    // Out: the manifest and the bundle, as `cairn admin export` writes them.
+    // Out: the manifest and the bundle, as `ambolt admin export` writes them.
     let manifest = forge
         .state
         .graduation(&PrincipalId::new("ada").unwrap())
@@ -77,7 +77,10 @@ async fn an_owner_leaves_with_bundles_and_another_forge_takes_them_in() {
     assert_eq!(manifest.repos[0].name, "ada/demo");
     assert_eq!(manifest.repos[0].bundle, "bundles/demo.bundle");
     let out = forge.work.join("out");
-    let git_store = GitStore::new(forge._tmp.path().join("repos"), env!("CARGO_BIN_EXE_cairn"));
+    let git_store = GitStore::new(
+        forge._tmp.path().join("repos"),
+        env!("CARGO_BIN_EXE_ambolt"),
+    );
     git_store
         .bundle("ada/demo", &out.join("bundles/demo.bundle"))
         .await
@@ -94,7 +97,7 @@ async fn an_owner_leaves_with_bundles_and_another_forge_takes_them_in() {
     assert!(heads.contains("refs/heads/main"), "{heads}");
     assert!(heads.contains("refs/tags/v1"), "the tag travels: {heads}");
     assert!(
-        heads.contains("refs/notes/cairn"),
+        heads.contains("refs/notes/ambolt"),
         "the receipts travel: {heads}"
     );
     assert!(
@@ -153,7 +156,7 @@ async fn an_owner_leaves_with_bundles_and_another_forge_takes_them_in() {
     let refs = String::from_utf8_lossy(&refs.stdout).into_owned();
     assert!(refs.contains("refs/heads/main"), "{refs}");
     assert!(refs.contains("refs/tags/v1"), "{refs}");
-    assert!(refs.contains("refs/notes/cairn"), "{refs}");
+    assert!(refs.contains("refs/notes/ambolt"), "{refs}");
     assert!(
         !refs.contains("refs/changes/"),
         "the source's change refs stay with its log: {refs}"

@@ -3,11 +3,11 @@
 
 use crate::common::*;
 
+use ambolt_core::{PrincipalId, PrincipalKind, Store};
+use ambolt_git::GitStore;
+use ambolt_server::{AppState, router};
 use axum::Router;
 use axum::http::StatusCode;
-use cairn_core::{PrincipalId, PrincipalKind, Store};
-use cairn_git::GitStore;
-use cairn_server::{AppState, router};
 use serde_json::{Value, json};
 
 #[tokio::test(flavor = "multi_thread")]
@@ -33,9 +33,9 @@ async fn push_review_merge_sha256_repo() {
     let (_, repo) = api(&forge.app, "GET", "/api/repos/ada/demo", "ada", None).await;
     assert_eq!(repo["object_format"], "sha256");
 
-    let (running, reported) = cairn_git::version().expect("git on PATH");
-    if running < cairn_git::MIN_GIT_SHA256_CLIENT {
-        let (major, minor) = cairn_git::MIN_GIT_SHA256_CLIENT;
+    let (running, reported) = ambolt_git::version().expect("git on PATH");
+    if running < ambolt_git::MIN_GIT_SHA256_CLIENT {
+        let (major, minor) = ambolt_git::MIN_GIT_SHA256_CLIENT;
         eprintln!(
             "not exercising sha256 end to end: {reported} predates the documented \
              client floor of {major}.{minor} for cloning an empty sha256 repository"
@@ -338,16 +338,22 @@ async fn push_requires_a_live_token_without_dev_mode() {
         .register_principal(&ada, &scout, PrincipalKind::Agent, "Scout", Some("m"), None)
         .unwrap();
     store
-        .issue_grant(&ada, &scout, None, vec![cairn_core::Capability::Push], None)
+        .issue_grant(
+            &ada,
+            &scout,
+            None,
+            vec![ambolt_core::Capability::Push],
+            None,
+        )
         .unwrap();
     let (_, token, _) = store.mint_token(&scout, &scout, None, None).unwrap();
     store
-        .create_repo(&ada, None, "demo", "main", cairn_core::ObjectFormat::Sha1)
+        .create_repo(&ada, None, "demo", "main", ambolt_core::ObjectFormat::Sha1)
         .unwrap();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let git_store = GitStore::new(&repos, env!("CARGO_BIN_EXE_cairn"));
+    let git_store = GitStore::new(&repos, env!("CARGO_BIN_EXE_ambolt"));
     // The repo entered the graph through the store, so create the bare
     // repo directly too; no dev identity anywhere in this test.
     git_store

@@ -226,7 +226,7 @@ async fn two_provenances_make_quorum_and_the_same_one_twice_does_not() {
 
     // Every third-party word is on the page as a run of the claim.
     let (status, page) =
-        page_with_cookie(app, &format!("/ada/demo/changes/{}", 1), "cairn_dev=ada").await;
+        page_with_cookie(app, &format!("/ada/demo/changes/{}", 1), "ambolt_dev=ada").await;
     assert_eq!(status, StatusCode::OK);
     for who in ["runner-a", "runner-b", "runner-c", "arbiter"] {
         assert!(

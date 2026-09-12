@@ -265,7 +265,7 @@ pub async fn read_allowance(
                     wait.as_secs_f64().ceil().max(1.0).to_string(),
                 ),
                 (
-                    axum::http::HeaderName::from_static("x-cairn-fallback"),
+                    axum::http::HeaderName::from_static("x-ambolt-fallback"),
                     "too-many".to_owned(),
                 ),
             ],

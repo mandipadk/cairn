@@ -8,13 +8,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO=$(pwd)
 
-BIN=$(cargo build --quiet --bin cairn --message-format=json | python3 -c '
+BIN=$(cargo build --quiet --bin ambolt --message-format=json | python3 -c '
 import json, sys
 for line in sys.stdin:
     d = json.loads(line)
-    if d.get("reason") == "compiler-artifact" and d.get("executable") and d["target"]["name"] == "cairn":
+    if d.get("reason") == "compiler-artifact" and d.get("executable") and d["target"]["name"] == "ambolt":
         print(d["executable"])' | tail -1)
-[ -x "$BIN" ] || { echo "!! no cairn binary was built"; exit 1; }
+[ -x "$BIN" ] || { echo "!! no ambolt binary was built"; exit 1; }
 
 W=$(mktemp -d)
 SERVE=
@@ -38,17 +38,17 @@ as_scout() { GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c credential.helpe
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 
 echo "operating.md: the binary names its version and build"
-"$BIN" --version | grep -qE '^cairn [0-9]+\.[0-9]+\.[0-9]+.* \(.+\)$' || { echo "!! --version did not name a version and a build: $("$BIN" --version)"; exit 1; }
+"$BIN" --version | grep -qE '^ambolt [0-9]+\.[0-9]+\.[0-9]+.* \(.+\)$' || { echo "!! --version did not name a version and a build: $("$BIN" --version)"; exit 1; }
 
 echo "README: bootstrap, then serve"
-TOKEN=$("$BIN" admin bootstrap --db forge.db ada --display "Ada" | grep -oE 'cairn_[A-Za-z0-9_-]+' | head -1)
+TOKEN=$("$BIN" admin bootstrap --db forge.db ada --display "Ada" | grep -oE 'ambolt_[A-Za-z0-9_-]+' | head -1)
 [ -n "$TOKEN" ] || { echo "!! bootstrap printed no token"; exit 1; }
 # A small allowance for readers with no account, so the walk can show
 # what running out looks like without making hundreds of requests to
 # get there. Signed-in work keeps the ordinary allowance.
 # The public address, as a hosted forge names it: links the forge
 # hands out — an invitation minted at the door — point here.
-CAIRN_PUBLIC_URL="$URL" "$BIN" serve --db forge.db --listen "127.0.0.1:$PORT" --operator-listen "127.0.0.1:$DOORPORT" --anonymous-reads-per-minute 20 >serve.log 2>&1 &
+AMBOLT_PUBLIC_URL="$URL" "$BIN" serve --db forge.db --listen "127.0.0.1:$PORT" --operator-listen "127.0.0.1:$DOORPORT" --anonymous-reads-per-minute 20 >serve.log 2>&1 &
 SERVE=$!
 for _ in $(seq 1 60); do curl -sf -m 1 "$URL/healthz" >/dev/null 2>&1 && break; sleep 0.5; done
 curl -sf "$URL/healthz" >/dev/null || { echo "!! serve did not come up"; cat serve.log; exit 1; }
@@ -67,13 +67,13 @@ AGENT=$(door principals/scout/tokens "$TOKEN" '{"label": "first-run"}' | json "d
 [ -n "$AGENT" ] || { echo "!! no agent token was minted"; exit 1; }
 
 echo "README: an organisation is a team that owns; a member creates under it from New"
-form() { curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -b "cairn_token=$TOKEN" -X POST "$DOOR$1" --data "$2"; }
+form() { curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -b "ambolt_token=$TOKEN" -X POST "$DOOR$1" --data "$2"; }
 expect "$(form /teams 'action=create&id=crew&display=Crew')" "303 $DOOR/teams" "make the organisation, at the door"
 expect "$(form /teams 'action=add&team=crew&member=ada')" "303 $DOOR/teams" "join it"
 expect "$(api repos "$TOKEN" '{"name": "shared", "owner": "crew"}' | json "d['event']['repo']")" crew/shared "create a repository under it"
 expect "$(status /crew)" 404 "an organisation with nothing public is nothing to a stranger"
-curl -s -b "cairn_token=$TOKEN" "$URL/crew" | grep -q 'crew/shared' || { echo "!! the organisation's page does not list its repository"; exit 1; }
-curl -s -b "cairn_token=$TOKEN" "$URL/crew" | grep -q 'Allowance' || { echo "!! the organisation's page does not show what it may take up"; exit 1; }
+curl -s -b "ambolt_token=$TOKEN" "$URL/crew" | grep -q 'crew/shared' || { echo "!! the organisation's page does not list its repository"; exit 1; }
+curl -s -b "ambolt_token=$TOKEN" "$URL/crew" | grep -q 'Allowance' || { echo "!! the organisation's page does not show what it may take up"; exit 1; }
 
 echo "operating.md: an owner past what they may take up is refused by the numbers"
 expect "$(door principals/crew/quota "$TOKEN" '{"repos": 1}' | json "d['event']['kind']")" quota_overridden "set what the organisation may have, at the door"
@@ -120,8 +120,8 @@ expect "$(door_get waitlist "$TOKEN" | json "[w['email'] for w in d['waitlist']]
 LINK=$(door invitations "$TOKEN" '{"id": "jane", "display": "Jane", "email": "jane@example.test"}' | json "d['link']")
 case "$LINK" in "$URL"/join?token=*) ;; *) echo "!! the invitation is not a link to this forge: $LINK"; exit 1;; esac
 expect "$(door_get waitlist "$TOKEN" | json "len(d['waitlist'])")" 0 "and they are off the list"
-curl -s -o /dev/null -D join.h "$LINK"; grep -qi '^set-cookie: cairn_session=' join.h || { echo "!! following the invitation did not sign jane in"; exit 1; }
-curl -s -o /dev/null -D again.h "$LINK"; grep -qi '^set-cookie: cairn_session=' again.h && { echo "!! the invitation signed somebody in twice"; exit 1; }
+curl -s -o /dev/null -D join.h "$LINK"; grep -qi '^set-cookie: ambolt_session=' join.h || { echo "!! following the invitation did not sign jane in"; exit 1; }
+curl -s -o /dev/null -D again.h "$LINK"; grep -qi '^set-cookie: ambolt_session=' again.h && { echo "!! the invitation signed somebody in twice"; exit 1; }
 
 echo "README: an agent connects over MCP"
 TOOLS=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"first-run","version":"0"}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
@@ -135,10 +135,10 @@ print(n)')
 [ "$TOOLS" -gt 0 ] || { echo "!! MCP listed no tools"; exit 1; }
 
 echo "operating.md: a backup taken while serving restores to a forge fsck calls clean"
-CAIRN_DB=forge.db CAIRN_REPOS=repos CAIRN_BACKUPS=bundles "$REPO/scripts/backup.sh" | tail -1
-mkdir restored && tar -xzf bundles/cairn-*.tar.gz -C restored && tar -xf restored/repos.tar -C restored
+AMBOLT_DB=forge.db AMBOLT_REPOS=repos AMBOLT_BACKUPS=bundles "$REPO/scripts/backup.sh" | tail -1
+mkdir restored && tar -xzf bundles/ambolt-*.tar.gz -C restored && tar -xf restored/repos.tar -C restored
 [ -s restored/signing.key ] || { echo "!! the bundle carries no signing key"; exit 1; }
-"$BIN" admin fsck --db restored/cairn.db --repos restored/repos | tail -1 | grep -q '^clean' || { echo "!! the restored copy is not clean"; exit 1; }
+"$BIN" admin fsck --db restored/ambolt.db --repos restored/repos | tail -1 | grep -q '^clean' || { echo "!! the restored copy is not clean"; exit 1; }
 
 echo "operating.md: a stranger's reads have an allowance, and the health check is never it"
 LIMITED=$(for _ in $(seq 1 30); do curl -s -o /dev/null -w '%{http_code} ' "$URL/login"; done)

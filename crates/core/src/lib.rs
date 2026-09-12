@@ -1,4 +1,4 @@
-//! The cairn core: an event-sourced graph of software work.
+//! The ambolt core: an event-sourced graph of software work.
 //!
 //! A traditional forge stores code and conversation about code. This core
 //! stores the full causal graph of how software comes to exist:
@@ -28,8 +28,8 @@
 //! [`EventSeq`]: event::EventSeq
 
 /// The version this build reports: the crate version, then the commit
-/// and its date as `build.rs` found them (or what CAIRN_BUILD said).
-pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("CAIRN_BUILD"), ")");
+/// and its date as `build.rs` found them (or what AMBOLT_BUILD said).
+pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("AMBOLT_BUILD"), ")");
 
 mod attention;
 mod commands;

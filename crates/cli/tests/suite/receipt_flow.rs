@@ -9,12 +9,12 @@ use std::path::Path;
 use std::process::Command;
 
 fn verify(file: &Path, key: Option<&str>) -> (bool, String) {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_cairn"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ambolt"));
     command.args(["receipt", "verify", file.to_str().unwrap()]);
     if let Some(key) = key {
         command.args(["--key", key]);
     }
-    let output = command.output().expect("run cairn receipt verify");
+    let output = command.output().expect("run ambolt receipt verify");
     (
         output.status.success(),
         format!(
@@ -119,12 +119,18 @@ async fn a_landing_leaves_a_signed_receipt_on_the_commit() {
     let landed = receipt["landed_as"].as_str().unwrap().to_owned();
     let bare = forge._tmp.path().join("repos/ada/demo.git");
     wait_for(app, "the note to be written", async |_: &axum::Router| {
-        git_raw(&bare, &["notes", "--ref=refs/notes/cairn", "show", &landed])
-            .status
-            .success()
+        git_raw(
+            &bare,
+            &["notes", "--ref=refs/notes/ambolt", "show", &landed],
+        )
+        .status
+        .success()
     })
     .await;
-    let note = git(&bare, &["notes", "--ref=refs/notes/cairn", "show", &landed]);
+    let note = git(
+        &bare,
+        &["notes", "--ref=refs/notes/ambolt", "show", &landed],
+    );
     let noted: Value = serde_json::from_str(note.trim()).expect("the note is the receipt");
     assert_eq!(noted["receipt"]["change"]["id"], id);
     assert_eq!(
@@ -178,7 +184,10 @@ async fn a_direct_merge_is_receipted_too() {
     assert_eq!(status, StatusCode::OK, "{signed}");
     let landed = signed["receipt"]["landed_as"].as_str().unwrap().to_owned();
     let bare = forge._tmp.path().join("repos/ada/demo.git");
-    let note = git(&bare, &["notes", "--ref=refs/notes/cairn", "show", &landed]);
+    let note = git(
+        &bare,
+        &["notes", "--ref=refs/notes/ambolt", "show", &landed],
+    );
     let noted: Value = serde_json::from_str(note.trim()).unwrap();
     assert_eq!(
         noted["receipt"]["landed_as"], landed,

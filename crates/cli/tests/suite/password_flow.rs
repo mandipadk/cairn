@@ -50,10 +50,10 @@ async fn a_name_and_password_signs_someone_in() {
     // spell the name; what matters is that it does not begin with the
     // name or carry the password.
     let value = session
-        .trim_start_matches("cairn_session=")
+        .trim_start_matches("ambolt_session=")
         .trim_start_matches('s');
     assert!(
-        !value.trim_start_matches("cairn_").starts_with("ada") && !session.contains("horse"),
+        !value.trim_start_matches("ambolt_").starts_with("ada") && !session.contains("horse"),
         "the session id must be opaque: {session}"
     );
 }

@@ -12,11 +12,11 @@ use crate::error::Json;
 use crate::error::{ApiError, ApiResult};
 use crate::repo_path::RepoName;
 use crate::state::AppState;
-use axum::extract::State;
-use axum::http::StatusCode;
-use cairn_core::{
+use ambolt_core::{
     Cover, DebtSnapshot, LineState, PrincipalId, Provenance, line_state, path_matches,
 };
+use axum::extract::State;
+use axum::http::StatusCode;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -150,7 +150,7 @@ pub async fn file_states(
     rev: &str,
     path: &str,
     known: &mut HashMap<String, Option<Arc<Provenance>>>,
-) -> Result<Vec<LineState>, cairn_git::GitError> {
+) -> Result<Vec<LineState>, ambolt_git::GitError> {
     let git = app.git().expect("a git store when mapping debt");
     let oids = git.store.blame_lines(repo, rev, path).await?;
     let mut states = Vec::with_capacity(oids.len());
@@ -188,7 +188,7 @@ pub async fn map(app: &AppState, repo: &str, branch: &str) -> Result<Arc<DebtMap
         .filter(|t| {
             matches!(
                 t.state,
-                cairn_core::TaskState::Open | cairn_core::TaskState::Claimed
+                ambolt_core::TaskState::Open | ambolt_core::TaskState::Claimed
             )
         })
         .filter_map(|t| {
@@ -377,10 +377,10 @@ fn pay_down_spec(file: &FileDebt) -> String {
 pub async fn create_pay_down_tasks(
     app: &AppState,
     actor: &PrincipalId,
-    acting: Option<&cairn_core::Scope>,
+    acting: Option<&ambolt_core::Scope>,
     repo: &str,
     count: usize,
-) -> ApiResult<Vec<cairn_core::TaskId>> {
+) -> ApiResult<Vec<ambolt_core::TaskId>> {
     let record = app
         .with_store(|s| s.repo(repo))?
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not_found", "repo not found"))?;
@@ -400,7 +400,7 @@ pub async fn create_pay_down_tasks(
     let room = app.with_store(|s| {
         let quota = s.quota(&record.owner)?;
         let usage = s.usage(&record.owner)?;
-        Ok::<_, cairn_core::CoreError>(quota.open_tasks.map_or(usize::MAX, |limit| {
+        Ok::<_, ambolt_core::CoreError>(quota.open_tasks.map_or(usize::MAX, |limit| {
             limit.saturating_sub(usage.open_tasks) as usize
         }))
     })?;

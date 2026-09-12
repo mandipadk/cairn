@@ -1,4 +1,4 @@
-//! The runner loop end to end: a real `cairn verify` process re-runs a
+//! The runner loop end to end: a real `ambolt verify` process re-runs a
 //! change's claims in a working directory and records what it saw. A
 //! claim it reproduces leaves the gate open; one it cannot blocks the
 //! landing until someone resolves it.
@@ -18,7 +18,7 @@ fn run_verifier(
     change: i64,
     workdir: &std::path::Path,
 ) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_cairn"))
+    let output = Command::new(env!("CARGO_BIN_EXE_ambolt"))
         .args([
             "verify",
             "--server",
@@ -32,7 +32,7 @@ fn run_verifier(
             &change.to_string(),
         ])
         .output()
-        .expect("run cairn verify");
+        .expect("run ambolt verify");
     // A dispute is a non-zero exit on purpose — that is how a CI job
     // goes red — so the caller reads the report rather than the status.
     format!(
@@ -358,7 +358,7 @@ async fn a_runner_sweeps_everything_waiting_and_fails_loudly() {
     // claim does not hold, which is what makes a CI job useful.
     let workspace = forge.work.join("ci");
     std::fs::create_dir_all(&workspace).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_cairn"))
+    let output = Command::new(env!("CARGO_BIN_EXE_ambolt"))
         .args([
             "verify",
             "--server",

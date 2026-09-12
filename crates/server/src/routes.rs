@@ -11,15 +11,15 @@ use crate::error::{ApiError, ApiResult};
 use crate::error::{Path, Query};
 use crate::repo_path::RepoName;
 use crate::state::AppState;
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use cairn_core::{Anchor, Resolution, ThreadId, ThreadKind};
-use cairn_core::{
+use ambolt_core::{Anchor, Resolution, ThreadId, ThreadKind};
+use ambolt_core::{
     Capability, Change, ChangeId, ChangeSpec, ChangeState, ClaimId, ClaimSpec, CoreError,
     Disposition, Envelope, EventSeq, GrantId, ObjectFormat, PrincipalId, PrincipalKind, Repo,
     ReviewDomain, SessionId, SessionState, Task, TaskId, TaskState, TokenId,
 };
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -68,7 +68,7 @@ fn readable_repo(app: &AppState, actor: &Actor, name: &str) -> ApiResult<Repo> {
 /// a private or missing one answers a stranger as if nothing were there.
 pub(crate) fn readable_repo_by(app: &AppState, who: &MaybeActor, name: &str) -> ApiResult<Repo> {
     let record = found(app.with_store(|s| s.repo(name))?, "repo")?;
-    if record.visibility == cairn_core::Visibility::Public {
+    if record.visibility == ambolt_core::Visibility::Public {
         return Ok(record);
     }
     match &who.0 {
@@ -147,7 +147,7 @@ pub async fn register_principal(
                 body.model.as_deref(),
                 body.harness.as_deref(),
             ),
-            (_, Some(_)) => Err(cairn_core::CoreError::Invalid(
+            (_, Some(_)) => Err(ambolt_core::CoreError::Invalid(
                 "a person and an organisation belong to themselves".to_owned(),
             )),
         }
@@ -179,7 +179,7 @@ pub async fn get_quota(
         }
         // An agent has no quota of its own; numbers for one would read
         // as an allowance it does not have.
-        if record.kind == cairn_core::PrincipalKind::Agent {
+        if record.kind == ambolt_core::PrincipalKind::Agent {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
                 "invalid",
@@ -215,7 +215,7 @@ pub async fn set_quota(
     State(app): State<AppState>,
     actor: Actor,
     Path(id): Path<String>,
-    Json(patch): Json<cairn_core::QuotaOverride>,
+    Json(patch): Json<ambolt_core::QuotaOverride>,
 ) -> ApiResult<Json<Value>> {
     let owner = principal_id(&id)?;
     let (env, quota) = app.with_store(|s| {
@@ -461,7 +461,7 @@ pub async fn import_history(
     // box, and whoever runs the forge is who takes it in.
     let local_ok =
         app.dev_identity() || app.with_store(|s| s.acting_as(actor.1.as_ref()).is_admin(&actor.0));
-    cairn_core::Store::validate_import_source(&body.source, local_ok)?;
+    ambolt_core::Store::validate_import_source(&body.source, local_ok)?;
     // An import is the one way bytes arrive without a push, so it is the
     // one place the push door's check has to be repeated. How much is
     // coming is not knowable before fetching, so an owner already at
@@ -620,7 +620,7 @@ async fn import_everything(
 
 #[derive(Deserialize)]
 pub struct SetVisibility {
-    pub visibility: cairn_core::Visibility,
+    pub visibility: ambolt_core::Visibility,
 }
 
 pub async fn set_visibility(
@@ -698,7 +698,7 @@ pub async fn accept_transfer(
 /// The name a repository takes when its pending owner accepts it.
 pub(crate) fn accepted_name(record: &Repo) -> Option<String> {
     let to = record.pending_owner.as_ref()?;
-    let short = cairn_core::split_repo_name(&record.name)
+    let short = ambolt_core::split_repo_name(&record.name)
         .map(|(_, short)| short.to_owned())
         .unwrap_or_else(|| record.name.clone());
     Some(format!("{to}/{short}"))
@@ -1273,7 +1273,7 @@ pub async fn mint_token(
             &principal,
             body.label.as_deref(),
             body.days
-                .map(|d| cairn_core::until_in_days(i64::from(d)))
+                .map(|d| ambolt_core::until_in_days(i64::from(d)))
                 .as_deref(),
         )
     })?;
@@ -1805,7 +1805,7 @@ pub struct CredentialBody {
     /// How long it lives, 1 to 480; an hour when absent.
     pub minutes: Option<u32>,
     /// The verbs to carry; everything the agent holds here when absent.
-    pub actions: Option<Vec<cairn_core::Capability>>,
+    pub actions: Option<Vec<ambolt_core::Capability>>,
 }
 
 pub async fn mint_session_credential(
@@ -1932,7 +1932,7 @@ pub async fn lessons(
                     .repo(repo)
                     .ok()
                     .flatten()
-                    .is_some_and(|r| r.visibility == cairn_core::Visibility::Public),
+                    .is_some_and(|r| r.visibility == ambolt_core::Visibility::Public),
             })
         })
     });
@@ -2010,7 +2010,7 @@ pub async fn search(
     actor: Actor,
     Query(params): Query<SearchParams>,
 ) -> ApiResult<Json<Value>> {
-    let query = cairn_core::SearchQuery::parse(&params.q);
+    let query = ambolt_core::SearchQuery::parse(&params.q);
     let hits = app.with_store(|s| {
         s.acting_as(actor.1.as_ref())
             .search(&actor.0, &query, params.limit.unwrap_or(50).min(200))
@@ -2093,7 +2093,7 @@ pub async fn mark_read(
 #[derive(Deserialize)]
 pub struct PolicyBody {
     #[serde(flatten)]
-    pub policy: cairn_core::Policy,
+    pub policy: ambolt_core::Policy,
     /// Report what this policy would do to the open changes, and
     /// change nothing.
     #[serde(default)]
@@ -2172,7 +2172,7 @@ pub async fn simulate_policy(
     actor: Actor,
     RepoName(repo): RepoName,
     Query(query): Query<SimulateQuery>,
-    Json(policy): Json<cairn_core::Policy>,
+    Json(policy): Json<ambolt_core::Policy>,
 ) -> ApiResult<Json<Value>> {
     readable_repo(&app, &actor, &repo)?;
     let since = since_moment(query.since.as_deref())?;
@@ -2209,7 +2209,7 @@ pub(crate) fn since_moment(given: Option<&str>) -> ApiResult<String> {
 
 /// The packs the forge ships: policies to start from.
 pub async fn policy_packs() -> Json<Value> {
-    Json(json!(cairn_core::packs()))
+    Json(json!(ambolt_core::packs()))
 }
 
 /// A repository's policy as a pack another could start from.
@@ -2231,7 +2231,7 @@ pub async fn policy_pack(
 #[derive(Deserialize)]
 pub struct MirrorBody {
     /// Absent stops mirroring.
-    pub mirror: Option<cairn_core::Mirror>,
+    pub mirror: Option<ambolt_core::Mirror>,
 }
 
 /// Where a repository copies its landed branches. The credential that
@@ -2279,7 +2279,7 @@ pub async fn health(State(app): State<AppState>) -> Response {
     match app.with_store(|s| s.latest_seq()) {
         Ok(seq) => (
             StatusCode::OK,
-            Json(json!({ "ok": true, "seq": seq.0, "version": cairn_core::VERSION })),
+            Json(json!({ "ok": true, "seq": seq.0, "version": ambolt_core::VERSION })),
         )
             .into_response(),
         Err(err) => {
@@ -2414,7 +2414,7 @@ pub async fn invite(
                 s.register_principal(
                     &actor.0,
                     &id,
-                    cairn_core::PrincipalKind::Human,
+                    ambolt_core::PrincipalKind::Human,
                     &display,
                     None,
                     None,
@@ -2422,7 +2422,7 @@ pub async fn invite(
             })?;
             app.publish(&env);
         }
-        Some(existing) if existing.kind != cairn_core::PrincipalKind::Human => {
+        Some(existing) if existing.kind != ambolt_core::PrincipalKind::Human => {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
                 "invalid",
@@ -2437,7 +2437,7 @@ pub async fn invite(
             // reads that address: the same link to the address already
             // on it is the one re-invitation there is.
             let (claimed, contact) = app.with_store(|s| {
-                Ok::<_, cairn_core::CoreError>((s.is_claimed(&id)?, s.contact_of(&id)?))
+                Ok::<_, ambolt_core::CoreError>((s.is_claimed(&id)?, s.contact_of(&id)?))
             })?;
             let asked = body.email.trim();
             let same = |known: &str| known.eq_ignore_ascii_case(asked);
@@ -2458,7 +2458,7 @@ pub async fn invite(
     }
     app.with_store(|s| s.request_email(&id, &body.email))?;
     // One invitation at a time: a new one kills the old.
-    let open: Vec<cairn_core::TokenInfo> = app
+    let open: Vec<ambolt_core::TokenInfo> = app
         .with_store(|s| s.tokens_of(&id))?
         .into_iter()
         .filter(|t| !t.revoked && crate::web::is_invitation(t))
@@ -2468,7 +2468,7 @@ pub async fn invite(
         app.publish(&env);
     }
     let will_mail = app.mailer().is_some();
-    let until = cairn_core::until_in_days(crate::web::INVITATION_DAYS);
+    let until = ambolt_core::until_in_days(crate::web::INVITATION_DAYS);
     let (_, secret, env) =
         app.with_store(|s| s.mint_invitation(&actor.0, &id, will_mail, Some(&until)))?;
     app.publish(&env);

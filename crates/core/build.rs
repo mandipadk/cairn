@@ -1,6 +1,6 @@
 //! Stamp the build with the commit it came from, so a running forge can
 //! say which one it is. Falls back to "unknown" when built outside a git
-//! checkout (a source archive); CAIRN_BUILD in the environment overrides
+//! checkout (a source archive); AMBOLT_BUILD in the environment overrides
 //! both, for whoever packages it.
 
 use std::process::Command;
@@ -16,7 +16,7 @@ fn git(args: &[&str]) -> Option<String> {
 }
 
 fn main() {
-    println!("cargo:rerun-if-env-changed=CAIRN_BUILD");
+    println!("cargo:rerun-if-env-changed=AMBOLT_BUILD");
     // Only paths that exist: naming a missing one makes cargo re-run this
     // on every build.
     for path in [
@@ -29,7 +29,7 @@ fn main() {
             println!("cargo:rerun-if-changed={path}");
         }
     }
-    let build = std::env::var("CAIRN_BUILD").ok().unwrap_or_else(|| {
+    let build = std::env::var("AMBOLT_BUILD").ok().unwrap_or_else(|| {
         match (
             git(&["describe", "--always", "--dirty", "--abbrev=9"]),
             git(&["log", "-1", "--format=%cs"]),
@@ -39,5 +39,5 @@ fn main() {
             _ => "unknown".to_owned(),
         }
     });
-    println!("cargo:rustc-env=CAIRN_BUILD={build}");
+    println!("cargo:rustc-env=AMBOLT_BUILD={build}");
 }

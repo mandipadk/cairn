@@ -2,7 +2,7 @@
 # Build a release of the forge for the machine this runs on, and package it
 # the way a release is expected to arrive: one archive holding the binary,
 # the licence and the README, beside a SHA256SUMS file that covers it.
-# The version comes from the tree (`cairn --version`), so tag first.
+# The version comes from the tree (`ambolt --version`), so tag first.
 #
 #   scripts/release.sh                 # writes dist/<version>/
 #   S3_ENDPOINT=... S3_BUCKET=... S3_ACCESS_KEY_ID=... S3_SECRET_ACCESS_KEY=... \
@@ -10,18 +10,18 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-cargo build --release --quiet --bin cairn
-BIN=$(cargo build --release --quiet --bin cairn --message-format=json | python3 -c '
+cargo build --release --quiet --bin ambolt
+BIN=$(cargo build --release --quiet --bin ambolt --message-format=json | python3 -c '
 import json, sys
 for line in sys.stdin:
     d = json.loads(line)
-    if d.get("reason") == "compiler-artifact" and d.get("executable") and d["target"]["name"] == "cairn":
+    if d.get("reason") == "compiler-artifact" and d.get("executable") and d["target"]["name"] == "ambolt":
         print(d["executable"])' | tail -1)
 version=$("$BIN" --version | awk '{print $2}')
 [ -n "$version" ] || { echo "!! the binary reports no version"; exit 1; }
 arch=$(uname -m)
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
-name="cairn-$version-$arch-$os"
+name="ambolt-$version-$arch-$os"
 out="dist/$version"
 mkdir -p "$out"
 stage=$(mktemp -d)

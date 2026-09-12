@@ -8,7 +8,7 @@
 //! when it does not. A disputed claim blocks the landing.
 //!
 //! Execution happens here, in the runner's own environment, not on the
-//! forge: cairn defines the protocol and enforces the consequence.
+//! forge: ambolt defines the protocol and enforces the consequence.
 //! Isolation is the operator's choice — run this inside whatever
 //! sandbox the work deserves.
 
@@ -48,7 +48,7 @@ pub struct Runner<'a> {
 /// work out why — so refuse to start instead, loudly, and record
 /// nothing.
 fn can_actually_run(workdir: &Path) -> anyhow::Result<()> {
-    let probe = std::env::temp_dir().join(format!("cairn-verify-{}", std::process::id()));
+    let probe = std::env::temp_dir().join(format!("ambolt-verify-{}", std::process::id()));
     std::fs::write(&probe, b"probe").with_context(|| {
         format!(
             "cannot write to the temporary directory ({}). Set TMPDIR somewhere \
@@ -61,7 +61,7 @@ fn can_actually_run(workdir: &Path) -> anyhow::Result<()> {
 
     std::fs::create_dir_all(workdir)
         .with_context(|| format!("cannot create the working directory {}", workdir.display()))?;
-    let probe = workdir.join(".cairn-verify-probe");
+    let probe = workdir.join(".ambolt-verify-probe");
     std::fs::write(&probe, b"probe").with_context(|| {
         format!(
             "cannot write in the working directory {}",

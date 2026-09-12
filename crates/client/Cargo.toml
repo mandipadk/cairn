@@ -1,5 +1,5 @@
 [package]
-name = "cairn-client"
+name = "ambolt-client"
 version.workspace = true
 edition = "2024"
 rust-version.workspace = true
@@ -7,7 +7,7 @@ rust-version.workspace = true
 # are permissively licensed on purpose. The forge itself is AGPL-3.0.
 license = "Apache-2.0"
 repository.workspace = true
-description = "Client side of the Cairn forge protocol: the MCP adapter for agents and the claim runner"
+description = "Client side of the Ambolt forge protocol: the MCP adapter for agents and the claim runner"
 
 [dependencies]
 anyhow = "1.0.104"

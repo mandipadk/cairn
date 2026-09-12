@@ -3,12 +3,12 @@
 //! plus git and HTTP helpers.
 #![allow(dead_code)]
 
+use ambolt_core::{PrincipalId, PrincipalKind, Store};
+use ambolt_git::GitStore;
+use ambolt_server::{AppState, router};
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use cairn_core::{PrincipalId, PrincipalKind, Store};
-use cairn_git::GitStore;
-use cairn_server::{AppState, router};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use std::net::SocketAddr;
@@ -55,7 +55,7 @@ pub async fn boot_with_passkeys() -> Forge {
 
 /// A forge with a public URL that signs people in with `provider` and
 /// trusts it for workloads too.
-pub async fn boot_with_oidc(provider: cairn_server::oidc::Provider) -> Forge {
+pub async fn boot_with_oidc(provider: ambolt_server::oidc::Provider) -> Forge {
     let mut forge = boot_inner("sha1", true, None).await;
     let issuer = provider.issuer.clone();
     let state = forge
@@ -63,7 +63,7 @@ pub async fn boot_with_oidc(provider: cairn_server::oidc::Provider) -> Forge {
         .clone()
         .with_public_url("https://forge.example")
         .expect("a valid public URL")
-        .with_oidc(cairn_server::oidc::Trust::new(
+        .with_oidc(ambolt_server::oidc::Trust::new(
             Some(provider),
             vec![issuer],
             None,
@@ -78,9 +78,9 @@ pub async fn boot_mailing_public(command: &str) -> Forge {
     let mut forge = boot_inner(
         "sha1",
         true,
-        Some(cairn_server::Mailer::command(
+        Some(ambolt_server::Mailer::command(
             command,
-            "cairn@forge.example",
+            "ambolt@forge.example",
         )),
     )
     .await;
@@ -99,9 +99,9 @@ pub async fn boot_mailing(command: &str) -> Forge {
     boot_inner(
         "sha1",
         true,
-        Some(cairn_server::Mailer::command(
+        Some(ambolt_server::Mailer::command(
             command,
-            "cairn@forge.example",
+            "ambolt@forge.example",
         )),
     )
     .await
@@ -143,7 +143,11 @@ pub async fn boot_token_only() -> Forge {
     boot_inner("sha1", false, None).await
 }
 
-async fn boot_inner(object_format: &str, dev: bool, mailer: Option<cairn_server::Mailer>) -> Forge {
+async fn boot_inner(
+    object_format: &str,
+    dev: bool,
+    mailer: Option<ambolt_server::Mailer>,
+) -> Forge {
     boot_core(object_format, dev, mailer, false).await
 }
 
@@ -156,7 +160,7 @@ pub async fn boot_drawing() -> Forge {
 async fn boot_core(
     object_format: &str,
     dev: bool,
-    mailer: Option<cairn_server::Mailer>,
+    mailer: Option<ambolt_server::Mailer>,
     draws: bool,
 ) -> Forge {
     let tmp = tempfile::tempdir().unwrap();
@@ -173,7 +177,7 @@ async fn boot_core(
         .unwrap();
     // Ada runs this forge. Nobody is sovereign for being human any more,
     // so somebody has to hold the grant that running it consists of —
-    // exactly as `cairn admin bootstrap` arranges in production.
+    // exactly as `ambolt admin bootstrap` arranges in production.
     store.grant_bootstrap_admin(&ada).unwrap();
     store
         .register_principal(
@@ -200,7 +204,7 @@ async fn boot_core(
             &ada,
             &scout,
             None,
-            vec![cairn_core::Capability::Task, cairn_core::Capability::Push],
+            vec![ambolt_core::Capability::Task, ambolt_core::Capability::Push],
             None,
         )
         .unwrap();
@@ -211,10 +215,10 @@ async fn boot_core(
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let git_store = GitStore::new(&repos, env!("CARGO_BIN_EXE_cairn"));
+    let git_store = GitStore::new(&repos, env!("CARGO_BIN_EXE_ambolt"));
     let mut state = AppState::new(store)
         .with_git(git_store, format!("http://{addr}"))
-        .with_signer(cairn_server::receipts::Signer::ephemeral());
+        .with_signer(ambolt_server::receipts::Signer::ephemeral());
     if !draws {
         state = state.without_automatic_draws();
     }
@@ -224,7 +228,7 @@ async fn boot_core(
     if let Some(mailer) = mailer {
         state = state.with_mailer(mailer);
     }
-    cairn_server::spawn_queue_processor(state.clone());
+    ambolt_server::spawn_queue_processor(state.clone());
     let app = router(state.clone());
     tokio::spawn(axum::serve(listener, app.clone()).into_future());
 
@@ -316,7 +320,7 @@ pub async fn call_keyed(
     let request = Request::builder()
         .method("POST")
         .uri(path)
-        .header("x-cairn-principal", "ada")
+        .header("x-ambolt-principal", "ada")
         .header("idempotency-key", key)
         .header("content-type", "application/json")
         .body(Body::from(body.to_string()))
@@ -342,7 +346,7 @@ pub async fn post_raw(app: &Router, path: &str, body: Value) -> StatusCode {
     let request = Request::builder()
         .method("POST")
         .uri(path)
-        .header("x-cairn-principal", "ada")
+        .header("x-ambolt-principal", "ada")
         .header("content-type", "application/json")
         .body(Body::from(body.to_string()))
         .unwrap();
@@ -358,7 +362,7 @@ pub async fn post_raw(app: &Router, path: &str, body: Value) -> StatusCode {
 pub async fn status_of(app: &Router, method: &str, path: &str, actor: Option<&str>) -> StatusCode {
     let mut request = Request::builder().method(method).uri(path);
     if let Some(actor) = actor {
-        request = request.header("x-cairn-principal", actor);
+        request = request.header("x-ambolt-principal", actor);
     }
     let request = request.body(Body::empty()).unwrap();
     tower::ServiceExt::oneshot(app.clone(), request)
@@ -456,7 +460,7 @@ pub async fn sign_in(
         .get_all("set-cookie")
         .iter()
         .filter_map(|v| v.to_str().ok())
-        .find(|v| v.starts_with("cairn_session="))
+        .find(|v| v.starts_with("ambolt_session="))
         .map(str::to_owned);
     (status, cookie)
 }
@@ -530,7 +534,7 @@ pub async fn api(
         app,
         method,
         path,
-        ("x-cairn-principal", actor.to_owned()),
+        ("x-ambolt-principal", actor.to_owned()),
         body,
     )
     .await

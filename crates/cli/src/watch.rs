@@ -73,7 +73,7 @@ pub fn decide(
         Answer::Up { seq, version } => (
             true,
             match version {
-                Some(version) => format!("healthz ok, seq {seq}, cairn {version}"),
+                Some(version) => format!("healthz ok, seq {seq}, ambolt {version}"),
                 None => format!("healthz ok, seq {seq}"),
             },
         ),
@@ -141,7 +141,7 @@ pub fn decide(
 pub fn once(
     url: &str,
     state: &Path,
-    mail: Option<(&str, &cairn_server::Mailer)>,
+    mail: Option<(&str, &ambolt_server::Mailer)>,
 ) -> anyhow::Result<Seen> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .http_status_as_error(false)

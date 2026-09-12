@@ -15,11 +15,11 @@ use crate::error::{Path, Query};
 use crate::repo_path::RepoName;
 use crate::routes::{readable_change_by, readable_repo_by};
 use crate::state::AppState;
+use ambolt_core::{ChangeId, Receipt};
 use axum::extract::State;
 use axum::http::StatusCode;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use cairn_core::{ChangeId, Receipt};
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -89,7 +89,7 @@ impl Signer {
     /// verifies with, and the name of the canonical form.
     pub fn sign(&self, receipt: &Receipt) -> Value {
         let body = serde_json::to_value(receipt).expect("a receipt serializes");
-        let canonical = cairn_core::canonical_json(&body);
+        let canonical = ambolt_core::canonical_json(&body);
         let signature = self.key.sign(canonical.as_bytes());
         json!({
             "receipt": body,
@@ -206,7 +206,7 @@ pub async fn repo_receipts(
     let landed = app.with_store(|s| {
         s.acting_as(who.scope()).changes_page(
             &repo,
-            Some(cairn_core::ChangeState::Merged),
+            Some(ambolt_core::ChangeState::Merged),
             query.before,
             limit,
         )

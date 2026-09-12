@@ -1,4 +1,4 @@
-# Cairn
+# Ambolt
 
 A git forge that records how software came to exist.
 
@@ -7,7 +7,7 @@ those claims, who judged it, and why anything was allowed to land. When
 most of the work arrives from agents, the diff stops being the thing worth
 reading and the evidence starts.
 
-Cairn speaks ordinary git. Clone and push with the client you already
+Ambolt speaks ordinary git. Clone and push with the client you already
 have; the forge turns a push into a change, a change into a record, and a
 record into a decision it can explain.
 
@@ -132,17 +132,17 @@ checksums that cover it; everywhere else, build from source:
 
 ```sh
 # x86_64 Linux
-curl -sSfLO https://dl.cairn.mandip.dev/releases/0.1.0-alpha.1/cairn-0.1.0-alpha.1-x86_64-linux.tar.gz
-curl -sSfL https://dl.cairn.mandip.dev/releases/0.1.0-alpha.1/SHA256SUMS | sha256sum -c --ignore-missing
-tar xzf cairn-0.1.0-alpha.1-x86_64-linux.tar.gz && sudo install cairn-0.1.0-alpha.1-x86_64-linux/cairn /usr/local/bin/
+curl -sSfLO https://dl.cairn.mandip.dev/releases/0.1.0-alpha.2/ambolt-0.1.0-alpha.2-x86_64-linux.tar.gz
+curl -sSfL https://dl.cairn.mandip.dev/releases/0.1.0-alpha.2/SHA256SUMS | sha256sum -c --ignore-missing
+tar xzf ambolt-0.1.0-alpha.2-x86_64-linux.tar.gz && sudo install ambolt-0.1.0-alpha.2-x86_64-linux/ambolt /usr/local/bin/
 
 # anywhere with a Rust toolchain
-cargo install --git https://cairn.mandip.dev/git/cairn/cairn cairn
+cargo install --git https://cairn.mandip.dev/git/cairn/cairn ambolt
 ```
 
 ```sh
-cairn admin bootstrap --db forge.db ada --display "Ada"
-cairn serve --db forge.db --listen 127.0.0.1:6160
+ambolt admin bootstrap --db forge.db ada --display "Ada"
+ambolt serve --db forge.db --listen 127.0.0.1:6160
 ```
 
 Open `http://127.0.0.1:6160`, sign in with the token it printed, and
@@ -157,10 +157,10 @@ grant it what it may do and mint it a token there (shown once), then hand
 the token to the agent:
 
 ```sh
-cairn mcp --server http://127.0.0.1:6160 --token $AGENT_TOKEN
+ambolt mcp --server http://127.0.0.1:6160 --token $AGENT_TOKEN
 ```
 
-[Agents on Cairn](docs/agents.md) shows the same for Claude Code and
+[Agents on Ambolt](docs/agents.md) shows the same for Claude Code and
 Cursor, and what an agent does from there.
 
 The path above is walked by `scripts/first-run.sh` against an empty forge,
@@ -174,7 +174,7 @@ covers exposure, CI, mirroring and the admin commands;
 ## Status
 
 Early, self-hosted, and hosting itself: since the day it could, every
-change to this repository has been pushed to Cairn, independently re-run
+change to this repository has been pushed to Ambolt, independently re-run
 by a runner, and landed under its own policy, and each landing leaves a
 signed receipt on its commit. This is an alpha: the model is settled
 enough to document and to run a forge on, while the API and the pages may
@@ -193,13 +193,13 @@ whoever runs the forge, and a self-hosted forge has the same form.
 
 ## License
 
-The forge — `cairn-core`, `cairn-git`, `cairn-server`, and the `cairn`
+The forge — `ambolt-core`, `ambolt-git`, `ambolt-server`, and the `ambolt`
 binary — is licensed under the [GNU AGPL-3.0](LICENSE). Run it, change
 it, fork it; if you offer a changed version to others over a network, they
 get your changes too. That is the deal that keeps a system of record
 auditable.
 
-The client side — [`cairn-client`](crates/client), the MCP adapter and
+The client side — [`ambolt-client`](crates/client), the MCP adapter and
 the claim runner — is [Apache-2.0](crates/client/LICENSE), so any tool can
 embed the protocol without a second thought.
 

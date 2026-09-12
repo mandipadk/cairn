@@ -284,7 +284,7 @@ async fn fetch_page(addr: std::net::SocketAddr, path: &str) -> String {
         .into();
     let mut response = agent
         .get(format!("http://{addr}/{path}"))
-        .header("cookie", "cairn_dev=ada")
+        .header("cookie", "ambolt_dev=ada")
         .call()
         .expect("page request");
     response.body_mut().read_to_string().unwrap_or_default()

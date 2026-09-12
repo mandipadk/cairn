@@ -1,6 +1,6 @@
 # Contributing
 
-Cairn is developed on Cairn. Changes are pushed to `refs/for/main`, carry
+Ambolt is developed on Ambolt. Changes are pushed to `refs/for/main`, carry
 a claim naming the command that checked them, are re-run by an
 independent runner, and land under the repository's policy. The GitHub
 repository is a mirror; pull requests there are read, and a maintainer
@@ -18,7 +18,7 @@ not landed.
 By contributing you agree that:
 
 - your contribution is licensed under the licence of the crate it touches
-  — AGPL-3.0 for the forge, Apache-2.0 for `cairn-client` — as recorded
+  — AGPL-3.0 for the forge, Apache-2.0 for `ambolt-client` — as recorded
   in that crate's manifest and licence file;
 - you grant the project's copyright holder a perpetual, worldwide,
   irrevocable, royalty-free licence to use, modify, sublicense and

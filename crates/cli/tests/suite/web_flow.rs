@@ -107,7 +107,7 @@ async fn web_ui_full_journey() {
     assert!(body.contains("API token"));
 
     // A bad token bounces with a message; a real one signs in.
-    let (_, location) = browser.post_form("/login", &[("token", "cairn_bogus")]);
+    let (_, location) = browser.post_form("/login", &[("token", "ambolt_bogus")]);
     assert!(location.unwrap().contains("error="));
     assert!(
         browser.jar.is_empty(),
@@ -116,12 +116,12 @@ async fn web_ui_full_journey() {
     let scout_token = forge.scout_token.clone();
     let (status, _) = browser.post_form("/login", &[("token", &scout_token)]);
     assert_eq!(status, 303);
-    assert!(browser.jar.contains_key("cairn_token"));
+    assert!(browser.jar.contains_key("ambolt_token"));
 
     // Dev mode also accepts an asserted principal; ada browses as human.
     let mut ada = Browser::new(base.clone());
     ada.post_form("/login", &[("principal", "ada")]);
-    assert!(ada.jar.contains_key("cairn_dev"));
+    assert!(ada.jar.contains_key("ambolt_dev"));
 
     // Home answers the question someone actually arrives with — what
     // wants me — and lists the repositories underneath.
@@ -193,7 +193,7 @@ async fn web_ui_full_journey() {
         "scout",
         Some(json!({
             "kind": "test", "passed": true, "summary": "renders escaped",
-            "command": "cargo test -p cairn-server",
+            "command": "cargo test -p ambolt-server",
             "unchecked": ["rendering under right-to-left scripts"]
         })),
     )

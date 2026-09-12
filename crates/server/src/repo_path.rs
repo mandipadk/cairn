@@ -40,7 +40,7 @@ impl<S: Send + Sync> FromRequestParts<S> for RepoName {
         // Clone URLs may spell the repository with a `.git` suffix.
         let repo = repo.strip_suffix(".git").unwrap_or(repo);
         let full = format!("{owner}/{repo}");
-        if !cairn_core::validate_repo_name(&full) {
+        if !ambolt_core::validate_repo_name(&full) {
             return Err(refuse());
         }
         Ok(RepoName(full))

@@ -64,7 +64,7 @@ async fn a_revoked_token_stops_working_on_the_next_request() {
     let response = get_with_cookie(
         app,
         "/ada/demo",
-        &format!("cairn_token={}", forge.scout_token),
+        &format!("ambolt_token={}", forge.scout_token),
     )
     .await;
     assert_eq!(
@@ -314,7 +314,7 @@ async fn the_dev_header_is_inert_when_dev_mode_is_off() {
     assert_eq!(
         status,
         StatusCode::NOT_FOUND,
-        "x-cairn-principal must carry no authority here: {refused}"
+        "x-ambolt-principal must carry no authority here: {refused}"
     );
     // And a write with only the header has no identity at all.
     let (status, refused) = api(

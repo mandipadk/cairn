@@ -1,10 +1,10 @@
 //! The protocol over real HTTP: full lifecycle, error surfaces, and the
 //! SSE stream's exactly-once-in-order contract over a live socket.
 
+use ambolt_server::{AppState, router};
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use cairn_server::{AppState, router};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -24,13 +24,13 @@ fn test_state() -> AppState {
     // and it is deliberately not reachable over the API — the circle of
     // "you need admin to grant admin" should stay unbroken there, which
     // leaves the offline path as the only way in.
-    let mut store = cairn_core::Store::open_in_memory().unwrap();
-    let ada = cairn_core::PrincipalId::new("ada").unwrap();
+    let mut store = ambolt_core::Store::open_in_memory().unwrap();
+    let ada = ambolt_core::PrincipalId::new("ada").unwrap();
     store
         .register_principal(
             &ada,
             &ada,
-            cairn_core::PrincipalKind::Human,
+            ambolt_core::PrincipalKind::Human,
             "Ada",
             None,
             None,
@@ -49,7 +49,7 @@ async fn call(
 ) -> (StatusCode, Value) {
     let mut request = Request::builder().method(method).uri(path);
     if let Some(actor) = actor {
-        request = request.header("x-cairn-principal", actor);
+        request = request.header("x-ambolt-principal", actor);
     }
     let request = match body {
         Some(json) => request
@@ -399,8 +399,8 @@ async fn sse_stream_catches_up_heals_and_follows_live() {
     stream
         .write_all(
             b"GET /api/events/stream?after=2 HTTP/1.1\r\n\
-              Host: cairn\r\n\
-              x-cairn-principal: ada\r\n\
+              Host: ambolt\r\n\
+              x-ambolt-principal: ada\r\n\
               Accept: text/event-stream\r\n\r\n",
         )
         .await
@@ -453,8 +453,8 @@ async fn last_event_id_header_overrides_query_cursor() {
     stream
         .write_all(
             b"GET /api/events/stream?after=0 HTTP/1.1\r\n\
-              Host: cairn\r\n\
-              x-cairn-principal: ada\r\n\
+              Host: ambolt\r\n\
+              x-ambolt-principal: ada\r\n\
               Last-Event-ID: 3\r\n\
               Accept: text/event-stream\r\n\r\n",
         )
@@ -485,8 +485,8 @@ async fn concurrent_writers_keep_the_stream_gapless() {
     stream
         .write_all(
             b"GET /api/events/stream?after=0 HTTP/1.1\r\n\
-              Host: cairn\r\n\
-              x-cairn-principal: ada\r\n\
+              Host: ambolt\r\n\
+              x-ambolt-principal: ada\r\n\
               Accept: text/event-stream\r\n\r\n",
         )
         .await
@@ -665,8 +665,8 @@ async fn sustained_concurrent_writes_keep_stream_and_pages_consistent() {
     stream
         .write_all(
             b"GET /api/events/stream?after=0 HTTP/1.1\r\n\
-              Host: cairn\r\n\
-              x-cairn-principal: ada\r\n\
+              Host: ambolt\r\n\
+              x-ambolt-principal: ada\r\n\
               Accept: text/event-stream\r\n\r\n",
         )
         .await
@@ -743,14 +743,14 @@ async fn sustained_concurrent_writes_keep_stream_and_pages_consistent() {
 /// headers are worthless.
 #[tokio::test]
 async fn tokens_and_grants_enforce_without_dev_identity() {
-    // Bootstrap happens out-of-band (cairn admin): first human + token.
-    let mut store = cairn_core::Store::open_in_memory().unwrap();
-    let ada = cairn_core::PrincipalId::new("ada").unwrap();
+    // Bootstrap happens out-of-band (ambolt admin): first human + token.
+    let mut store = ambolt_core::Store::open_in_memory().unwrap();
+    let ada = ambolt_core::PrincipalId::new("ada").unwrap();
     store
         .register_principal(
             &ada,
             &ada,
-            cairn_core::PrincipalKind::Human,
+            ambolt_core::PrincipalKind::Human,
             "Ada",
             None,
             None,
@@ -795,7 +795,7 @@ async fn tokens_and_grants_enforce_without_dev_identity() {
     let (status, _) = call(&app, "GET", "/api/tasks", Some("ada"), None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     // Garbage tokens are refused.
-    let (status, _) = call_auth(&app, "GET", "/api/tasks", Some("Bearer cairn_nope"), None).await;
+    let (status, _) = call_auth(&app, "GET", "/api/tasks", Some("Bearer ambolt_nope"), None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
     // The bootstrap token works; ada builds the world over HTTP.

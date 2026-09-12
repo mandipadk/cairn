@@ -5,8 +5,8 @@ client. Signature Version 4, path-style addressing; works against
 Cloudflare R2 (region "auto"), MinIO, and S3 itself.
 
     S3_ENDPOINT=https://<account>.r2.cloudflarestorage.com \
-    S3_BUCKET=cairn-backups S3_ACCESS_KEY_ID=... S3_SECRET_ACCESS_KEY=... \
-    scripts/upload-s3.py backups/cairn-20260907-031500.tar.gz [key]
+    S3_BUCKET=ambolt-backups S3_ACCESS_KEY_ID=... S3_SECRET_ACCESS_KEY=... \
+    scripts/upload-s3.py backups/ambolt-20260907-031500.tar.gz [key]
 
 The key defaults to the file's name. Retention is the bucket's business:
 give it a lifecycle rule rather than teaching this script to delete.

@@ -152,11 +152,17 @@ Another forge takes them in through its operator: make the repository
 (`POST /api/repos` with the owner), then
 `POST /api/repos/{owner}/{name}/import {"source": "file:///…/name.bundle", "everything": true}`
 fetches every branch, recording each as imported history before
-publishing it, and the tags, notes and change refs as they are. A
-`file://` source is the operator's to give (the unscoped admin; a forge
-in `--dev` mode allows it to anyone), since it reads the box's own
-files. The log of the forge left behind stays there; what the new forge
-knows begins with the import.
+publishing it; enters each tag into the graph as a tag pushed here
+would be (one whose commit is on no imported branch is named under
+`left_behind` and not written); and takes the receipt notes as they
+are. The source's change refs stay with its log — they are that forge's
+numbering. Everything is what a repository begins with, so it is
+refused into one that already has refs; the answer's `tags` names what
+arrived. A `file://` source is the operator's to give (the unscoped
+admin; a forge in `--dev` mode allows it to anyone), since it reads the
+box's own files. The log of the forge left behind stays there; what the
+new forge knows begins with the import — and its own `fsck` is clean
+afterwards, which is the walk to run after any graduation.
 
 ### The operator's door
 

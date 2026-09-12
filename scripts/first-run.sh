@@ -124,6 +124,18 @@ LIMITED=$(for _ in $(seq 1 30); do curl -s -o /dev/null -w '%{http_code} ' "$URL
 case "$LIMITED" in *429*) ;; *) echo "!! a reader past the allowance was not told to wait: $LIMITED"; exit 1;; esac
 for _ in $(seq 1 10); do expect "$(status /healthz)" 200 "the health check is not counted against anybody"; done
 
+echo "operating.md: an owner leaves with bundles, another forge takes them in, and is clean afterwards"
+"$BIN" admin export --db forge.db --repos repos --owner ada --into out | tail -1
+BUNDLE=$(ls out/ada-*/bundles/demo.bundle)
+[ -s "$BUNDLE" ] || { echo "!! the export wrote no bundle for ada/demo"; exit 1; }
+python3 -c 'import json,glob,sys; m=json.load(open(glob.glob("out/ada-*/manifest.json")[0])); sys.exit(0 if any(r["name"]=="ada/demo" for r in m["repos"]) else 1)' || { echo "!! the manifest does not name ada/demo"; exit 1; }
+expect "$(api principals "$TOKEN" '{"id": "bee", "kind": "human", "display": "Bee"}' | json "d['event']['kind']")" principal_registered "an account for the one who takes it in"
+expect "$(api repos "$TOKEN" '{"name": "demo", "owner": "bee"}' | json "d['event']['kind']")" repo_created "an empty repository under them"
+TAKEN=$(api repos/bee/demo/import "$TOKEN" "{\"source\": \"file://$W/$BUNDLE\", \"everything\": true}")
+expect "$(echo "$TAKEN" | json "d['branches'][0]['branch']")" main "every branch arrives, recorded as imported history"
+expect "$(echo "$TAKEN" | json "len(d['left_behind'])")" 0 "nothing is left behind"
+expect "$(get repos/bee/demo/debt "$TOKEN" | json "d['counts']['imported'] >= 1")" True "the debt map says the history was imported"
+
 echo "operating.md: the watcher sees the forge up, and sees it go"
 "$BIN" admin watch --url "$URL" --state watch.json | grep -q ': up since' || { echo "!! the watcher did not see the forge up"; exit 1; }
 kill "$SERVE"; wait "$SERVE" 2>/dev/null || true; SERVE=

@@ -1,7 +1,7 @@
 //! Leaving with everything: an owner's repositories go out as bundles
-//! with a manifest, and another forge takes them in whole — branches,
-//! tags, receipt notes, change refs — recording the branches as
-//! imported history.
+//! with a manifest, and another forge takes them in whole — branches
+//! recorded as imported history, tags entered into its graph, receipt
+//! notes as they are — and is clean by its own fsck afterwards.
 
 use crate::common::*;
 use axum::http::StatusCode;
@@ -43,6 +43,21 @@ async fn an_owner_leaves_with_bundles_and_another_forge_takes_them_in() {
     )
     .await;
     approve_and_merge(app, &change).await;
+    // A tag on the landed commit, so the bundle carries one.
+    git(&wc, &["fetch", "-q", "origin", "main"]);
+    git(
+        &wc,
+        &[
+            "tag",
+            "-a",
+            "v1",
+            "-m",
+            "First named landing",
+            "origin/main",
+        ],
+    );
+    let ada_url = format!("http://ada:{}@{addr}/git/ada/demo", forge.ada_token);
+    git(&wc, &["push", "-q", &ada_url, "refs/tags/v1"]);
     let (_, _) = api(
         app,
         "POST",
@@ -77,13 +92,14 @@ async fn an_owner_leaves_with_bundles_and_another_forge_takes_them_in() {
         .unwrap();
     let heads = String::from_utf8_lossy(&listed.stdout).into_owned();
     assert!(heads.contains("refs/heads/main"), "{heads}");
+    assert!(heads.contains("refs/tags/v1"), "the tag travels: {heads}");
     assert!(
         heads.contains("refs/notes/cairn"),
         "the receipts travel: {heads}"
     );
     assert!(
         heads.contains("refs/changes/1/1"),
-        "and the change refs: {heads}"
+        "and the change refs, for whoever reads the bundle: {heads}"
     );
 
     // In: another owner on this forge (as another forge would), made
@@ -117,7 +133,13 @@ async fn an_owner_leaves_with_bundles_and_another_forge_takes_them_in() {
     assert_eq!(status, StatusCode::OK, "{taken}");
     assert_eq!(taken["branches"][0]["branch"], "main", "{taken}");
     assert!(taken["branches"][0]["commits"].as_i64().unwrap() >= 1);
-    // What arrived: the branch, the note on its tip, the change ref.
+    assert_eq!(taken["tags"][0]["tag"], "v1", "{taken}");
+    assert_eq!(taken["left_behind"], json!([]), "{taken}");
+    // What arrived: the branch, the note on its tip, the tag in the
+    // graph as well as in git; not the other forge's change refs.
+    let (_, tags) = api(app, "GET", "/api/repos/bee/demo/tags", "bee", None).await;
+    assert_eq!(tags[0]["name"], "v1", "{tags}");
+    assert_eq!(tags[0]["message"], "First named landing", "{tags}");
     let bare = forge._tmp.path().join("repos/bee/demo.git");
     let refs = std::process::Command::new("git")
         .args([
@@ -130,12 +152,30 @@ async fn an_owner_leaves_with_bundles_and_another_forge_takes_them_in() {
         .unwrap();
     let refs = String::from_utf8_lossy(&refs.stdout).into_owned();
     assert!(refs.contains("refs/heads/main"), "{refs}");
+    assert!(refs.contains("refs/tags/v1"), "{refs}");
     assert!(refs.contains("refs/notes/cairn"), "{refs}");
-    assert!(refs.contains("refs/changes/1/1"), "{refs}");
     assert!(
-        !refs.contains("refs/import/"),
+        !refs.contains("refs/changes/"),
+        "the source's change refs stay with its log: {refs}"
+    );
+    assert!(
+        !refs.contains("refs/import"),
         "nothing half-done lingers: {refs}"
     );
+    // And the destination is clean by its own fsck: every tag in git
+    // is a tag in its graph.
+    let divergences = forge.state.fsck().expect("fsck runs");
+    assert!(divergences.is_empty(), "{divergences:?}");
+    // Everything is what a repository begins with: not again.
+    let (status, again) = api(
+        app,
+        "POST",
+        "/api/repos/bee/demo/import",
+        "ada",
+        Some(json!({ "source": source, "everything": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{again}");
     let (_, debt) = api(app, "GET", "/api/repos/bee/demo/debt", "ada", None).await;
     assert!(
         debt["counts"]["imported"].as_i64().unwrap_or(0) >= 1,

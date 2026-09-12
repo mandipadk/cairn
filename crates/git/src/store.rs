@@ -1407,6 +1407,10 @@ impl GitStore {
     /// and the objects they reach. How a repository leaves a forge.
     pub async fn bundle(&self, name: &str, into: &Path) -> GitResult<()> {
         let path = self.existing_repo_path(name)?;
+        // git runs inside the repository, so a relative destination
+        // would land inside it; the caller's path is taken from where
+        // the caller stands.
+        let into = std::path::absolute(into)?;
         if let Some(parent) = into.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -1423,10 +1427,13 @@ impl GitStore {
         Ok(())
     }
 
-    /// Fetch all of a source: its branches onto holding refs, and its
-    /// tags, receipt notes and change refs as they are. Returns each
-    /// branch with its tip and how many commits it carries, for the
-    /// record to be written before any branch is published.
+    /// Fetch all of a source: its branches and tags onto holding refs,
+    /// and its receipt notes as they are. Returns each branch with its
+    /// tip and how many commits it carries, for the record to be
+    /// written before any branch is published; the tags wait on
+    /// [`Self::holding_tags`] for the same treatment. The source's
+    /// change refs stay behind: they are that forge's log projected
+    /// onto git, and would collide with this one's numbering.
     pub async fn fetch_everything(
         &self,
         name: &str,
@@ -1441,9 +1448,8 @@ impl GitStore {
                 "--no-tags",
                 &from,
                 "+refs/heads/*:refs/import/*",
-                "+refs/tags/*:refs/tags/*",
+                "+refs/tags/*:refs/import-tags/*",
                 "+refs/notes/*:refs/notes/*",
-                "+refs/changes/*:refs/changes/*",
             ],
         )
         .await?;
@@ -1463,6 +1469,77 @@ impl GitStore {
             branches.push((branch.to_owned(), tip, count));
         }
         Ok(branches)
+    }
+
+    /// A fetched source's tags, waiting on their holding refs: each
+    /// tag's name, the object the ref points at, the commit that
+    /// resolves to, and the message if it is an annotated tag.
+    pub async fn holding_tags(
+        &self,
+        name: &str,
+    ) -> GitResult<Vec<(String, String, String, Option<String>)>> {
+        let path = self.existing_repo_path(name)?;
+        let stdout = self
+            .run(
+                Some(&path),
+                &[
+                    "for-each-ref",
+                    "--format=%(refname) %(objectname) %(*objectname) %(objecttype)",
+                    "refs/import-tags/",
+                ],
+            )
+            .await?;
+        let mut tags = Vec::new();
+        for line in String::from_utf8_lossy(&stdout).lines() {
+            let mut parts = line.split(' ');
+            let (Some(refname), Some(object)) = (parts.next(), parts.next()) else {
+                continue;
+            };
+            let Some(tag) = refname.strip_prefix("refs/import-tags/") else {
+                continue;
+            };
+            let peeled = parts.next().filter(|p| !p.is_empty());
+            let annotated = parts.next() == Some("tag");
+            let commit = peeled.unwrap_or(object).to_owned();
+            // An annotated tag is its own object, with a message worth
+            // keeping; a lightweight one is just a name for the commit.
+            let message = if annotated {
+                String::from_utf8_lossy(&self.run(Some(&path), &["cat-file", "tag", object]).await?)
+                    .split_once("\n\n")
+                    .map(|(_, body)| body.trim().to_owned())
+                    .filter(|body| !body.is_empty())
+            } else {
+                None
+            };
+            tags.push((tag.to_owned(), object.to_owned(), commit, message));
+        }
+        Ok(tags)
+    }
+
+    /// Drop a tag's holding ref, whether it was taken in or not.
+    pub async fn clear_holding_tag(&self, name: &str, tag: &str) -> GitResult<()> {
+        let path = self.existing_repo_path(name)?;
+        self.run(
+            Some(&path),
+            &["update-ref", "-d", &format!("refs/import-tags/{tag}")],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Whether a branch exists.
+    pub async fn branch_exists(&self, name: &str, branch: &str) -> GitResult<bool> {
+        let wanted = format!("refs/heads/{branch}");
+        Ok(self
+            .list_refs(name, &wanted)
+            .await?
+            .iter()
+            .any(|(refname, _)| *refname == wanted))
+    }
+
+    /// Whether the repository has any ref at all.
+    pub async fn has_refs(&self, name: &str) -> GitResult<bool> {
+        Ok(!self.list_refs(name, "refs/").await?.is_empty())
     }
 
     /// Drop an import's holding ref once the branch carries it.

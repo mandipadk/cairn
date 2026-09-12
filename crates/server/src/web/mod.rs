@@ -410,6 +410,18 @@ async fn import_into(
     cairn_core::Store::validate_import_source(source, app.dev_identity())
         .map_err(|e| humane(&e))?;
     let git = app.git().ok_or("this forge has no git storage")?;
+    if git
+        .store
+        .branch_exists(repo, branch)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        return Err(format!("{repo} already has a branch {branch}"));
+    }
+    // The same door the API's import goes through: an owner at their
+    // limit is refused before the fetch, and what arrives is measured.
+    crate::git_http::room_on_disk(app, repo, 0, 0).map_err(|e| e.message)?;
+    let _measure = crate::git_http::MeasureOnDrop::new(app, repo);
     let (tip, commits) = git
         .store
         .fetch_history(repo, source, branch)

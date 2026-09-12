@@ -473,6 +473,19 @@ pub async fn import_history(
     if body.everything {
         return import_everything(&app, &actor, &name, &body.source, local_ok).await;
     }
+    // Onto a branch that does not exist yet, and known before anything
+    // is fetched or recorded: the record says the branch was seeded,
+    // and a branch that was already here was not.
+    if git.store.branch_exists(&name, &body.branch).await? {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "conflict",
+            format!(
+                "{} already has a branch {}; an import seeds a branch that does not exist yet",
+                name, body.branch
+            ),
+        ));
+    }
     let (tip, commits) = git
         .store
         .fetch_history(&name, &body.source, &body.branch)
@@ -489,7 +502,7 @@ pub async fn import_history(
             &body.source,
             &tip,
             commits,
-            app.dev_identity(),
+            local_ok,
         )
     });
     let env = match recorded {
@@ -508,8 +521,11 @@ pub async fn import_history(
 }
 
 /// Take in all of a source: each branch recorded and published in turn,
-/// the tags, notes and change refs arriving as they are. The record is
-/// written per branch before that branch is published, as for one.
+/// then each tag entered into the graph as a tag pushed here would be,
+/// the receipt notes arriving as they are. The record is written per
+/// branch before that branch is published, as for one. Only into a
+/// repository with no refs yet: everything is what a repository begins
+/// with, not something laid over history already here.
 async fn import_everything(
     app: &AppState,
     actor: &Actor,
@@ -524,6 +540,15 @@ async fn import_everything(
             "this forge is running without git storage",
         )
     })?;
+    if git.store.has_refs(name).await? {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "conflict",
+            format!(
+                "{name} already has history; everything can only be taken into a repository with none"
+            ),
+        ));
+    }
     let branches = git.store.fetch_everything(name, source).await?;
     if branches.is_empty() {
         return Err(ApiError::new(
@@ -552,8 +577,44 @@ async fn import_everything(
         imported.push(json!({ "branch": branch, "tip": tip, "commits": commits }));
         last = Some(env);
     }
+    // The tags, each entered as the hook enters a pushed one — on a
+    // branch, a new name here — so `refs/tags` stays what the graph
+    // says and fsck has nothing to report. One that cannot be is named
+    // in the answer and left behind, not written.
+    let mut tags = Vec::new();
+    let mut left = Vec::new();
+    for (tag, object, commit, message) in git.store.holding_tags(name).await? {
+        let _ = git.store.clear_holding_tag(name, &tag).await;
+        if !git.store.on_a_branch(name, &commit).await? {
+            left.push(json!({ "tag": tag, "reason": "its commit is on no imported branch" }));
+            continue;
+        }
+        let annotated = object != commit;
+        let recorded = app.with_store(|s| {
+            s.acting_as(actor.1.as_ref()).push_tag(
+                &actor.0,
+                name,
+                &tag,
+                &commit,
+                annotated.then_some(object.as_str()),
+                message.as_deref(),
+            )
+        });
+        match recorded {
+            Ok(env) => {
+                git.store
+                    .set_ref(name, &format!("refs/tags/{tag}"), &object)
+                    .await?;
+                app.publish(&env);
+                tags.push(json!({ "tag": tag, "commit": commit }));
+            }
+            Err(err) => left.push(json!({ "tag": tag, "reason": err.to_string() })),
+        }
+    }
     let mut body = committed(Some(name.to_owned()), &last.expect("at least one branch"));
     body.0["branches"] = json!(imported);
+    body.0["tags"] = json!(tags);
+    body.0["left_behind"] = json!(left);
     Ok(body)
 }
 

@@ -1,0 +1,129 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Igraduate0113",
+      "id": "c-5v5p4vbd5vsmx26p0j4bzhtdtp",
+      "landed_oid": "855bd88a75847b4134b245c996070d9e565c086c",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 113,
+      "opened_at": "2026-09-12T17:40:54.195500327Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "cairn/cairn",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Leave a graduated forge clean by its own fsck",
+      "updated_at": "2026-09-12T17:41:48.802785584Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-5v5p4vbd5vsmx26p0j4bzhtdtp",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-4qyht0dwjf77192xbsherzn3fc",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 975,
+        "summary": "fmt, clippy -D warnings, the suite and the first-run walk pass. New: an import of everything records each tag as an event and fsck is clean after; the source's change refs are not taken; everything into a repository with refs is 409; the walk exports, imports and fscks.",
+        "unchecked": [
+          "The set-aside walk copy on the box is what showed the divergence; the fix is proven by the suite and the walk, not by re-importing that copy."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "855bd88a75847b4134b245c996070d9e565c086c",
+    "landed_at": "2026-09-12T17:41:48.802785584Z",
+    "merged_by": "mandip",
+    "repo": "cairn/cairn",
+    "revision": {
+      "by": "mandip",
+      "change": "c-5v5p4vbd5vsmx26p0j4bzhtdtp",
+      "commit_oid": "855bd88a75847b4134b245c996070d9e565c086c",
+      "message": "Leave a graduated forge clean by its own fsck\n\nTaking everything from a bundle fetched the source's tags straight\ninto refs/tags, where fsck found them: a tag in git that the log\nnever recorded, on every forge a graduation made. The tags now wait\non holding refs and each is entered into the graph as a tag pushed\nhere would be — on an imported branch, a new name — before its ref\nis written; one that cannot be is named in the answer under\nleft_behind and not written. The source's change refs stay with its\nlog: they were that forge's numbering, and collided with this one's\nfrom change 1. Everything is what a repository begins with, so it is\nrefused into one that already has refs, and a single-branch import\nonto a branch that exists is refused before anything is fetched or\nrecorded, where before the record was written and the ref then\ndeclined to move. The New page's import measures disk as the API's\ndoes, and the operator's local source is honoured on the\nsingle-branch path as on the whole. The first-run walk now exports,\nimports and ends in the fsck that would have caught this — and on its\nfirst run caught another: `cairn admin export --into out` with a\nrelative path wrote inside the repository, since git runs there; the\ndestination is taken from where the caller stands.\n\nChange-Id: Igraduate0113\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "crates/cli/tests/suite/graduation_flow.rs",
+        "crates/git/src/store.rs",
+        "crates/server/src/routes.rs",
+        "crates/server/src/web/mod.rs",
+        "docs/operating.md",
+        "scripts/first-run.sh"
+      ],
+      "session": null
+    },
+    "seq": 978,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-4qyht0dwjf77192xbsherzn3fc",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-4qyht0dwjf77192xbsherzn3fc",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 132 judged claims, 95% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 5 path(s) outside docs/, *.md: crates/cli/tests/suite/graduation_flow.rs, crates/git/src/store.rs, crates/server/src/routes.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-5v5p4vbd5vsmx26p0j4bzhtdtp",
+        "claim": "cl-4qyht0dwjf77192xbsherzn3fc",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "id": "vr-3rfk2af739jjxak3w52e0tav6w",
+        "observed": "exit 0: Doc-tests cairn_server",
+        "revision": 1,
+        "seq": 976
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "CsSCqyUAVn1rNxlagdekcXVSIzPOHhRT+kFfcCWUw0ssYu39FyJ1u6zVNaD2Tj4F2D+q6x1eQQeaHSoTQRQPDQ=="
+  }
+}

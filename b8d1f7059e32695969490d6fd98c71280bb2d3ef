@@ -1,0 +1,125 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Ianvil0123",
+      "id": "c-5ymge9391q8gcac9a64wdcjj1s",
+      "landed_oid": "b8d1f7059e32695969490d6fd98c71280bb2d3ef",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 123,
+      "opened_at": "2026-09-13T01:53:00.646790716Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "ambolt/ambolt",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Draw the anvil",
+      "updated_at": "2026-09-13T01:54:09.792756765Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-5ymge9391q8gcac9a64wdcjj1s",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-18gm2ghfv27spmf9x7nzx2948g",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 1117,
+        "summary": "fmt, clippy -D warnings, the suite and the first-run walk pass. The mark is one inline SVG in the page's ink, drawn by a single function for all five shells; the stone CSS is gone. No behaviour changed.",
+        "unchecked": [
+          "How it looks is a person's look, at sidebar size on both grounds."
+        ]
+      }
+    ],
+    "forge": "https://ambolt.sh",
+    "landed_as": "b8d1f7059e32695969490d6fd98c71280bb2d3ef",
+    "landed_at": "2026-09-13T01:54:09.792756765Z",
+    "merged_by": "mandip",
+    "repo": "ambolt/ambolt",
+    "revision": {
+      "by": "mandip",
+      "change": "c-5ymge9391q8gcac9a64wdcjj1s",
+      "commit_oid": "b8d1f7059e32695969490d6fd98c71280bb2d3ef",
+      "message": "Draw the anvil\n\nThe mark beside the wordmark was three stacked stones, the cairn. It\nis an anvil now: face, horn, waist and foot in the page's ink, drawn\nonce and used by every shell, sized to sit on the wordmark's x-height.\n\nChange-Id: Ianvil0123\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "crates/server/src/web/style.css",
+        "crates/server/src/web/views.rs"
+      ],
+      "session": null
+    },
+    "seq": 1120,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-18gm2ghfv27spmf9x7nzx2948g",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-18gm2ghfv27spmf9x7nzx2948g",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 148 judged claims, 95% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 2 path(s) outside docs/, *.md: crates/server/src/web/style.css, crates/server/src/web/views.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-5ymge9391q8gcac9a64wdcjj1s",
+        "claim": "cl-18gm2ghfv27spmf9x7nzx2948g",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "id": "vr-2fbrn9xnp0wjchdemc7a4r77gk",
+        "observed": "exit 0: Doc-tests ambolt_server",
+        "revision": 1,
+        "seq": 1118
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "v98PxAet1kPB/zw1++luo1jXMZGd5hRsgPHUxCBaRSa02NQprr2wHrWngK6ZuunLu0pS0ZO+3QBFVGmJEVJUBQ=="
+  }
+}

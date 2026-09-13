@@ -132,12 +132,12 @@ checksums that cover it; everywhere else, build from source:
 
 ```sh
 # x86_64 Linux
-curl -sSfLO https://dl.cairn.mandip.dev/releases/0.1.0-alpha.2/ambolt-0.1.0-alpha.2-x86_64-linux.tar.gz
-curl -sSfL https://dl.cairn.mandip.dev/releases/0.1.0-alpha.2/SHA256SUMS | sha256sum -c --ignore-missing
+curl -sSfLO https://dl.ambolt.sh/releases/0.1.0-alpha.2/ambolt-0.1.0-alpha.2-x86_64-linux.tar.gz
+curl -sSfL https://dl.ambolt.sh/releases/0.1.0-alpha.2/SHA256SUMS | sha256sum -c --ignore-missing
 tar xzf ambolt-0.1.0-alpha.2-x86_64-linux.tar.gz && sudo install ambolt-0.1.0-alpha.2-x86_64-linux/ambolt /usr/local/bin/
 
 # anywhere with a Rust toolchain
-cargo install --git https://cairn.mandip.dev/git/cairn/cairn ambolt
+cargo install --git https://ambolt.sh/git/ambolt/ambolt ambolt
 ```
 
 ```sh
@@ -180,7 +180,7 @@ signed receipt on its commit. This is an alpha: the model is settled
 enough to document and to run a forge on, while the API and the pages may
 still change between versions without a compatibility promise. A hosted
 instance is planned; the waitlist at
-[cairn.mandip.dev](https://cairn.mandip.dev) is where to say you want one.
+[ambolt.sh](https://ambolt.sh) is where to say you want one.
 
 What is not here yet, so nobody has to find out the hard way: billing
 for a forge that would need it. What is here is tested at the boundaries where a forge
@@ -188,7 +188,7 @@ is usually wrong — authority, concurrency, crash recovery, hostile input,
 what one owner may take up, and how fast anyone may ask — and `fsck`
 runs clean on the instance serving this page.
 When something breaks anyway, say so at
-[cairn.mandip.dev/report](https://cairn.mandip.dev/report); it reaches
+[ambolt.sh/report](https://ambolt.sh/report); it reaches
 whoever runs the forge, and a self-hosted forge has the same form.
 
 ## License

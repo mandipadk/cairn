@@ -24,23 +24,23 @@ repository it came from. Verified: 2.40 fails, 2.43 works.
 
 From a release, for x86_64 Linux: each tagged version is built on the
 reference instance and published at
-`https://dl.cairn.mandip.dev/releases/<version>/`, as one archive holding
+`https://dl.ambolt.sh/releases/<version>/`, as one archive holding
 the binary, the licence and the README, beside a `SHA256SUMS` that covers
 it. Check the sum before you unpack:
 
 ```sh
 V=0.1.0-alpha.1
-curl -sSfLO "https://dl.cairn.mandip.dev/releases/$V/ambolt-$V-x86_64-linux.tar.gz"
-curl -sSfL "https://dl.cairn.mandip.dev/releases/$V/SHA256SUMS" | sha256sum -c --ignore-missing
+curl -sSfLO "https://dl.ambolt.sh/releases/$V/ambolt-$V-x86_64-linux.tar.gz"
+curl -sSfL "https://dl.ambolt.sh/releases/$V/SHA256SUMS" | sha256sum -c --ignore-missing
 ```
 
 From source, anywhere with a Rust toolchain:
 
 ```sh
-cargo install --git https://cairn.mandip.dev/git/cairn/cairn ambolt
+cargo install --git https://ambolt.sh/git/ambolt/ambolt ambolt
 ```
 
-The mirror at `github.com/mandipadk/cairn` is the same code. `ambolt
+The mirror at `github.com/mandipadk/ambolt` is the same code. `ambolt
 --version` names the version and the commit it was built from, and
 `/healthz` on a running forge carries the same string. `scripts/release.sh`
 is what produces a release archive; run it anywhere to package a build

@@ -36,7 +36,7 @@ jobs:
     steps:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install the runner
-        run: cargo install --git https://github.com/mandipadk/cairn ambolt --locked
+        run: cargo install --git https://github.com/mandipadk/ambolt ambolt --locked
       - name: Re-run what is currently taken on trust
         env:
           AMBOLT_SERVER: ${{ secrets.AMBOLT_SERVER }}

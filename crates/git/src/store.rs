@@ -410,9 +410,6 @@ pub fn preflight() -> GitResult<String> {
 
 /// Where a landed commit's receipt is kept, mirrored with the branch.
 pub const NOTES_REF: &str = "refs/notes/ambolt";
-/// The ref the receipts lived under before the forge was renamed;
-/// read only to carry them forward.
-pub const NOTES_REF_BEFORE: &str = "refs/notes/cairn";
 
 pub struct GitStore {
     root: PathBuf,
@@ -1089,24 +1086,6 @@ impl GitStore {
             .is_ok())
     }
 
-    /// Receipts written under the ref this forge used before it was
-    /// renamed are carried to the current one, once. The old ref is left
-    /// where it is: clones that still read it keep working, and a
-    /// rollback has nothing to undo. Returns whether anything moved.
-    pub async fn carry_notes_forward(&self, name: &str) -> GitResult<bool> {
-        if self.has_ref(name, NOTES_REF).await? || !self.has_ref(name, NOTES_REF_BEFORE).await? {
-            return Ok(false);
-        }
-        let repo = self.existing_repo_path(name)?;
-        let tip = self
-            .run(Some(&repo), &["rev-parse", "--verify", NOTES_REF_BEFORE])
-            .await?;
-        let tip = String::from_utf8_lossy(&tip).trim().to_owned();
-        self.run(Some(&repo), &["update-ref", NOTES_REF, &tip])
-            .await?;
-        Ok(true)
-    }
-
     /// Attach a note to a commit under [`NOTES_REF`], replacing
     /// any earlier one. The text goes through a file: a receipt is
     /// larger than an argument should be.
@@ -1695,62 +1674,6 @@ mod tests {
         assert!(!dead.exists(), "the dead one is gone");
         assert!(live.exists(), "the live one is not touched");
         assert_eq!(store.sweep_quarantines("ada/demo").await.unwrap(), 0);
-    }
-
-    /// A receipt written under the ref the forge had before its rename
-    /// is carried to the current ref once, and the old ref is left
-    /// where it was.
-    #[test]
-    fn receipts_under_the_old_notes_ref_are_carried_forward_once() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(async {
-            let tmp = tempfile::tempdir().unwrap();
-            let store = GitStore::new(tmp.path().join("repos"), "/nonexistent/ambolt");
-            store.create_repo("ada/demo", "main", "sha1").await.unwrap();
-            let repo = tmp.path().join("repos/ada/demo.git");
-            let empty_tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-            let commit = store
-                .run(Some(&repo), &["commit-tree", empty_tree, "-m", "first"])
-                .await
-                .unwrap();
-            let commit = String::from_utf8_lossy(&commit).trim().to_owned();
-            assert!(
-                !store.carry_notes_forward("ada/demo").await.unwrap(),
-                "nothing to carry"
-            );
-            let old = format!("--ref={NOTES_REF_BEFORE}");
-            store
-                .run(
-                    Some(&repo),
-                    &["notes", &old, "add", "-m", "receipt", &commit],
-                )
-                .await
-                .unwrap();
-            assert!(
-                store.carry_notes_forward("ada/demo").await.unwrap(),
-                "carried"
-            );
-            assert!(store.has_ref("ada/demo", NOTES_REF).await.unwrap());
-            assert!(
-                store.has_ref("ada/demo", NOTES_REF_BEFORE).await.unwrap(),
-                "old ref kept"
-            );
-            let shown = store
-                .run(
-                    Some(&repo),
-                    &["notes", &format!("--ref={NOTES_REF}"), "show", &commit],
-                )
-                .await
-                .unwrap();
-            assert_eq!(String::from_utf8_lossy(&shown).trim(), "receipt");
-            assert!(
-                !store.carry_notes_forward("ada/demo").await.unwrap(),
-                "second run is a no-op"
-            );
-        });
     }
 
     /// Bytes no filesystem can compress away: the measurement is what

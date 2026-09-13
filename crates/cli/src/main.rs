@@ -539,15 +539,6 @@ async fn main() -> anyhow::Result<()> {
                 &repos,
                 std::env::current_exe().context("locating own binary")?,
             );
-            for repo in store.repos()? {
-                if git.carry_notes_forward(&repo.name).await? {
-                    tracing::info!(
-                        "{}: receipts carried to {}",
-                        repo.name,
-                        ambolt_git::NOTES_REF
-                    );
-                }
-            }
             let mut state = AppState::new(store).with_git(git, base_url);
             if dev {
                 tracing::warn!("dev identity enabled: the x-ambolt-principal header is trusted");
@@ -1220,21 +1211,9 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A setting from the environment as `AMBOLT_<name>`, or, for one
-/// release after the rename, as `CAIRN_<name>` with a word about it.
+/// A setting from the environment, as `AMBOLT_<name>`.
 fn setting(name: &str) -> Option<String> {
-    setting_via(name, |key| std::env::var(key).ok())
-}
-
-fn setting_via(name: &str, get: impl Fn(&str) -> Option<String>) -> Option<String> {
-    let current = format!("AMBOLT_{name}");
-    if let Some(value) = get(&current) {
-        return Some(value);
-    }
-    let before = format!("CAIRN_{name}");
-    let value = get(&before)?;
-    tracing::warn!("{before} is read for now; rename it to {current}, the old name goes away");
-    Some(value)
+    std::env::var(format!("AMBOLT_{name}")).ok()
 }
 
 /// The mail configuration, from flags or the environment: a relay URL or
@@ -1256,35 +1235,5 @@ fn mailer_from(
         }
         (None, None, None) => Ok(None),
         _ => anyhow::bail!("mail needs a From address together with a relay URL or a command"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::setting_via;
-
-    /// The renamed setting wins; the old name still counts for one
-    /// release; neither set is nothing.
-    #[test]
-    fn a_setting_is_read_under_its_new_name_then_its_old_one() {
-        let env = |pairs: &[(&str, &str)]| {
-            let pairs: Vec<(String, String)> = pairs
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
-            move |key: &str| pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
-        };
-        assert_eq!(
-            setting_via(
-                "PUBLIC_URL",
-                env(&[("AMBOLT_PUBLIC_URL", "new"), ("CAIRN_PUBLIC_URL", "old")])
-            ),
-            Some("new".into())
-        );
-        assert_eq!(
-            setting_via("PUBLIC_URL", env(&[("CAIRN_PUBLIC_URL", "old")])),
-            Some("old".into())
-        );
-        assert_eq!(setting_via("PUBLIC_URL", env(&[])), None);
     }
 }

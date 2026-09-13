@@ -14,5 +14,5 @@ mod store;
 pub use commit::{CommitInfo, parse_commit_object};
 pub use store::{
     Blob, GitError, GitResult, GitStore, MAX_COMMAND_BYTES, MIN_GIT, MIN_GIT_SHA256_CLIENT,
-    NOTES_REF, NOTES_REF_BEFORE, RebaseOutcome, RpcInput, RpcStream, Service, preflight, version,
+    NOTES_REF, RebaseOutcome, RpcInput, RpcStream, Service, preflight, version,
 };

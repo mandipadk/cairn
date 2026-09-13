@@ -40,5 +40,5 @@ if [ -f "$KEY" ]; then cp "$KEY" "$work/signing.key"; else echo "no signing key 
 tar -C "$(dirname "$REPOS")" -cf "$work/repos.tar" "$(basename "$REPOS")"
 bundle="$OUT/ambolt-$stamp.tar.gz"
 tar -C "$work" -czf "$bundle" ambolt.db repos.tar $( [ -f "$work/signing.key" ] && echo signing.key )
-{ ls -1t "$OUT"/ambolt-*.tar.gz "$OUT"/cairn-*.tar.gz 2>/dev/null || true; } | tail -n +"$((KEEP + 1))" | xargs -r rm -f
+ls -1t "$OUT"/ambolt-*.tar.gz | tail -n +"$((KEEP + 1))" | xargs -r rm -f
 echo "backup: $bundle ($(wc -c <"$bundle" | tr -d ' ') bytes), $(ls -1 "$OUT"/ambolt-*.tar.gz | wc -l | tr -d ' ') kept"

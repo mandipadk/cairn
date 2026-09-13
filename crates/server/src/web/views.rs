@@ -4372,7 +4372,7 @@ fn stack(counts: &crate::debt::Counts) -> Markup {
         }
     }
     html! {
-        svg class="stack" viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true" {
+        svg class="bars" viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true" {
             @for (class, x, w) in &rects {
                 rect class=(class) x=(x) y="0" width=(w) height="6" {}
             }

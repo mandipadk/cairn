@@ -1,0 +1,127 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Iforget0122",
+      "id": "c-7rgkt8e23zetc451wyt56k1ysm",
+      "landed_oid": "bb2024adf0c8efdedfdc5eb134a172f9c68a282c",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 122,
+      "opened_at": "2026-09-13T01:20:05.505550433Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "ambolt/ambolt",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Forget the name before this one",
+      "updated_at": "2026-09-13T01:21:28.142759661Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-7rgkt8e23zetc451wyt56k1ysm",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-5zxawxbp4e9e1d4hwps6v64gg7",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 1110,
+        "summary": "fmt, clippy -D warnings, the suite and the first-run walk pass. Removed: the CAIRN_* setting fallback and its test, the notes carry-forward and its test, the old bundle name in backup.sh's prune. No behaviour is left that mentions the name before this one.",
+        "unchecked": [
+          "That the live repositories no longer carry refs/notes/cairn was done and checked in the phase E window, not by a test."
+        ]
+      }
+    ],
+    "forge": "https://ambolt.sh",
+    "landed_as": "bb2024adf0c8efdedfdc5eb134a172f9c68a282c",
+    "landed_at": "2026-09-13T01:21:28.142759661Z",
+    "merged_by": "mandip",
+    "repo": "ambolt/ambolt",
+    "revision": {
+      "by": "mandip",
+      "change": "c-7rgkt8e23zetc451wyt56k1ysm",
+      "commit_oid": "bb2024adf0c8efdedfdc5eb134a172f9c68a282c",
+      "message": "Forget the name before this one\n\nThe settings are read under one name, and a receipt is looked for\nunder one ref. The release that carried the old setting names forward\nand copied receipts from the old notes ref has served its purpose:\nevery environment file says AMBOLT_, and every repository on the\nforge that had receipts under the old ref has them under the current\none, with the old ref removed. The backup script prunes one bundle\nname.\n\nChange-Id: Iforget0122\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        "crates/cli/src/main.rs",
+        "crates/git/src/lib.rs",
+        "crates/git/src/store.rs",
+        "scripts/backup.sh"
+      ],
+      "session": null
+    },
+    "seq": 1113,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-5zxawxbp4e9e1d4hwps6v64gg7",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-5zxawxbp4e9e1d4hwps6v64gg7",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 147 judged claims, 95% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 4 path(s) outside docs/, *.md: crates/cli/src/main.rs, crates/git/src/lib.rs, crates/git/src/store.rs",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-7rgkt8e23zetc451wyt56k1ysm",
+        "claim": "cl-5zxawxbp4e9e1d4hwps6v64gg7",
+        "command": "cargo test --workspace && scripts/first-run.sh",
+        "id": "vr-69gzk3t34rcre8myeaz7z5d3jw",
+        "observed": "exit 0: Doc-tests ambolt_server",
+        "revision": 1,
+        "seq": 1111
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "35Kt2skkf6GgisjEmWGBi7IGVSGNyvk8iUBEh/O9vy0XddqKqiTmpuCLFqD4sdCEdNqMZr4bLCx3WFwEypMwBQ=="
+  }
+}

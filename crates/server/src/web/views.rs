@@ -14,6 +14,16 @@ use ambolt_core::{
     Visibility,
 };
 use maud::{DOCTYPE, Markup, PreEscaped, html};
+
+/// The forge's mark: an anvil in the page's ink, drawn once and used by
+/// every shell. Face, horn to the left, waist, foot; 18 by 13 so it sits
+/// on the wordmark's x-height.
+fn mark() -> Markup {
+    PreEscaped(
+        r#"<svg class="mark" width="18" height="13" viewBox="0 0 18 13" aria-hidden="true"><path d="M0 2.2C0 1.6 0.4 1 1.2 1H17c0.6 0 1 0.4 1 1v2.4c0 0.5-0.4 0.9-0.9 0.9H10.5v3.6h3.1c0.5 0 0.9 0.4 0.9 0.9v2.3c0 0.5-0.4 0.9-0.9 0.9H4.4c-0.5 0-0.9-0.4-0.9-0.9v-2.3c0-0.5 0.4-0.9 0.9-0.9h3.1V5.3H4.6C2 5.3 0.6 4.3 0 2.2z"/></svg>"#
+            .to_owned(),
+    )
+}
 use std::collections::HashMap;
 
 /// Which palette the page renders in. Dark is the default; a viewer
@@ -244,7 +254,7 @@ fn topbar(theme: Theme, viewer: Option<&Viewer>) -> Markup {
     html! {
         div class="bar" {
             a class="brand" href="/" aria-label="Home" {
-                span class="stones" aria-hidden="true" { span {} span {} span {} }
+                (mark())
                 b { "ambolt" }
             }
             form class="search" method="get" action="/search" {
@@ -387,7 +397,7 @@ pub fn signup(theme: Theme, state: super::Signup, error: Option<&str>) -> Markup
             div class="center" {
                 div class="login" {
                     div class="mark" {
-                        span class="stones" aria-hidden="true" { span {} span {} span {} }
+                        (mark())
                         b { "ambolt" }
                     }
                     @if let Some(error) = error { p class="error" { (error) } }
@@ -466,7 +476,7 @@ pub fn welcome(
             div class="welcome" {
                 header {
                     div class="mark" {
-                        span class="stones" aria-hidden="true" { span {} span {} span {} }
+                        (mark())
                         b { "ambolt" }
                     }
                     a class="quiet" href="/login" { "Sign in" }
@@ -571,7 +581,7 @@ fn outside(theme: Theme, title: &str, body: Markup) -> Markup {
             div class="center" {
                 div class="login" {
                     div class="mark" {
-                        span class="stones" aria-hidden="true" { span {} span {} span {} }
+                        (mark())
                         b { "ambolt" }
                     }
                     p class="strong" { (title) }
@@ -653,7 +663,7 @@ pub fn login(
             div class="center" {
                 div class="login" {
                     div class="mark" {
-                        span class="stones" aria-hidden="true" { span {} span {} span {} }
+                        (mark())
                         b { "ambolt" }
                     }
                     @if let Some(error) = error { p class="error" { (error) } }

@@ -127,11 +127,7 @@ button { font: inherit; cursor: pointer; }
   padding: 0 22px; height: 50px;
   border-bottom: 1px solid var(--hair);
 }
-.stones { display: flex; flex-direction: column; align-items: center; gap: 2px; }
-.stones span { display: block; background: var(--ink); border-radius: 2px; height: 3.5px; }
-.stones span:nth-child(1) { width: 8px; }
-.stones span:nth-child(2) { width: 12px; }
-.stones span:nth-child(3) { width: 16px; }
+.mark { display: block; fill: var(--ink); flex: none; }
 .topnav .repo, .repohead .repo { font-size: 13.5px; font-weight: 600; }
 .tabs { display: flex; gap: 2px; align-self: stretch; margin-left: 6px; }
 .tab {

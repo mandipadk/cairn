@@ -1,0 +1,127 @@
+{
+  "canonical": "json:sorted-keys,compact,utf-8",
+  "receipt": {
+    "change": {
+      "competing": false,
+      "external_key": "Iaddresses0121",
+      "id": "c-5jgxp7ddztkxy19z2sbbr3ps6r",
+      "landed_oid": "86cc998cd62460fa71366770ffeba731a44daeb4",
+      "landed_revision": 1,
+      "latest_revision": 1,
+      "number": 121,
+      "opened_at": "2026-09-13T00:23:58.593730358Z",
+      "owner": "mandip",
+      "parent_change": null,
+      "preferred_revision": null,
+      "repo": "ambolt/ambolt",
+      "state": "merged",
+      "target": "main",
+      "task": null,
+      "title": "Say where the forge lives now",
+      "updated_at": "2026-09-13T00:24:19.856356024Z"
+    },
+    "claims": [
+      {
+        "by": "mandip",
+        "change": "c-5jgxp7ddztkxy19z2sbbr3ps6r",
+        "command": "scripts/first-run.sh",
+        "covers": [],
+        "id": "cl-7zz6ng9vf4x73q52rtp5smh0a0",
+        "kind": "test",
+        "passed": true,
+        "revision": 1,
+        "seq": 1087,
+        "summary": "Words only: README, docs and the workflow example name ambolt.sh, dl.ambolt.sh, /git/ambolt/ambolt and github.com/mandipadk/ambolt. The first-run walk, which follows operating.md, passes; no Rust changed since 120.",
+        "unchecked": [
+          "The addresses answer once the tunnel and DNS are moved on the box, which is the operator's step after this lands."
+        ]
+      }
+    ],
+    "forge": "https://cairn.mandip.dev",
+    "landed_as": "86cc998cd62460fa71366770ffeba731a44daeb4",
+    "landed_at": "2026-09-13T00:24:19.856356024Z",
+    "merged_by": "mandip",
+    "repo": "ambolt/ambolt",
+    "revision": {
+      "by": "mandip",
+      "change": "c-5jgxp7ddztkxy19z2sbbr3ps6r",
+      "commit_oid": "86cc998cd62460fa71366770ffeba731a44daeb4",
+      "message": "Say where the forge lives now\n\nThe forge is reached at ambolt.sh, releases at dl.ambolt.sh, the\nrepository at ambolt.sh/git/ambolt/ambolt, and the mirror at\ngithub.com/mandipadk/ambolt. Only words change here; the code that\nserves those addresses takes them from its settings.\n\nChange-Id: Iaddresses0121\nSigned-off-by: Mandip Adhikari <92096340+mandipadk@users.noreply.github.com>",
+      "number": 1,
+      "paths": [
+        ".github/workflows/verify.yml.example",
+        "Cargo.toml",
+        "README.md",
+        "docs/operating.md"
+      ],
+      "session": null
+    },
+    "seq": 1090,
+    "target": "main",
+    "trace": {
+      "requirements": [
+        {
+          "description": "change has at least one revision",
+          "evidence": "revision 1 is the one judged",
+          "satisfied": true
+        },
+        {
+          "description": "no concern raised in discussion is left unresolved",
+          "evidence": "no unresolved concerns",
+          "satisfied": true
+        },
+        {
+          "description": "latest revision carries a passing test claim",
+          "evidence": "cl-7zz6ng9vf4x73q52rtp5smh0a0",
+          "satisfied": true
+        },
+        {
+          "description": "no claim on the latest revision is disputed by a runner",
+          "evidence": "1 re-run(s), all reproduced",
+          "satisfied": true
+        },
+        {
+          "description": "a runner reproduced a claim on the latest revision",
+          "evidence": "runner reproduced cl-7zz6ng9vf4x73q52rtp5smh0a0",
+          "satisfied": true
+        },
+        {
+          "description": "no blocking verdict on the latest revision",
+          "evidence": "no blocks",
+          "satisfied": true
+        },
+        {
+          "description": "no independent approval required",
+          "evidence": "human approvals: []; agent approvals by model: []",
+          "satisfied": true
+        },
+        {
+          "description": "owner's earned trust",
+          "evidence": "mandip: 144 judged claims, 95% reproduced, 0 human block(s) in 90 days; bar is 95% over 20; not applied: 2 path(s) outside docs/, *.md: .github/workflows/verify.yml.example, Cargo.toml",
+          "satisfied": true
+        }
+      ],
+      "satisfied": true
+    },
+    "verdicts": [],
+    "verifications": [
+      {
+        "agrees": true,
+        "by": "runner",
+        "change": "c-5jgxp7ddztkxy19z2sbbr3ps6r",
+        "claim": "cl-7zz6ng9vf4x73q52rtp5smh0a0",
+        "command": "scripts/first-run.sh",
+        "id": "vr-3zqebtyv37raw4xqqb2js6dsga",
+        "observed": "exit 0: first run: every documented step did what the documents say",
+        "revision": 1,
+        "seq": 1088
+      }
+    ]
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "9a59245377e73fca",
+    "public_key": "REClmVlFlFD/5rjqECqBWfRZtrukv5ia8Thd+CqlNxY=",
+    "value": "QNvE4kJBgUQGpPRL+7Q57NjCkZ8BA3zKvX6boqPFrV4vZuhEwATO0PZoH9ITf8RmPilIn74NJ79SUI64ZBLVDA=="
+  }
+}
